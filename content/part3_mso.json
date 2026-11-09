@@ -1,0 +1,1840 @@
+{
+  "lessons": [
+    {
+      "subskill": "MSO.1",
+      "title": "Technical Fundamentals: SDKs, Retries, Timeouts & Streaming",
+      "summary": "The exam treats the SDK as a thin, opinionated wrapper over the REST Messages API. It tests whether you know what the wrapper does for you (retries, timeouts, typed streaming, accumulation) and how to configure it. Expect scenarios about retry storms, hanging calls, SSE parsing bugs, sync calls blocking async servers, and keeping API keys off clients.",
+      "keyPoints": [
+        "SDK = REST wrapper: `client.messages.create()` sends `POST /v1/messages` with `x-api-key`, `anthropic-version` and JSON. The SDK adds typed responses, retries, timeouts and streaming helpers. With raw HTTP you must send `anthropic-version` yourself.",
+        "**Auto-retries**: connection errors, 408, 409, 429 and >=500 (including 529 overloaded) are retried with exponential backoff, **2 retries by default** (3 attempts in total). 400/401/403/404/413 are not retried, because they fail the same way every time.",
+        "Configure with `max_retries` / `timeout` on the client, or per call with `client.with_options(...)` (Python). The default timeout is **10 minutes**. A timeout raises `APITimeoutError` and is retried according to `max_retries`.",
+        "The Python SDK refuses **non-streaming** requests it estimates will take longer than about 10 minutes (large `max_tokens`) and raises `ValueError`. Use `messages.stream()` + `get_final_message()` (TS: `finalMessage()`).",
+        "Streaming uses **SSE**: `message_start` -> per block (`content_block_start`, `content_block_delta`..., `content_block_stop`) -> `message_delta` (stop_reason, usage) -> `message_stop`. `ping` events can appear anywhere, and new event types may be added, so ignore unknown events.",
+        "`message_delta` usage is **cumulative**: take the last value, do not add them up. Tool input streams as `input_json_delta.partial_json` fragments; join them and parse at `content_block_stop`.",
+        "Errors can arrive **inside** a 200 stream (`event: error`, for example `overloaded_error`, which is equivalent to a 529). Status-code-based retry logic never sees these errors.",
+        "Low-level `messages.create(stream=True)` gives raw events with **no accumulation**. The `messages.stream()` helper gives `text_stream` and the final message.",
+        "Async: use `AsyncAnthropic` in asyncio servers (a sync client blocks the event loop). Cap fan-out with a semaphore. Send work that nobody is waiting on through Batches.",
+        "WebSockets vs SSE: the Messages API streams over SSE (one-way, over HTTP). Keep the key on a backend and relay to browsers over SSE or WebSocket from that backend.",
+        "`base_url` / `ANTHROPIC_BASE_URL` and a custom `http_client` (proxy) point the SDK at gateways. Platform clients (Bedrock and Vertex packages, for example `anthropic[bedrock]`) keep `messages.create` but use the cloud provider's auth (for example AWS SigV4/IAM) and platform model IDs (for example the `anthropic.` prefix on Bedrock); feature support varies by platform.",
+        "Log the `request-id` response header (Python `response._request_id`) for support escalations."
+      ],
+      "traps": [
+        "Wrapping the SDK in your own retry loop without setting `max_retries=0` multiplies attempts (5 outer x 3 SDK attempts = 15) during the very overload you are trying to ride out.",
+        "Treating HTTP 200 as success while streaming: overloads can arrive as in-stream `error` events after the 200.",
+        "Adding up `output_tokens` across `message_delta` events double-counts, because the values are cumulative.",
+        "Calling `JSON.parse` on each `partial_json` delta fails; join the fragments first.",
+        "Assuming WebSockets reach the Messages API directly from a browser. They don't, and a key in the browser is leaked anyway.",
+        "Shrinking `max_tokens` to dodge the 10-minute streaming guard: stream instead."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "import anthropic\n\nclient = anthropic.Anthropic(max_retries=2, timeout=600.0)\n\n# fail fast on a latency-sensitive path only\nfast = client.with_options(timeout=4.0, max_retries=0)\n\nwith client.messages.stream(model=MODEL, max_tokens=64000,\n                            messages=msgs) as stream:\n    for text in stream.text_stream:\n        print(text, end=\"\", flush=True)\n    final = stream.get_final_message()  # stop_reason, usage, tool_use blocks\nprint(final.usage, final._request_id)"
+      },
+      "docs": [
+        {
+          "title": "Streaming messages (SSE event flow, errors, recovery)",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+        },
+        {
+          "title": "API errors",
+          "url": "https://platform.claude.com/docs/en/api/errors"
+        },
+        {
+          "title": "Rate limits",
+          "url": "https://platform.claude.com/docs/en/api/rate-limits"
+        },
+        {
+          "title": "Python SDK (retries, timeouts, async, proxies)",
+          "url": "https://github.com/anthropics/anthropic-sdk-python"
+        },
+        {
+          "title": "TypeScript SDK",
+          "url": "https://github.com/anthropics/anthropic-sdk-typescript"
+        }
+      ],
+      "drill": "In 15 minutes: (1) Make one streaming request with `curl -N` and label every SSE event you see, including any `ping` events. (2) In Python, stream the same request with `messages.stream()`, print the last `message_delta` usage and compare it with `get_final_message().usage`. (3) Set `max_retries=0` and `timeout=0.5` on one call, trigger an `APITimeoutError`, then confirm that the default client retries it (enable `ANTHROPIC_LOG=debug` to see the attempts)."
+    },
+    {
+      "subskill": "MSO.2",
+      "title": "LLM Fundamentals: Tokens, Windows, Sampling, Thinking & Effort",
+      "summary": "This sub-skill checks that your mental model of how Claude generates text is right, because many production bugs come from treating tokens as words, `max_tokens` as an input limit, or temperature as a determinism switch. It also covers the current control levers: adaptive thinking, effort levels, fast mode, and zero-, one- and few-shot prompting.",
+      "keyPoints": [
+        "**Tokens** are sub-word units. The ratio to words or characters varies by language, code and JSON, and **tokenizers can change between model generations**, so the same text can cost more tokens. Measure with `count_tokens` for the target model, never with another vendor's tokenizer.",
+        "The **context window** holds everything: tools + system + messages + the generated output (including thinking). Cached tokens still occupy the window. An input that alone exceeds the window gets a 400 'prompt is too long'.",
+        "`max_tokens` is a **hard cap on output** (thinking + text + tool calls), not an input allowance. Hitting it gives `stop_reason: \"max_tokens\"`. Treat it as a backstop and set it generously for agentic or high-effort work.",
+        "**Next-token prediction**: output is generated one token at a time, so (a) output length dominates latency, (b) tokens already emitted condition what follows and cannot be revised, so ask for reasoning before the verdict, and (c) character-exact tasks are unreliable; check them in code.",
+        "**Sampling**: temperature reshapes the next-token distribution, and lower values give less variety, but even low values are **not fully deterministic**. Several recent models **reject** `temperature`/`top_p`/`top_k`. For repeatability, tighten the task, constrain the output, and store decisions.",
+        "**Adaptive thinking** (`thinking: {type: \"adaptive\"}`): the model decides whether and how much to think. It replaces manual `budget_tokens` on recent models. Thinking tokens are billed as output, and **full** thinking is billed even when only a summary is displayed.",
+        "**Effort** (`output_config.effort`: `low`, `medium`, `high`, `xhigh`, `max`; support varies by model) is a **behavioural** signal affecting **all** output tokens, including tool calls, not a hard limit. Lower effort means fewer and terser calls, lower cost and faster responses. **Defaults differ by model**, so set it explicitly and re-sweep after migrations.",
+        "**Fast mode** (`speed: \"fast\"`, supported models only): the same model with faster inference, raising **output tokens per second** (not TTFT) at **premium** pricing. Not available with Batches. Fast and standard speed do not share cached prefixes.",
+        "**Zero-shot** is instructions only. **One-shot / few-shot** add examples: 3 to 5 diverse ones, wrapped in `<example>` tags and covering edge cases, are among the strongest ways to fix format and tone. Examples add input tokens, so cache the static examples prefix.",
+        "Non-determinism means evals need multiple trials per case, and you should judge distributions rather than a single run."
+      ],
+      "traps": [
+        "Raising `max_tokens` to 'fit a bigger document'. It only limits output.",
+        "Lowering `max_tokens` to save money truncates thinking and answers. Lower effort instead.",
+        "Believing `temperature: 0` guarantees identical output, or sending it to a model that rejects sampling parameters.",
+        "Treating effort as a strict token budget, or assuming every model has the same default effort.",
+        "Expecting fast mode to fix slow time to first token on huge prompts. That calls for caching, a smaller tier, or lower effort.",
+        "Few-shot examples that are all alike: the model copies their length and phrasing."
+      ],
+      "code": {
+        "lang": "typescript",
+        "src": "const resp = await client.messages.create({\n  model: MODEL,\n  max_tokens: 64000,                 // hard backstop on output\n  thinking: { type: \"adaptive\" },    // model decides how much to think\n  output_config: { effort: \"medium\" }, // behavioural cost/quality lever\n  messages: [{ role: \"user\", content: task }],\n});\nconsole.log(resp.stop_reason, resp.usage.output_tokens);"
+      },
+      "docs": [
+        {
+          "title": "Context windows",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+        },
+        {
+          "title": "Effort",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/effort"
+        },
+        {
+          "title": "Adaptive thinking",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking"
+        },
+        {
+          "title": "Fast mode",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/fast-mode"
+        },
+        {
+          "title": "Token counting",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+        },
+        {
+          "title": "Prompting best practices (examples, XML tags)",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+        }
+      ],
+      "drill": "Take one representative task. (1) Use `count_tokens` on an English, a Japanese and a JSON version of the same content and note the differences. (2) Run the task 5 times each at effort `low` and `high`, and record output_tokens, latency and correctness. (3) Set `max_tokens` to 300 at high effort and observe `stop_reason`. In two sentences, write down which lever you would use to cut cost and why."
+    },
+    {
+      "subskill": "MSO.3",
+      "title": "Cost & Token Management: Usage, Caching, Batch & Cost per Task",
+      "summary": "Expect calculation questions: you get token counts and per-MTok prices in the scenario and must pick the right total or the cheapest configuration. Underneath the arithmetic, the exam tests caching mechanics (prefix match, breakpoints, TTLs), the batch discount, reading usage fields correctly, and judging spend as cost per completed task.",
+      "keyPoints": [
+        "**Usage fields**: `input_tokens` (uncached remainder), `cache_creation_input_tokens` (written to cache at the write rate), `cache_read_input_tokens` (read at the read rate), `output_tokens` (includes thinking). **Total prompt = input + cache_creation + cache_read.**",
+        "**Cost formula**: sum of each token count x its rate per million tokens (MTok). Typical multipliers on base input: **5-minute write 1.25x, 1-hour write 2x, read ~0.1x** (some newer models read even cheaper; take exact prices from the scenario or the pricing page).",
+        "**Break-even**: with the 5-minute TTL, 2 requests already pay off (1.25 + 0.1 < 2). With the 1-hour TTL you need at least 3. Reads refresh the TTL at no cost. Pick the TTL by the **start-to-start gap**: under 5 minutes, use 5 minutes; 5 to 60 minutes, use 1 hour; longer, re-warm or accept a miss.",
+        "**Caching is a byte-exact prefix match** over `tools` -> `system` -> `messages`. Any change at position N invalidates everything after it. Silent invalidators include timestamps or IDs in the system prompt, unsorted JSON, tool lists built from sets, per-user tool sets, and model switches.",
+        "**Breakpoints**: up to 4 `cache_control` markers. Put them at **stability boundaries**: the end of the static system/tools, then the conversation tail. Automatic (top-level) caching marks the last block, which is wrong when the prompt ends in unique per-request content. Below the model's minimum cacheable length, nothing caches, silently.",
+        "**Concurrency**: an entry is readable only once the first response starts streaming. For fan-out, send 1 request, wait for its first token, then send the rest.",
+        "**Batches**: **50% off every token**, cache reads and writes included (the discounts stack). Most batches finish in under 1 hour, and batches expire after 24 hours. Results come back in any order, so match by `custom_id`. No streaming and no fast mode. Use the 1-hour TTL for shared context.",
+        "**count_tokens** (`POST /v1/messages/count_tokens`) gives a model-specific pre-flight count for chunking, routing and budget checks. Pass the same system prompt, tools and content as the real call.",
+        "**Order of levers**: changes that don't touch capability first (caching, input and output hygiene, batch), then trade-offs (effort, then model). Change one lever at a time against an eval.",
+        "**Cost per completed task** = cost per attempt / success rate, plus the downstream cost of failures. A pricier model can be cheaper per task."
+      ],
+      "traps": [
+        "Reading only `input_tokens` and concluding the agent uses barely any context, when the rest came from cache.",
+        "A 5-minute TTL on traffic with gaps longer than 5 minutes pays the 1.25x write every time, which is worse than no caching.",
+        "Automatic caching on a prompt whose tail is unique: you get writes on every request and no reads.",
+        "Expecting 40 simultaneous requests to share a cache entry that does not exist yet.",
+        "Assuming batch and cache discounts are mutually exclusive. They stack.",
+        "Ranking models by per-token price instead of cost per solved task."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "def cost(u, p):  # p: $/MTok for each meter\n    return (u.input_tokens * p[\"in\"]\n            + u.cache_creation_input_tokens * p[\"write\"]\n            + u.cache_read_input_tokens * p[\"read\"]\n            + u.output_tokens * p[\"out\"]) / 1_000_000\n\nsystem = [{\"type\": \"text\", \"text\": STATIC_RULES,\n           \"cache_control\": {\"type\": \"ephemeral\", \"ttl\": \"1h\"}}]\n# put volatile content (dates, user data) AFTER the breakpoint"
+      },
+      "docs": [
+        {
+          "title": "Prompt caching",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+        },
+        {
+          "title": "Batch processing",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+        },
+        {
+          "title": "Pricing",
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+        },
+        {
+          "title": "Token counting",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+        },
+        {
+          "title": "Optimizing for cost and intelligence",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+        }
+      ],
+      "drill": "Build a 10-line cost calculator, like the snippet, that takes a usage object and a price table. Send one request with a cached 2,000-token system prompt twice and confirm that the second request shows `cache_read_input_tokens > 0`. Then add `datetime.now()` to the top of the system prompt, rerun, watch reads drop to 0, and compute how much the bug would cost per 10,000 requests at made-up prices."
+    },
+    {
+      "subskill": "MSO.4",
+      "title": "Model Selection & Trade-offs: Tiers, Pinning, Migrations",
+      "summary": "Questions here describe a workload and ask which model tier, which configuration, or which migration step is best. Think in tiers (Opus-class = most capable and most expensive, Sonnet-class = balanced, Haiku-class = fastest and cheapest), pin model snapshots in production, and treat every model change as a migration gated by evals, because generations change the API surface.",
+      "keyPoints": [
+        "**Tier heuristics**: Haiku-class for high-volume, latency-sensitive, checkable work (classification, routing, extraction, sub-agents). Sonnet-class for a balanced speed/intelligence default. Opus-class (and above) for complex reasoning and long-horizon agentic coding.",
+        "**Trade-off triangle**: quality, latency and cost. A smaller model usually has a shorter TTFT and faster output, but 'a faster model isn't automatically a faster task' if it needs more turns or tokens. Compare **seconds and dollars per completed task** on your eval.",
+        "**Multi-model architectures**: a frontier orchestrator with cheaper workers pays off only when there is real bulk to hand off. Choose the model **per conversation or route, not per turn**: switching mid-conversation starts the cache over (caches are model-scoped). Vary effort within a conversation instead.",
+        "**Pinning**: production should run a fixed snapshot ID and upgrade deliberately. Current Claude model IDs, including dateless ones, are pinned snapshots. For older models, aliases pointed to dated snapshot IDs. Watch deprecation notices, because retired models stop serving.",
+        "**Breaking changes across recent generations** (examples): sampling params (`temperature`/`top_p`/`top_k`) rejected; `thinking: {type: \"enabled\", budget_tokens}` replaced by `{type: \"adaptive\"}` + `effort`; **prefilled final assistant turn rejected**, so use structured outputs (`output_config.format`) or instructions; new tokenizers changing token counts; different default effort.",
+        "**Migration workflow**: fix the 400-causing changes, re-count tokens, re-tune prompts, **re-sweep effort from the new model's default**, run evals (quality, cost per task, latency), then roll out gradually.",
+        "**Stepping down for cost**: sweep effort on the current model first. If low effort passes, try one tier down, reset effort to that tier's default, and re-sweep, one notch at a time against the eval. Also check whether a newer model in the same tier is the cheaper option.",
+        "A larger model at low effort can beat a smaller model at high effort on cost per solved task. Price lists don't predict the ranking.",
+        "Include the cost of failures (human rework, retries) in model comparisons. It often dominates the token bill."
+      ],
+      "traps": [
+        "Choosing the most capable tier 'to be safe' for simple high-volume routing, or the cheapest for deep synthesis.",
+        "Per-message model routing inside one conversation, which loses the cache every time the model switches.",
+        "Carrying `temperature`, `budget_tokens` or a JSON prefill into a new generation and getting 400s.",
+        "Switching 100% of traffic because of public benchmarks without running your own evals.",
+        "Leaving effort unset across a migration and being surprised by changes in cost or latency.",
+        "Relying on fast mode to fix time to first token: it speeds output tokens per second, not the first token."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "# Before (older generation)\n# temperature=0.2, thinking={\"type\":\"enabled\",\"budget_tokens\":6000},\n# messages=[..., {\"role\":\"assistant\",\"content\":\"{\"}]\n\nresp = client.messages.create(\n    model=PINNED_MODEL_ID,                 # explicit snapshot from config\n    max_tokens=16000,\n    thinking={\"type\": \"adaptive\"},\n    output_config={\"effort\": \"medium\",     # re-swept on the new model\n                   \"format\": {\"type\": \"json_schema\", \"schema\": SCHEMA}},\n    messages=[{\"role\": \"user\", \"content\": doc}],\n)"
+      },
+      "docs": [
+        {
+          "title": "Models overview",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+        },
+        {
+          "title": "Choosing a model",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+        },
+        {
+          "title": "Migration guide",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+        },
+        {
+          "title": "Model deprecations",
+          "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+        },
+        {
+          "title": "Structured outputs",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+        }
+      ],
+      "drill": "Pick one of your prompts and build a 10-case mini-eval with a pass/fail checker. Run it on two tiers at two effort levels (4 cells) and record pass rate, output tokens, latency and cost per passing case. Then write a one-paragraph migration note listing the request fields that must change if this prompt used temperature, budget_tokens or a JSON prefill."
+    }
+  ],
+  "questions": [
+    {
+      "id": "MSO1-001",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A fintech team uses the official Anthropic Python SDK with default client settings. During a load test they record which failed calls the SDK quietly retried on its own before raising an exception to application code. Which TWO responses does the SDK retry automatically by default? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "400 invalid_request_error",
+        "429 rate_limit_error",
+        "401 authentication_error",
+        "529 overloaded_error",
+        "413 request_too_large"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "A 400 means the request itself is malformed. Sending it again unchanged fails again, so the SDK does not retry it.",
+        "Correct. Rate-limit errors (429) are transient, and the SDK retries them with exponential backoff (2 retries by default).",
+        "A 401 means the API key is bad or missing. Retrying cannot fix a credential problem.",
+        "Correct. The SDK retries connection errors, 408, 409, 429 and every status >= 500, which covers 500 and 529 overloaded.",
+        "A 413 means the request body is too large. You must shrink the input; retrying the same payload fails the same way."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "MSO1-002",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "During a regional overload, a support bot's dashboards show each user message producing up to 15 HTTP calls to the Messages API. The code wraps `client.messages.create()` in the team's own loop of 5 attempts with exponential backoff, and the client is constructed with `anthropic.Anthropic()`. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Raise the custom loop to 10 attempts with a longer base delay and full jitter, so retries are spread more evenly across the overload window",
+        "Use a single retry layer: set `max_retries=0` on the client and keep the loop, or drop the loop and tune `max_retries`",
+        "Switch to `AsyncAnthropic` so the retries run concurrently and the user waits less time overall",
+        "Catch `anthropic.APIStatusError` inside the loop and retry only when the message text contains the word 'overloaded'"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "More attempts make the amplification worse: up to 30 HTTP calls per user message (10 outer attempts x 3 SDK attempts) during the very overload you want to back off from.",
+        "Correct. The SDK already retries 429/5xx twice by default, so each of the 5 outer attempts can make 3 calls (5 x 3 = 15). Use one retry layer.",
+        "Running retries concurrently adds load during an overload. It also does not remove the nested retry layers.",
+        "Matching on message text is brittle. It also leaves the nested SDK retries in place, so the 3x multiplication remains."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "MSO1-003",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A batch-report service calls `client.messages.create(model=..., max_tokens=100000, messages=...)` with the Python SDK. Before any HTTP request is sent, the SDK raises a `ValueError` saying streaming is required for operations that may take longer than 10 minutes. What should the developer do?",
+      "select": 1,
+      "options": [
+        "Lower `max_tokens` to 4,096 so the request finishes quickly, and ask the model to continue in follow-up calls",
+        "Pass a custom `http_client` with keep-alive disabled so the long request is not dropped",
+        "Use `client.messages.stream(...)` and call `get_final_message()` to get the same `Message` object at the end",
+        "Retry the call; the guard is triggered by temporary network latency and usually clears on its own"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "This avoids the error but truncates long reports and adds continuation logic. Streaming fixes the real constraint.",
+        "Connection settings do not change the SDK's pre-flight check. Long idle HTTP connections are exactly what the check protects against.",
+        "Correct. Streaming keeps the connection active with server-sent events. `get_final_message()` gathers the events into the full Message, so the calling code barely changes.",
+        "The check is a deterministic estimate based on `max_tokens`, not on network conditions. Retrying raises the same error."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-004",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "An IDE plugin's inline-suggestion endpoint must answer within 4 seconds or show cached suggestions. The shared client was built with SDK defaults and is also used by a slow nightly summarisation job. Under load, some suggestion calls hang for minutes. Which change BEST meets the requirement without affecting the nightly job?",
+      "select": 1,
+      "options": [
+        "Use a per-request override such as `client.with_options(timeout=4.0, max_retries=0)` on the suggestion path only",
+        "Set `timeout=4.0` on the shared client constructor so every call fails fast",
+        "Keep the defaults, and have the UI abandon the promise after 4 seconds and show cached suggestions while the request continues in the background",
+        "Increase `max_retries` to 5 so a slow attempt is quickly replaced by a faster one"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `with_options()` overrides timeout and retries for one call without changing the shared client. That suits a fail-fast path with a local fallback.",
+        "A 4-second global timeout would break the long nightly summarisations that share the client.",
+        "The default timeout is 10 minutes, and abandoning the promise leaves sockets and server work running. Set a real timeout instead.",
+        "Retries do not shorten a hanging attempt. Each attempt still waits for the full timeout, so more retries make the worst case longer."
+      ],
+      "ref": "https://github.com/anthropics/anthropic-sdk-python"
+    },
+    {
+      "id": "MSO1-005",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "You are writing a raw-HTTP streaming client for an embedded device that cannot use the SDK. For a simple text response, in which order do the server-sent events arrive?",
+      "select": 1,
+      "options": [
+        "`content_block_start` -> `message_start` -> `content_block_delta`... -> `message_stop` -> `message_delta`",
+        "`message_start` -> `ping` -> `content_block_delta`... -> `content_block_start` -> `content_block_stop` -> `message_delta` -> `message_stop`",
+        "`message_start` -> `message_delta` -> `content_block_start` -> `content_block_delta`... -> `message_stop`",
+        "`message_start` -> `content_block_start` -> `content_block_delta`... -> `content_block_stop` -> `message_delta` -> `message_stop`"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "`message_start` always comes first, and `message_stop` is always the final event.",
+        "Each content block opens with `content_block_start` before its deltas, not after them.",
+        "`message_delta` carries the final stop_reason and usage, so it comes after the content blocks, not before them.",
+        "Correct. One message_start, then for each block a start / one or more deltas / stop, then one or more message_delta events, then message_stop. `ping` events may appear anywhere."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-006",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A cost-tracking middleware parses raw SSE streams. To count output tokens, it adds up `usage.output_tokens` from every `message_delta` event it sees. Finance reports that some long responses appear to cost more than the invoice shows. What is the MOST likely cause?",
+      "select": 1,
+      "options": [
+        "`message_delta` usage counts only thinking tokens, so the visible text gets counted twice when it is added to the `message_start` totals",
+        "The usage in `message_delta` is cumulative, so adding several `message_delta` events together counts tokens more than once",
+        "Output tokens are counted in `content_block_stop`, and `message_delta` reports an estimate that is usually too high",
+        "The invoice uses `count_tokens` estimates, which are always lower than the real usage reported in streams"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`message_delta` usage is not limited to thinking tokens. It reports the message's running totals.",
+        "Correct. The docs warn that token counts in `message_delta` usage are cumulative. Take the last value; do not add them together.",
+        "`content_block_stop` carries only the block index. It contains no usage counts.",
+        "Billing uses the actual usage, not count_tokens estimates. The mismatch is a bug in the middleware's aggregation."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-007",
+      "subskill": "MSO.1",
+      "difficulty": 3,
+      "stem": "A gateway retries any upstream response whose HTTP status is 429 or >= 500. In production, users sometimes see a streamed answer stop halfway. Logs show an HTTP 200 response whose SSE stream ended with `event: error` and `data: {\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\"}}`. What is the BEST explanation and response?",
+      "select": 1,
+      "options": [
+        "The model hit `max_tokens`. Raise it and the error event will go away.",
+        "The 200 status means the request succeeded, so the error event is purely informational. Display the partial text to the user as the final answer and log the event for analytics.",
+        "The overload hit after the stream began, so the status was already 200 and the gateway never retried. Treat in-stream `error` events as retryable, like a 529.",
+        "The client sent a malformed request body. Schema validation errors are reported as an in-stream error event after the initial 200 response has been sent."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Hitting `max_tokens` produces `stop_reason: \"max_tokens\"` in `message_delta`, not an `overloaded_error` event.",
+        "An in-stream error means the response is incomplete. Presenting partial output as final hides a failure.",
+        "Correct. The API can send errors inside the event stream. `overloaded_error` mid-stream is the streaming equivalent of a 529. The handler must react to the event type, because the HTTP status is already fixed at 200.",
+        "Malformed requests are rejected up front with a 400 before any stream begins. They do not appear as overloaded errors."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-008",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A hand-written SSE parser in a Go service crashes with 'unexpected event type: ping' on some long responses, and occasionally on an event name added after the parser was written. What is the correct fix?",
+      "select": 1,
+      "options": [
+        "Switch to non-streaming requests, because ping events only occur when streaming is misconfigured",
+        "Send a request header that disables `ping` events and pins the SSE event schema to the version the parser was written against",
+        "Retry the request whenever an unrecognised event is received",
+        "Ignore `ping` events, and skip unknown event types gracefully rather than failing"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Ping events are a normal part of the stream, not a sign of misconfiguration. Dropping streaming just to avoid them gives up its benefits.",
+        "There is no such header. Pings are part of normal streaming.",
+        "Retrying throws away a healthy response, and the next stream will contain pings too.",
+        "Correct. Streams may contain any number of `ping` events. Under the versioning policy, new event types may be added, so clients should handle unknown types gracefully."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-009",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A TypeScript agent streams a response that calls a `create_ticket` tool. The developer's handler below sometimes throws `SyntaxError: Unexpected end of JSON input`. What should they change?",
+      "code": {
+        "lang": "typescript",
+        "src": "for await (const event of stream) {\n  if (event.type === \"content_block_delta\" &&\n      event.delta.type === \"input_json_delta\") {\n    const input = JSON.parse(event.delta.partial_json);\n    await createTicket(input);\n  }\n}"
+      },
+      "select": 1,
+      "options": [
+        "Join each block's `partial_json` fragments and parse once at `content_block_stop` (or just use `finalMessage()`)",
+        "Wrap `JSON.parse` in try/catch and drop any fragment that fails to parse",
+        "Set `max_tokens` higher so that each delta contains complete JSON",
+        "Disable streaming for any request that includes tools, because tool-use input can only be returned in the final non-streamed message"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `input_json_delta` events carry partial JSON strings. They are only valid JSON once all fragments for the block are joined, so parse at `content_block_stop`, or let the SDK accumulate them with `finalMessage()`.",
+        "Dropping fragments corrupts the tool input. Most fragments are not valid JSON on their own.",
+        "Delta size has nothing to do with `max_tokens`. Fragments are partial by design.",
+        "Tool use streams fine. You just have to accumulate the deltas before parsing."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-010",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A product team wants a chat UI in which the browser opens a WebSocket directly to the Claude Messages API, so tokens appear as they are generated. Security requires that API keys never reach client devices. Which design BEST meets both requirements?",
+      "select": 1,
+      "options": [
+        "Open the WebSocket from the browser straight to the API, passing the API key in the first frame rather than in a header so it is not logged",
+        "Use non-streaming calls from the browser, with the key stored in an obfuscated JavaScript bundle",
+        "Have the browser poll the Messages API every 200 ms with the same request until the answer is complete",
+        "Have a backend stream from the API (SSE over HTTP) and relay the deltas to the browser over SSE or its own WebSocket"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Any key sent from the browser is exposed to the user, whatever the transport. Also, the Messages API streams over SSE, not WebSockets.",
+        "Obfuscation does not protect a secret that is shipped to clients, and this design loses streaming as well.",
+        "Each poll would be a new, separately billed generation, not a progress check. It also exposes the key.",
+        "Correct. The Messages API streams over server-sent events (one-way, server-to-client over HTTP). Keep the key on a backend, then use whatever transport you prefer, SSE or WebSocket, between the backend and the browser."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-011",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A FastAPI service's throughput collapses under concurrency. Each request occupies the event loop for the whole duration of the Claude call. What is the BEST fix?",
+      "code": {
+        "lang": "python",
+        "src": "client = anthropic.Anthropic()\n\n@app.post(\"/answer\")\nasync def answer(q: Query):\n    resp = client.messages.create(\n        model=MODEL, max_tokens=2048,\n        messages=[{\"role\": \"user\", \"content\": q.text}],\n    )\n    return {\"text\": resp.content[0].text}"
+      },
+      "select": 1,
+      "options": [
+        "Increase the number of uvicorn workers to match peak concurrent users, keeping the synchronous client code exactly as it is",
+        "Wrap the call in `asyncio.create_task()` without awaiting it, so the handler returns immediately",
+        "Lower `max_tokens` so each blocking call finishes sooner",
+        "Use `AsyncAnthropic` and `await client.messages.create(...)` so the event loop can serve other requests while waiting"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "More processes hide the problem at a high memory cost. Each worker still blocks on every in-flight call.",
+        "`asyncio.create_task()` cannot make a blocking call non-blocking. The sync call still blocks the loop when the task runs, and without awaiting it the handler never gets the result.",
+        "Shorter calls still block the loop. It also reduces answer quality without fixing concurrency.",
+        "Correct. The synchronous client blocks the event loop. The async client yields while waiting on I/O, so one loop can handle many in-flight requests."
+      ],
+      "ref": "https://github.com/anthropics/anthropic-sdk-python"
+    },
+    {
+      "id": "MSO1-012",
+      "subskill": "MSO.1",
+      "difficulty": 3,
+      "stem": "A data team uses `AsyncAnthropic` with `asyncio.gather()` to fire 5,000 enrichment requests at once each morning. Most fail with 429s even after SDK retries. Results are needed by end of day. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Cap in-flight requests with an `asyncio.Semaphore` sized to your rate limits, letting SDK backoff absorb stray 429s",
+        "Set `max_retries=50` on the client so that every one of the 5,000 requests eventually gets through, however long it takes",
+        "Submit the work through the Message Batches API, since nobody is waiting on individual results",
+        "Create 20 separate client instances, each with its own API key from the same workspace, so each gets its own rate limit",
+        "Switch to the synchronous client so requests are naturally serialised"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Capping concurrency keeps requests and tokens per minute under the limit instead of creating a retry storm.",
+        "Huge retry counts turn a burst into a long-running retry storm and still waste quota. Fix the arrival rate instead.",
+        "Correct. A same-day deadline fits Batches: asynchronous processing, typically under an hour and at most 24 hours, at a 50% discount, without managing request rate yourself.",
+        "Rate limits apply to the organisation/workspace, not to each client object or key within it. More clients do not add quota.",
+        "Full serialisation would be far too slow for 5,000 requests and throws away safe parallelism."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    },
+    {
+      "id": "MSO1-013",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A bank routes all outbound traffic through an HTTP egress proxy and an internal LLM gateway at `https://llm-gw.bank.internal`. How should the Python service configure the SDK?",
+      "select": 1,
+      "options": [
+        "Monkeypatch the client's private `_base_url` attribute after construction, and set `HTTP_PROXY` globally for the whole host",
+        "Copy the SDK source into the repo and replace `api.anthropic.com` with the gateway URL",
+        "Pass `base_url` (or set `ANTHROPIC_BASE_URL`) and an `http_client=DefaultHttpxClient(proxy=...)` when building the client",
+        "Use raw `requests` calls instead, because the SDK cannot be pointed at non-Anthropic hosts"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Patching private attributes breaks on SDK upgrades, and a host-wide proxy affects unrelated traffic.",
+        "Forking the SDK makes upgrades and security patches painful. The SDK already supports this configuration.",
+        "Correct. The SDK accepts `base_url` (or `ANTHROPIC_BASE_URL`) and a custom HTTP client for proxies. Using `DefaultHttpxClient` keeps the SDK's default timeouts and connection limits.",
+        "Dropping the SDK loses typed responses, retries, timeouts and streaming helpers. Custom hosts are supported."
+      ],
+      "ref": "https://github.com/anthropics/anthropic-sdk-python"
+    },
+    {
+      "id": "MSO1-014",
+      "subskill": "MSO.1",
+      "difficulty": 3,
+      "stem": "A company is moving a Python service from the first-party Claude API to Claude on Amazon Bedrock so it can use IAM roles. It installs `anthropic[bedrock]` and replaces `Anthropic()` with the SDK's Bedrock client class. Which TWO statements are accurate? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Requests are authenticated with AWS credentials (IAM), not an `x-api-key` header",
+        "The request body must be rewritten into a different, Bedrock-specific schema, so `messages.create` can no longer be used at all",
+        "Model identifiers use Bedrock's own ID format (for example, a provider-prefixed `anthropic.` ID), so the model string must change",
+        "Streaming is unavailable through the Bedrock client, so long outputs must be split into multiple calls",
+        "Prompt caching cannot be used on Bedrock, so cached prefixes will become full-price input"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Platform clients sign requests with the cloud provider's credentials (SigV4 / IAM on AWS) instead of an Anthropic API key.",
+        "The platform clients keep the familiar `messages.create` interface. That is the point of the platform client.",
+        "Correct. Bedrock uses its own model IDs, so update the model string (and check per-platform feature availability).",
+        "Bedrock supports streaming.",
+        "Prompt caching is supported on Bedrock (minimums and usage-field details are in AWS's documentation). Feature availability does vary by platform, so check it, but this blanket claim is false."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock"
+    },
+    {
+      "id": "MSO1-015",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A developer moves from the SDK to a raw `curl` call for debugging. They send `x-api-key` and `content-type: application/json` with a valid body to `POST /v1/messages`, and the API rejects the request with an error about a missing required header. What did the SDK send automatically that the curl call is missing?",
+      "select": 1,
+      "options": [
+        "An `anthropic-version` header that selects the API version",
+        "An `Authorization: Bearer` header carrying the same API key a second time",
+        "A `user-agent` header identifying an official SDK",
+        "An `anthropic-beta` header listing the enabled features"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Every raw Messages API request must include `anthropic-version`. The SDKs set it for you. This is one of the things a REST-wrapping SDK handles invisibly.",
+        "API keys go in `x-api-key`. `Authorization: Bearer` is for OAuth tokens, and sending both is a common cause of 401s, not a requirement.",
+        "The user agent is informational. The API does not require it.",
+        "Beta headers are opt-in, only for beta features. A basic Messages call needs none."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "MSO1-016",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A partner escalates a few failed generations to Anthropic support. Support asks for the identifier that lets them trace specific API calls. What should the application have logged for each call?",
+      "select": 1,
+      "options": [
+        "The SHA-256 hash of the prompt",
+        "The `request-id` response header (exposed by the Python SDK as `response._request_id`)",
+        "The local timestamp of each call together with the model alias and the prompt's length",
+        "The `id` of the first content block in the response"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A prompt hash is useful for your own deduplication, but support cannot look requests up by it.",
+        "Correct. Every response carries a `request-id` header. Logging it, along with errors, is the standard way to trace a call with Anthropic.",
+        "Timestamps and model names are not unique identifiers for a call.",
+        "Text content blocks have no IDs. Tool-use IDs identify tool calls, not API requests."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "MSO1-017",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A health-check job pings the Messages API every minute with a tiny prompt to confirm connectivity. When the API is degraded, the check takes 30+ seconds to report failure, and on-call alerts fire late. Which change is BEST?",
+      "select": 1,
+      "options": [
+        "Run the health check with `max_tokens=1` so it completes faster during degradation",
+        "Move the health check to the Message Batches API so the probe never contends with production traffic for rate limits",
+        "Run the probe via `client.with_options(max_retries=0, timeout=5.0)` so a failure surfaces on the first attempt",
+        "Turn off the health check during incidents to reduce load on the API"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Output size is not the problem. The delay comes from the SDK silently retrying with backoff and from long timeouts.",
+        "Batches are asynchronous and can take up to 24 hours. They are useless for a connectivity probe.",
+        "Correct. For a probe, you want the raw signal. Disabling retries and setting a short timeout on this call alone makes failures surface quickly.",
+        "Turning off monitoring during incidents defeats the purpose of having it."
+      ],
+      "ref": "https://github.com/anthropics/anthropic-sdk-python"
+    },
+    {
+      "id": "MSO1-018",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "A Java team cannot use an official SDK feature and must write its own retry layer around raw HTTP calls to the Messages API. Which TWO practices should it include? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Retry 400 responses once, just in case the JSON payload was corrupted somewhere in transit",
+        "When a `retry-after` header is present on a 429, wait at least that long before retrying",
+        "Retry immediately in a tight loop, since rate limits reset continuously",
+        "Use exponential backoff with jitter for 429, 500 and 529 responses, with a capped number of attempts",
+        "Retry 401 responses three times before alerting, because newly created keys sometimes take time to propagate"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "A 400 is a deterministic client error. Fix the request rather than retrying it.",
+        "Correct. `retry-after` tells you when capacity is expected to be back. Honouring it avoids wasted attempts.",
+        "Tight-loop retries multiply load and quickly burn more of the limit.",
+        "Correct. This is the standard pattern for transient errors and the same approach the SDKs use internally. Jitter prevents synchronised retry waves.",
+        "A 401 is a credential error. Retrying delays the alert without fixing anything."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "MSO1-019",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A team debates whether to stream responses in its customer-facing chat. Which TWO benefits does streaming actually provide? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Users see the first tokens much sooner, so the response feels faster even though total generation time is about the same",
+        "Lower cost per response, because streamed tokens are billed at a discount",
+        "Long generations avoid idle-connection timeouts, because data keeps flowing over the open connection",
+        "Higher output tokens per second from the model, because streamed generation skips buffering the full response on the server",
+        "Automatic prompt caching of the conversation history, since streamed requests are cached by default"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Streaming improves perceived latency (time to first visible token). It does not shorten total generation time.",
+        "Streaming does not change token pricing.",
+        "Correct. For large outputs, streaming keeps the connection active. This is why the SDK requires streaming for requests expected to run longer than about 10 minutes.",
+        "Generation speed does not change; streaming only delivers tokens as they are produced. Higher output speed is what fast mode provides, at a premium price.",
+        "Caching is controlled by `cache_control`. Streaming is a separate transport choice and caches nothing by default."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-020",
+      "subskill": "MSO.1",
+      "difficulty": 3,
+      "stem": "A long-form writing app streams responses from a current-generation model. A mobile network drop cuts off a stream after 3,000 words of text. The model rejects requests whose `messages` end with an assistant turn (prefill). What is the BEST recovery approach?",
+      "select": 1,
+      "options": [
+        "Resend the identical request from scratch and discard the partial text",
+        "Append the partial text as a final `assistant` message so the model continues it exactly, token for token, from where it stopped",
+        "Lower `max_tokens` and resend so the stream is less likely to be interrupted",
+        "Save the partial text, then send a new request whose user message includes it and asks the model to continue from there"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This works, but it pays for all 3,000 words again and may produce a different draft.",
+        "On models that do not support prefill, a trailing assistant message is rejected. The docs recommend the user-message form for these models.",
+        "Network drops are not caused by `max_tokens`. A lower cap only truncates legitimate output.",
+        "Correct. Capture what you received, then ask for a continuation in a user turn. Note that thinking and tool_use blocks cannot be partially recovered; you can resume only from the most recent text block."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-021",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "A TypeScript agent loop streams text to the terminal, but after each turn it also needs the complete `Message` (with `stop_reason` and all `tool_use` blocks) to decide what to do next. What is the simplest correct approach?",
+      "select": 1,
+      "options": [
+        "Collect the `text` events into a string, then rebuild any tool calls by regex-matching JSON-looking spans in that text",
+        "Make a second non-streaming request with the same input to get the full message",
+        "Use `client.messages.stream(...)`, consume its events for display, then `await stream.finalMessage()`",
+        "Read `stop_reason` from the `message_start` event"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Tool calls arrive as structured `tool_use` blocks, not in the text. Regex parsing is fragile and wrong.",
+        "This doubles cost and can return a different response from the one you displayed.",
+        "Correct. The stream helper accumulates every event, and `finalMessage()` returns the complete `Message` without manual reassembly.",
+        "`message_start` contains a Message with empty content. The final `stop_reason` arrives in `message_delta`."
+      ],
+      "ref": "https://github.com/anthropics/anthropic-sdk-typescript"
+    },
+    {
+      "id": "MSO1-022",
+      "subskill": "MSO.1",
+      "difficulty": 2,
+      "stem": "To reduce memory, a developer switches from `client.messages.stream()` to the low-level form shown. The next line, `final = response.get_final_message()`, raises `AttributeError`. Why?",
+      "code": {
+        "lang": "python",
+        "src": "response = client.messages.create(\n    model=MODEL, max_tokens=8000,\n    messages=msgs, stream=True,\n)\nfor event in response:\n    if event.type == \"content_block_delta\" and event.delta.type == \"text_delta\":\n        print(event.delta.text, end=\"\")\nfinal = response.get_final_message()"
+      },
+      "select": 1,
+      "options": [
+        "The raw iterator only yields events and does no accumulation; build the message yourself or use `messages.stream()`",
+        "`stream=True` is only honoured by `AsyncAnthropic`, so the sync client silently returned a plain `Message` without stream helpers",
+        "`get_final_message()` is only available after `message_stop`, and the loop exited early",
+        "The low-level form needs an `anthropic-beta` header to enable accumulation"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `messages.create(..., stream=True)` returns a raw event iterator with lower overhead, but no helper state. `messages.stream()` provides `text_stream` and `get_final_message()`.",
+        "Both sync and async clients support `stream=True`. They return event iterators.",
+        "Timing is not the issue. The raw iterator object simply has no such method.",
+        "No beta header is involved. Accumulation is a feature of the SDK helper, not the API."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+    },
+    {
+      "id": "MSO1-023",
+      "subskill": "MSO.1",
+      "difficulty": 1,
+      "stem": "An SRE notices that each request that ultimately fails with a 529 appears three times in the API request logs, a few hundred milliseconds to a few seconds apart. The service uses the official SDK with no retry configuration. What explains this?",
+      "select": 1,
+      "options": [
+        "A load balancer in front of the service is replaying failed upstream requests, which is common with default proxy retry settings",
+        "The SDK retries retryable errors twice by default with exponential backoff, so a request that keeps failing makes 3 attempts",
+        "The API automatically replays overloaded requests on the server side three times",
+        "Streaming splits each request into three HTTP calls"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Possible in theory, but the timing pattern matches the SDK's default behaviour exactly. Check the client first.",
+        "Correct. The default `max_retries` is 2, so there is 1 original attempt plus 2 retries. Configure `max_retries` if that is not what you want.",
+        "The API does not replay requests for you. Retries are a client-side responsibility, handled by the SDK by default.",
+        "A streamed response is a single HTTP request with an SSE body."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "MSO2-001",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "A localisation startup budgets Claude costs by assuming 1 token ~= 1 word. Japanese product descriptions and JSON-heavy prompts come in far over budget, while English prose is close to the estimate. What is the BEST correction to their process?",
+      "select": 1,
+      "options": [
+        "Divide every word count by 0.75, since that ratio applies to all languages",
+        "Estimate by character count, because tokens are always exactly 4 characters",
+        "Measure real samples of each content type with the token counting endpoint for the target model, and budget from those counts",
+        "Translate every input into English before sending, because English text always tokenises more efficiently than other languages do"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A single word-to-token ratio does not hold across languages, code or structured data, which is the very error they hit.",
+        "Tokens are sub-word units of varying length. No fixed character ratio holds across content types.",
+        "Correct. Token counts depend on the content and on the model's tokenizer. Count representative samples with `count_tokens` for the model you will actually use.",
+        "This adds a lossy translation step and its own cost to save tokens. Measure first."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "id": "MSO2-002",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "A developer estimates Claude prompt sizes with `tiktoken` (OpenAI's tokenizer) to decide when to chunk documents. Requests near the computed limit occasionally fail as too long. What should they do?",
+      "select": 1,
+      "options": [
+        "Keep `tiktoken`, but apply a 5% safety margin to every estimate so that borderline documents are chunked early",
+        "Count words and multiply by a fixed 1.3 instead",
+        "Rely on `max_tokens` to cut off overly long prompts automatically",
+        "Use the Messages API `count_tokens` endpoint with the same model, system prompt, tools and messages"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Another provider's tokenizer can undercount Claude tokens substantially, especially on code and non-English text. A small fixed margin is not reliable.",
+        "Word-based heuristics are even less accurate than a tokenizer, and they still are not Claude's tokenizer.",
+        "`max_tokens` limits output only. An oversized prompt is rejected regardless.",
+        "Correct. Token counts are model-specific. `count_tokens` takes the same structure as a Messages request (system, tools, images, documents) and returns `input_tokens` for that model."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "id": "MSO2-003",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "After migrating a summarisation service to a newer model generation, the team sees `input_tokens` rise noticeably for byte-identical prompts. Their pre-flight context checks also start rejecting documents that used to fit. Nothing in the code changed except the model ID. What is the MOST likely explanation and next step?",
+      "select": 1,
+      "options": [
+        "The new generation's tokenizer counts the same text as more tokens. Re-baseline budgets and thresholds with `count_tokens`.",
+        "The SDK began including the system prompt twice. Upgrade the SDK.",
+        "Prompt caching was disabled by the migration, so tokens that used to be cached are now being counted as regular input tokens",
+        "The new model has a smaller context window, so tokens are counted with padding."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Tokenizers can change between generations, so the same text may cost more tokens. Counts, costs and context checks must be re-measured per model.",
+        "Nothing suggests SDK duplication. Only the model changed.",
+        "Cache usage is reported separately in `cache_read_input_tokens` / `cache_creation_input_tokens`. That would not raise counts for byte-identical uncached prompts.",
+        "Context windows do not pad token counts. Window size and tokenization are separate properties."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "id": "MSO2-004",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "A developer using a model with a 1M-token context window sets `max_tokens: 1000000`, believing this lets the model read larger documents. Which statement is correct?",
+      "select": 1,
+      "options": [
+        "`max_tokens` sets the maximum input size the model will accept, so this correctly raises the document limit to the full window",
+        "`max_tokens` caps generated output (thinking included). The window must fit input plus output.",
+        "`max_tokens` is ignored when thinking is enabled",
+        "`max_tokens` sets the cache size for the conversation"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Input size is limited by the context window, not by `max_tokens`. An oversized prompt is rejected either way.",
+        "Correct. The context window covers everything: system, tools, messages and the response. `max_tokens` is a hard cap on output, which includes thinking tokens, and it cannot exceed the model's max output.",
+        "Thinking tokens count against `max_tokens`. It still applies.",
+        "Caching is controlled with `cache_control`. `max_tokens` has nothing to do with it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "id": "MSO2-005",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "A legal-analysis endpoint uses adaptive thinking with `max_tokens: 2000`. On hard contracts, responses come back with `stop_reason: \"max_tokens\"` and little or no visible text. Which change addresses the root cause?",
+      "select": 1,
+      "options": [
+        "Retry the same request; the truncation is due to random sampling",
+        "Move the instructions into the system prompt so that the model writes the visible answer before it starts thinking",
+        "Raise `max_tokens` well above 2000, since thinking counts against it, and lower effort if cost must stay bounded",
+        "Switch thinking off by sending `budget_tokens: 0`"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Truncation at a hard cap is deterministic. The same cap will cut off the next attempt too.",
+        "Prompt placement does not stop thinking from consuming the output budget.",
+        "Correct. Thinking tokens are a subset of `max_tokens` and are billed as output. A tight cap can end the response before any answer is written. Treat `max_tokens` as a backstop, and use effort to control thinking spend.",
+        "`budget_tokens` is the older manual-thinking control. Recent models reject it, and 0 is not a valid way to disable thinking."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "id": "MSO2-006",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "An ingestion job sends an entire data-room export in one request. The API returns a 400 `invalid_request_error` saying the prompt is too long. What should the developer do?",
+      "select": 1,
+      "options": [
+        "Increase `max_tokens` to make room for the input",
+        "Retry with exponential backoff, since this is a transient capacity issue",
+        "Add `cache_control` to the large document so the oversized input is stored server-side and excluded from the window",
+        "Send less: chunk, retrieve the relevant sections, or compact earlier material, checking size with `count_tokens` first"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "`max_tokens` governs output only. It cannot make room for more input.",
+        "A prompt that exceeds the context window is a deterministic 400. Retrying cannot help.",
+        "Cached tokens still occupy the context window. Caching changes the price, not the size.",
+        "Correct. If the input alone exceeds the context window, the request is rejected on every model. Send less, using chunking, retrieval or compaction."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+      "id": "MSO2-007",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "An insurance triage classifier occasionally labels the same claim differently on reruns, and auditors want repeatable decisions. The team is on a recent model that rejects `temperature`. Which TWO actions BEST address the requirement? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Tighten the task: precise label definitions, a few diverse examples, and structured outputs constraining the label to an enum",
+        "Send `temperature: 0` on every request, because a temperature of zero guarantees byte-identical outputs for identical inputs",
+        "Store each claim's decision keyed by an input hash and treat it as the record of truth, rather than re-classifying on demand",
+        "Retry each classification until two consecutive runs agree, and record that agreed label as the final decision",
+        "Switch to a smaller model, because smaller models are deterministic"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Ambiguity in the task is the main source of label flips. Clear definitions, examples and an enum-constrained output reduce the variance you see.",
+        "That model rejects the parameter. And even where `temperature` is accepted, 0 does not guarantee identical output: LLM generation is not fully deterministic.",
+        "Correct. If decisions must be repeatable for audit, record them once and reuse the stored result. Do not depend on regenerating the same output.",
+        "Waiting for agreement adds cost and latency, and two matching runs still do not prove the label is right.",
+        "Model size does not make generation deterministic."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "MSO2-008",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "On a model that still accepts sampling parameters, a team lowers `temperature` from 1.0 to 0.2 on a summarisation endpoint. What effect should they expect?",
+      "select": 1,
+      "options": [
+        "Output varies less because likely tokens are favoured, but runs still aren't guaranteed identical",
+        "Output becomes fully deterministic, so identical inputs will always produce byte-identical outputs",
+        "The model thinks longer before answering",
+        "Output token cost drops by about 80%"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Temperature reshapes the next-token probability distribution, so lower values favour likely tokens. Some nondeterminism remains even at low values.",
+        "Lower temperature reduces variation but does not guarantee byte-identical outputs.",
+        "Thinking depth is governed by thinking settings and effort, not temperature.",
+        "Temperature does not change price, and it does not directly or reliably change length."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/messages/create"
+    },
+    {
+      "id": "MSO2-009",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "A credit-memo tool prompts: 'State APPROVE or DECLINE on the first line, then explain your reasoning.' Reviewers find the explanations often read like after-the-fact rationalisation, and borderline cases are inconsistent. Thinking is turned off for latency reasons. Which prompt change BEST improves decision quality?",
+      "select": 1,
+      "options": [
+        "Ask the model to restate its decision again at the very end of the reply, as a double-check on the first line",
+        "Ask for the key analysis first, in a delimited section, and the APPROVE/DECLINE decision last",
+        "Add 'Be accurate' in capital letters to the first line of the prompt",
+        "Shorten the prompt so the model reaches the decision sooner"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Repeating a decision that was already committed to adds no reasoning before it.",
+        "Correct. Generation is next-token prediction: tokens already emitted condition what follows, and the model cannot revise them. If the decision comes first, the reasoning is generated to justify it. Putting the reasoning first lets it inform the decision. Thinking, when available, serves the same purpose.",
+        "Emphasis does not change the order in which the decision and reasoning are generated.",
+        "Getting to the decision faster is the problem, not the fix."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "MSO2-010",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "A marketing tool asks Claude to 'write a tagline of exactly 42 characters'. Results are often a few characters off, while the copy itself is good. What is the BEST approach?",
+      "select": 1,
+      "options": [
+        "Raise effort to `max` so the model spends enough reasoning to count every character of the tagline precisely before answering",
+        "Repeat the instruction three times in the prompt",
+        "Keep the model's copy but enforce length in code: measure it, then request a revision with the exact count or truncate",
+        "Ask the model to output one character per line so it can count them"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "More effort may help a little, but character counting conflicts with how the model sees text, and it adds cost. Deterministic checks are more reliable.",
+        "Repetition does not change the underlying limitation.",
+        "Correct. Models process tokens (sub-word chunks), not characters, so exact character counts are unreliable. Validate precise constraints in code and feed back the measured count.",
+        "This changes the output format and still is not guaranteed to be accurate. It is also wasteful."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "MSO2-011",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "A voice assistant's replies take too long to finish. Profiling shows about 2,500 input tokens and about 900 output tokens per turn, and most of the wall-clock time is spent generating. Which change is MOST likely to cut total response time without changing the model?",
+      "select": 1,
+      "options": [
+        "Specify a tighter output shape, such as two sentences and no preamble, so far fewer output tokens are generated",
+        "Halve the system prompt to cut input tokens, since processing the input is what dominates total time per turn",
+        "Raise `max_tokens` so the model is not constrained",
+        "Switch from streaming to non-streaming so the response arrives in one piece"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Output tokens are generated one at a time, so output length usually dominates total generation time. Fewer output tokens finish sooner. Validate quality on an eval.",
+        "Input is processed in parallel and is relatively cheap in time. Halving it gains far less than trimming sequential output.",
+        "A higher cap does not speed anything up. It is only an upper bound.",
+        "Non-streaming makes the user wait longer before hearing anything. The total time stays the same."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "MSO2-012",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "A developer is porting an app to a current Claude model that supports adaptive thinking. Which request shape correctly enables it and steers how much the model thinks?",
+      "select": 1,
+      "options": [
+        "`thinking: {type: \"enabled\", budget_tokens: 16000}`",
+        "`thinking: {type: \"adaptive\", budget_tokens: 16000}`, so the adaptive mode has a ceiling",
+        "`temperature: 0` combined with `thinking: true`",
+        "`thinking: {type: \"adaptive\"}` with depth steered by `output_config: {effort: ...}`"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This is the older manual extended-thinking form. Recent models reject `budget_tokens`.",
+        "Adaptive thinking is steered by effort, not by a fixed token budget.",
+        "`thinking` is an object, not a boolean, and many recent models reject sampling parameters.",
+        "Correct. With adaptive thinking the model decides when and how much to think, and effort is the recommended way to control thinking depth."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking"
+    },
+    {
+      "id": "MSO2-013",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "A platform team is documenting how the `effort` parameter behaves so product teams can use it correctly. Which THREE statements should the documentation include? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Effort influences all output tokens, including text and tool calls, not only thinking",
+        "Lower effort generally means fewer, terser tool calls and fewer tokens, which lowers cost and latency at some cost to capability",
+        "Effort is a hard token limit: once the budget for the chosen level is used up, the response stops immediately",
+        "It is set in the request as `output_config.effort`, with levels from `low` up to `max` (not every model supports every level)",
+        "Effort only has an effect when `temperature` is also set, because it works by rescaling the sampling distribution",
+        "Changing effort quietly routes the request to a smaller or larger model behind the scenes, depending on the level"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanations": [
+        "Correct. Effort applies to every output token, so it works with or without thinking.",
+        "Correct. This is the core trade-off: fewer tokens and calls at lower effort, more thoroughness at higher effort.",
+        "Effort is a behavioural signal, not a hard cap. `max_tokens` is the hard limit.",
+        "Correct. Levels are low, medium, high, xhigh and max. Support varies by model, so check the docs or the Models API.",
+        "Effort is independent of sampling parameters (which many recent models do not accept). It changes how much work the model does, not the sampling distribution.",
+        "Effort trades cost against quality on the same model. Model choice is a separate lever, and effort never switches models."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    },
+    {
+      "id": "MSO2-014",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "To cut spend on an agent, a developer drops `max_tokens` from 32000 to 1500. Costs fall slightly, but the share of tasks that finish successfully collapses, and logs show many `stop_reason: \"max_tokens\"` results. What is the better lever?",
+      "code": {
+        "lang": "python",
+        "src": "resp = client.messages.create(\n    model=MODEL,\n    max_tokens=1500,\n    messages=history,\n    tools=tools,\n)"
+      },
+      "select": 1,
+      "options": [
+        "Keep `max_tokens` at 1500 and add 'be brief' to the prompt",
+        "Keep the low cap and automatically retry truncated attempts at the same cap until one of them fits",
+        "Remove `max_tokens` entirely so the model decides",
+        "Restore a generous `max_tokens` backstop and lower `output_config.effort`, validated on an eval"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A brevity instruction does not stop thinking or tool calls from consuming the cap. Truncations will continue.",
+        "Retries at the same cap fail the same way. A capped run counts as a failed attempt, not one to resend unchanged.",
+        "`max_tokens` is a required parameter.",
+        "Correct. The model never sees `max_tokens`. Hitting it cuts the response mid-thought, so cost per solved task does not improve. Effort is the behavioural control for token spend."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    },
+    {
+      "id": "MSO2-015",
+      "subskill": "MSO.2",
+      "difficulty": 3,
+      "stem": "A team migrates an endpoint from one Claude model to another and leaves `output_config.effort` unset, as before. Output token usage and latency shift noticeably even though prompts are unchanged. What is the BEST practice going forward?",
+      "select": 1,
+      "options": [
+        "Keep omitting effort, so each model applies its own preferred behaviour without the team needing any further tuning",
+        "Hard-code `effort: \"max\"` everywhere so behaviour is consistent across models",
+        "Set effort explicitly per route and re-sweep it on your eval after any model change",
+        "Use `temperature` to match the old model's output length"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Default effort can differ between models, so an unset value can silently change cost and behaviour after a migration.",
+        "`max` adds large cost for small gains on most workloads, and not every model supports it.",
+        "Correct. Defaults and the token allocation behind each level vary by model. Pin effort explicitly and re-measure it on the new model rather than carrying a setting over.",
+        "Temperature does not control length or depth, and recent models may reject it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    },
+    {
+      "id": "MSO2-016",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "Developers using an internal coding assistant complain that long refactor diffs take too long to finish streaming. The team has evals showing the current model's quality is exactly right, and it has budget headroom. Which option BEST fits?",
+      "select": 1,
+      "options": [
+        "Switch to a smaller, faster model tier, since smaller tiers generate tokens faster than larger ones do",
+        "Enable fast mode (`speed: \"fast\"`) on that model, accepting premium pricing for faster output",
+        "Move refactors to the Message Batches API",
+        "Lower `max_tokens` so diffs are shorter"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A smaller tier changes quality, and the evals say the current quality is what they need.",
+        "Correct. Fast mode runs the same model with a faster inference configuration. It raises output tokens per second at a premium price, with no change in intelligence. The gain is most visible when streaming long outputs.",
+        "Batches are asynchronous and slower to return. They are the opposite of what interactive users need.",
+        "Capping the output truncates refactors rather than speeding them up."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/fast-mode"
+    },
+    {
+      "id": "MSO2-017",
+      "subskill": "MSO.2",
+      "difficulty": 3,
+      "stem": "An architect is evaluating fast mode for several workloads. Which TWO statements about fast mode are accurate? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "It runs the same model with a faster inference configuration, so capability is unchanged",
+        "It mainly improves time to first token, so it is the main fix for slow first responses on very large prompts",
+        "Its speed gain is focused on output tokens per second, not time to first token",
+        "It can be combined with the Batches API to get both the batch discount and faster processing",
+        "Requests at fast and standard speed share cached prefixes, so falling back to standard speed after a 429 keeps the cache warm"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Fast mode changes inference speed, not the model.",
+        "Its benefit is output speed, not time to first token. For slow first responses on large prompts, prompt caching is the usual lever.",
+        "Correct. Fast mode delivers higher output tokens per second at premium pricing.",
+        "Fast mode is not available with the Batch API. Batches are asynchronous, so synchronous latency tuning does not apply.",
+        "Requests at different speeds do not share cached prefixes, so a fallback from fast to standard speed is a cache miss. Plan for it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/fast-mode"
+    },
+    {
+      "id": "MSO2-018",
+      "subskill": "MSO.2",
+      "difficulty": 1,
+      "stem": "A zero-shot extraction prompt returns correct fields, but the formatting varies: date formats differ, and null fields are sometimes omitted and sometimes written as \"N/A\". What is the most direct prompt-level fix?",
+      "select": 1,
+      "options": [
+        "Add a few `<example>`-tagged input/output pairs showing the exact format, including missing fields",
+        "Raise effort to `max`",
+        "Move the formatting instructions out of the system prompt and into the user message, closer to the input",
+        "Ask the model to 'be consistent'"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Few-shot (multishot) examples are one of the most reliable ways to pin down format and edge-case handling. Include edge cases such as missing values. Structured outputs can enforce the schema as well.",
+        "Effort governs how thoroughly the model works, not consistency of format.",
+        "Placement alone does not define the format you want.",
+        "A vague instruction does not show the model what 'consistent' means. Examples do."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "MSO2-019",
+      "subskill": "MSO.2",
+      "difficulty": 2,
+      "stem": "A ticket summariser uses five few-shot examples. All five are short billing tickets written by the same agent. On long technical tickets, the outputs are oddly short and copy phrases from the examples. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Diversify the examples across ticket types, lengths and edge cases so the model stops copying surface patterns",
+        "Remove the examples entirely and go zero-shot, since examples always constrain the model's output length",
+        "Duplicate the strongest example several times so that it carries more weight than the others during generation",
+        "State explicitly that the examples illustrate format and that length should match the input ticket's complexity",
+        "Move the examples after the ticket to be summarised so they are the last thing the model reads before writing"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Models generalise from examples, including unintended features such as length or phrasing. Diversity reduces that overfitting.",
+        "This throws away format control. The problem is the examples' coverage, not the use of examples, and examples do not inherently constrain length.",
+        "Duplicating an example strengthens exactly the surface pattern that is causing the problem.",
+        "Correct. Saying what the examples are meant to demonstrate helps the model separate the format from incidental details.",
+        "Moving the examples does not fix their lack of diversity. Long reference material usually goes before the question, not after it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "MSO2-020",
+      "subskill": "MSO.2",
+      "difficulty": 3,
+      "stem": "A research app uses adaptive thinking with `display: \"summarized\"`. A finance analyst notices that `usage.output_tokens` is several times larger than the visible answer plus the thinking summary text. They suspect a billing bug. What is the correct explanation?",
+      "select": 1,
+      "options": [
+        "Summarised thinking is billed at the input-token rate, so it appears in the wrong usage field and inflates output",
+        "The SDK double-counts thinking tokens when the summary is displayed",
+        "You are billed for the full thinking tokens the model generated, not the shorter summary returned to you",
+        "Output tokens include the cached system prompt each turn"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Thinking tokens are billed as output tokens, not input.",
+        "There is no SDK double-counting. Usage comes from the API.",
+        "Correct. The summary is a condensed view of the thinking. Billing reflects the full thinking the model produced, so visible text understates output usage. Effort is the lever for reducing it.",
+        "Cached input appears in the cache usage fields, never in `output_tokens`."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/thinking"
+    },
+    {
+      "id": "MSO3-001",
+      "subskill": "MSO.3",
+      "difficulty": 2,
+      "stem": "A long-running coding agent's logs show `input_tokens: 4,200` on turn 60, yet the conversation is clearly far larger. The same response shows `cache_read_input_tokens: 148,000` and `cache_creation_input_tokens: 3,100`. How large was the prompt for this request, and what does it tell you?",
+      "select": 1,
+      "options": [
+        "4,200 tokens. The two cache fields are informational metadata and are not part of this request's prompt size.",
+        "155,300 tokens. `input_tokens` is just the uncached remainder; most of the prompt came from cache.",
+        "151,100 tokens. Cache writes are not part of the prompt.",
+        "148,000 tokens. Cache reads replace `input_tokens` once caching is active."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`input_tokens` excludes cached tokens. Reading only that field badly undercounts context use and cost.",
+        "Correct. Total prompt = input_tokens + cache_creation_input_tokens + cache_read_input_tokens = 4,200 + 3,100 + 148,000 = 155,300. All three count toward the context window. This is the healthy pattern: large reads, a small write and a small uncached tail.",
+        "Tokens written to the cache are part of this request's prompt, billed at the write rate.",
+        "The three fields are separate parts of the prompt. Reads do not replace the uncached remainder."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO3-002",
+      "subskill": "MSO.3",
+      "difficulty": 2,
+      "stem": "A support bot sends a fixed 20,000-token system prompt on every request, followed by about 500 tokens of user-specific input. It generates about 300 output tokens. Traffic is steady, with requests well under 5 minutes apart. Prices for the chosen model: input $3/MTok, output $15/MTok, 5-minute cache write $3.75/MTok, cache read $0.30/MTok. With a cache breakpoint at the end of the system prompt, about what do 1,000 requests cost (1 cache write, then 999 reads)?",
+      "select": 1,
+      "options": [
+        "About $6.08",
+        "About $12.07",
+        "About $66.00",
+        "About $81.00"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "This treats cached reads as free. Reads still cost $0.30/MTok: 999 x 20,000 = 19.98M tokens, or about $5.99.",
+        "Correct. Write: 20,000 x $3.75/M = $0.075. Reads: 19.98M x $0.30/M = $5.994. Uncached input: 500 x 1,000 = 0.5M x $3/M = $1.50. Output: 0.3M x $15/M = $4.50. Total is about $12.07, against $66.00 uncached.",
+        "This is the cost without caching: 20.5M input x $3/M = $61.50, plus $4.50 output.",
+        "This charges the cache write rate on every request (20M x $3.75/M = $75, plus $1.50 and $4.50). That happens when a silent invalidator forces a write on every call, which is worse than not caching at all."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "MSO3-003",
+      "subskill": "MSO.3",
+      "difficulty": 3,
+      "stem": "An advisory chatbot loads a 50,000-token client dossier as a cached prefix. A typical advisor sends 3 messages per hour, about 20 minutes apart. Prices: base input $3/MTok, 5-minute cache write 1.25x ($3.75/MTok), 1-hour cache write 2x ($6/MTok), cache read 0.1x ($0.30/MTok). Considering only the dossier tokens for one advisor-hour, which configuration is cheapest?",
+      "select": 1,
+      "options": [
+        "No caching: send the dossier as plain input every time",
+        "5-minute TTL caching",
+        "1-hour TTL caching",
+        "5-minute TTL plus a keep-alive request every 4 minutes to refresh the entry"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "3 x 50,000 x $3/M = $0.45.",
+        "With 20-minute gaps, every 5-minute entry has expired, so all three requests pay the write premium: 3 x 50,000 x $3.75/M = about $0.56. That is worse than not caching.",
+        "Correct. One 2x write ($0.30) plus two reads (2 x 50,000 x $0.30/M = $0.03) comes to about $0.33. With gaps of 5 to 60 minutes, the 1-hour TTL is the TTL that pays off.",
+        "One write ($0.1875) plus about 15 keep-alive reads per hour (15 x $0.015 = $0.225) plus the real reads ($0.03) comes to about $0.44. At a 0.1x read price, frequent keep-alives cost more than the 1-hour TTL."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO3-004",
+      "subskill": "MSO.3",
+      "difficulty": 3,
+      "stem": "A RAG service turns on top-level automatic caching. Every request begins with the same 8,000-token instruction-and-examples block, followed by retrieved passages and the user's question, both unique per request. Usage shows a large `cache_creation_input_tokens` on every request and `cache_read_input_tokens` that never covers the shared block. What should the developer do?",
+      "code": {
+        "lang": "python",
+        "src": "client.messages.create(\n    model=MODEL, max_tokens=1024,\n    cache_control={\"type\": \"ephemeral\"},  # automatic\n    system=[{\"type\": \"text\", \"text\": SHARED_INSTRUCTIONS}],\n    messages=[{\"role\": \"user\", \"content\": [\n        {\"type\": \"text\", \"text\": retrieved_passages},\n        {\"type\": \"text\", \"text\": question},\n    ]}],\n)"
+      },
+      "select": 1,
+      "options": [
+        "Switch to the 1-hour TTL so entries live longer",
+        "Add an explicit `cache_control` breakpoint on the last block of the shared instructions",
+        "Move the retrieved passages to the start of the prompt so they are written to the cache first",
+        "Disable caching, since RAG prompts are never cacheable"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The TTL is irrelevant. Each entry's key includes unique content, so no later request can ever match it.",
+        "Correct. Automatic caching puts the breakpoint on the last cacheable block, after the unique tail, so every request pays a write premium on bytes that are never read again. Mark the end of the shared portion instead.",
+        "Putting variable content first destroys the shared prefix entirely, because caching is a prefix match.",
+        "The 8,000-token shared prefix is very cacheable. Only the breakpoint placement is wrong."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO3-005",
+      "subskill": "MSO.3",
+      "difficulty": 2,
+      "stem": "A team has added `cache_control` to the last system block of a 12,000-token system prompt. However, `cache_read_input_tokens` is 0 on almost every request, even when requests arrive seconds apart. Which TWO causes could explain this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "The system prompt begins with 'Current time: {datetime.now().isoformat()}'",
+        "The final user question differs on every request, and it sits in the last user message after the system prompt",
+        "Tools are built by iterating a Python `set` of enabled tool names, so their order varies between requests",
+        "Some requests set `stream: true` and others do not, so the two kinds of request render different prompt bytes",
+        "The `cache_control` marker moves to the newest turn on each request, so earlier breakpoints are lost"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. A timestamp at the front of the prefix changes the bytes on every request, so nothing after it can be read from cache.",
+        "Content after the breakpoint is expected to vary. It does not affect reads of the prefix before it.",
+        "Correct. Tools are rendered first (tools -> system -> messages). Nondeterministic ordering changes the prefix and invalidates everything after it. Serialise tools deterministically.",
+        "Streaming is a transport option and is not part of the cached prefix, so mixing streamed and non-streamed requests does not change the prefix bytes.",
+        "A moving marker is the normal multi-turn pattern. Earlier positions remain valid read points; they are not lost."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO3-006",
+      "subskill": "MSO.3",
+      "difficulty": 2,
+      "stem": "A developer adds `cache_control` to a 300-token system prompt on a high-volume classifier. There is no error, but every response shows `cache_creation_input_tokens: 0` and `cache_read_input_tokens: 0`. What is the MOST likely reason?",
+      "select": 1,
+      "options": [
+        "The prefix is shorter than the model's minimum cacheable length, so it silently isn't cached",
+        "Caching requires a beta header that is missing",
+        "Caching only works on the `messages` array, not on `system`",
+        "Caching only activates once a request carries at least 4 `cache_control` breakpoints in total"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Each model has a minimum cacheable prefix length (it varies by model). Shorter prefixes are not cached, with no error, and both cache fields read 0.",
+        "Prompt caching is generally available. A missing beta header would cause a 400, not silent zeros.",
+        "`cache_control` works on system blocks, tool definitions and message content blocks.",
+        "4 is the maximum number of breakpoints per request, not a minimum."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO3-007",
+      "subskill": "MSO.3",
+      "difficulty": 2,
+      "stem": "Every night a compliance team classifies 200,000 documents. Each request carries the same 1,500-token instruction block plus about 500 document tokens, and produces about 100 output tokens. Results are needed by 9am, and nobody waits on individual requests. Which TWO changes reduce cost the most without changing model capability? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Submit the job through the Message Batches API, which charges 50% of standard prices on all tokens",
+        "Use fast mode so the nightly job finishes sooner and therefore consumes fewer billable compute resources",
+        "Cache the shared 1,500-token instruction prefix with the 1-hour TTL, since batches can outlast 5 minutes",
+        "Stream each response so that tokens are billed incrementally as they arrive rather than all at once",
+        "Raise `max_tokens` to give the classifier more room, so it never truncates and has to be re-run"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Batches give 50% off every token, and most batches finish within an hour (24 hours at most), which fits an overnight window.",
+        "Fast mode costs more per token, not less, and it is not available with batches.",
+        "Correct. The caching and batch discounts stack. The docs suggest the 1-hour TTL for shared context in batches. Cache hits inside a batch are best-effort, so check the usage fields.",
+        "Streaming does not change pricing, and batch results are not streamed.",
+        "A cap that is never reached has no effect on cost, and it does nothing to the instruction tokens resent on every request."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    },
+    {
+      "id": "MSO3-008",
+      "subskill": "MSO.3",
+      "difficulty": 1,
+      "stem": "Before sending user-uploaded contracts, a TypeScript service wants to decide whether to send a contract whole or chunk it, using the exact token count for the model it will call. Which approach is correct?",
+      "code": {
+        "lang": "typescript",
+        "src": "const { input_tokens } = await client.messages.countTokens({\n  model: MODEL,\n  system: SYSTEM_PROMPT,\n  messages: [{ role: \"user\", content: contractText }],\n});\nconst strategy = input_tokens > CHUNK_THRESHOLD ? \"chunk\" : \"whole\";"
+      },
+      "select": 1,
+      "options": [
+        "Divide the file's byte length by 4",
+        "Send the full request with `max_tokens: 1`, read `usage.input_tokens`, then resend the real request with the chosen strategy",
+        "Call `client.messages.countTokens({ model, system, messages })` with the same model and content, and read `input_tokens`",
+        "Use the Models API's `max_input_tokens` value as the contract's size"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A byte heuristic is not the model's tokenizer and is unreliable for legal text with formatting.",
+        "This works, but it pays for a real generation and doubles the requests. `count_tokens` exists for exactly this purpose.",
+        "Correct. The token counting endpoint takes the same structure as a Messages request and returns a model-specific `input_tokens` count. Include system prompts, tools and documents so the count matches the real call.",
+        "`max_input_tokens` is the model's context window, not the size of your content."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    },
+    {
+      "id": "MSO3-009",
+      "subskill": "MSO.3",
+      "difficulty": 2,
+      "stem": "A team compares two configurations on an invoice-reconciliation task, where failed attempts are detected by a checker and retried until they succeed. Config A costs $0.02 per attempt and succeeds 40% of the time. Config B costs $0.04 per attempt and succeeds 90% of the time. Assuming independent attempts, which is cheaper per completed task?",
+      "select": 1,
+      "options": [
+        "A, at $0.02 per task, since it has the lower price on every attempt",
+        "A, at about $0.033 per task, because its retries are cheap",
+        "They cost the same, because B's price is exactly double A's",
+        "B, at about $0.044 per completed task, against about $0.050 for A"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This ignores that 60% of A's attempts fail and must be paid for and retried.",
+        "This miscalculates the expected attempts. With a 40% success rate, A needs 2.5 attempts on average, so 2.5 x $0.02 = $0.05.",
+        "Price per attempt is not cost per task. Success rate changes the expected number of attempts.",
+        "Correct. Expected cost = price / success rate: A = 0.02 / 0.4 = $0.050, B = 0.04 / 0.9 = about $0.044. Judge cost per completed task, not per token or per call. This calculation also excludes the downstream cost of failures."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    },
+    {
+      "id": "MSO3-010",
+      "subskill": "MSO.3",
+      "difficulty": 3,
+      "stem": "Finance asks a platform team to cut Claude spend on an internal assistant, and product insists that answer quality must not drop. Which TWO levers lower cost without trading away model capability? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Lower `output_config.effort` by one level across all routes, since effort only affects token spend",
+        "Make sure the stable system prompt and tools are prompt-cached, and verify the usage fields show reads",
+        "Move the assistant to the next-smaller model tier, which has lower per-token prices for the same prompts",
+        "Route the non-interactive work it does (nightly digests, backfills) through the Batches API",
+        "Cut `max_tokens` in half on every route so no response can run long"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "Effort affects how thoroughly the model works, not just token spend. Lowering it is a capability trade-off that needs an eval to confirm quality holds.",
+        "Correct. Caching changes what you pay for repeated prefixes, not what the model can do. It is a cost reduction that does not trade away quality.",
+        "Changing model tier directly changes the capability ceiling. It is the last lever to try, and only against an eval.",
+        "Correct. Batch processing is half price for work nobody is waiting on, with the same model and the same outputs.",
+        "Responses that hit the cap get truncated, so quality drops while cost per solved task may not improve."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    },
+    {
+      "id": "MSO3-011",
+      "subskill": "MSO.3",
+      "difficulty": 3,
+      "stem": "In a long agent loop with caching configured, each request's usage shows `cache_creation_input_tokens` roughly equal to the full conversation size, while `cache_read_input_tokens` stays small. Turns append only new tool results and the latest assistant output. Which explanation is MOST consistent with this?",
+      "select": 1,
+      "options": [
+        "This is the expected healthy signature for a growing conversation",
+        "The 5-minute TTL is too short for this agent; switch every breakpoint to the 1-hour TTL so entries survive between turns",
+        "Content upstream of the breakpoint is rewritten on each request (e.g. an edited earlier message); diff consecutive payloads",
+        "`max_tokens` is set too high, which forces a re-write of the cache"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "In a healthy loop, reads cover the prior prefix and grow each turn, while writes are about one turn's worth. Writing the whole conversation each time is the unhealthy pattern.",
+        "Turns that run back-to-back keep a 5-minute entry warm. The problem is a prefix mismatch, not expiry.",
+        "Correct. Writes equal to the full conversation mean the prefix no longer matches what was cached. Common causes are history edits, nondeterministic serialisation, or a per-turn change high in the prompt. Comparing payloads (or cache diagnostics, where available) locates it.",
+        "`max_tokens` is not part of the cached prefix."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO3-012",
+      "subskill": "MSO.3",
+      "difficulty": 3,
+      "stem": "A document-review tool fires 40 parallel requests at once, all sharing the same 30,000-token cached prefix, and then each asks a different question. Usage shows all 40 requests paid `cache_creation_input_tokens` for the prefix, and none read from cache. Subsequent waves sometimes behave the same way. What change BEST fixes this?",
+      "select": 1,
+      "options": [
+        "Send one request first, wait until its response starts streaming, then fire the other 39 so they read the entry it wrote",
+        "Increase the number of breakpoints to 4 so each parallel request finds a different entry",
+        "Use the 1-hour TTL so the entry exists longer",
+        "Add a random request ID to the top of each prompt so the cache can tell the parallel requests apart and store each one"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. A cache entry becomes readable only once the first response begins streaming. Parallel requests sent at the same moment cannot read what the others are still writing, so warm the cache with one request, then fan out.",
+        "More breakpoints cannot create a readable entry before the first write completes.",
+        "TTL governs how long an entry lives after it is written. The issue is that no entry existed yet when the 40 requests started.",
+        "A unique ID in the prompt changes the prefix bytes and prevents any sharing at all."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO4-001",
+      "subskill": "MSO.4",
+      "difficulty": 1,
+      "stem": "An e-commerce platform must route every incoming support email to one of 12 queues. Volume is about 2 million emails per day, a 300 ms p50 latency budget, and accuracy is judged by a labelled eval set. Which model tier should the team evaluate FIRST?",
+      "select": 1,
+      "options": [
+        "The most capable (Opus-class) tier, because routing errors are costly",
+        "The fastest, lowest-cost (Haiku-class) tier, measured against the labelled eval set",
+        "Whichever model has the largest context window",
+        "A mix in which every email goes to all three tiers and the results are majority-voted"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Start from the requirements. High volume, a tight latency budget and a simple, checkable classification task are the profile of the smallest tier. Move up only if the eval shows it falls short.",
+        "Correct. Classification and routing at high volume and low latency is the use case the fastest, cheapest tier is built for. Confirm accuracy on the eval before choosing.",
+        "Emails are short. Context size is not the deciding factor here.",
+        "Calling three models per email triples cost and breaks the latency budget for a task one tier can likely handle."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+    },
+    {
+      "id": "MSO4-002",
+      "subskill": "MSO.4",
+      "difficulty": 3,
+      "stem": "A research product needs to read about 300 sources per question, extract findings, and write a synthesised report that needs deep judgment. The team wants high quality at a sustainable cost. Which architecture BEST fits, before any eval tuning?",
+      "select": 1,
+      "options": [
+        "A top-tier orchestrator for planning and synthesis, with per-source extraction delegated to cheaper, faster workers",
+        "Use the most capable tier for every call, including per-source extraction, so quality is maximised at every step of the pipeline",
+        "The cheapest tier for everything, retrying the synthesis until a reviewer approves it",
+        "A different model for each turn of a single conversation, chosen by a router per message"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. When there is a lot of independent work to hand off, matching the tier to each sub-task is effective: frontier judgment where it matters, cheap fast workers for the high-volume extraction. Validate it on evals.",
+        "This pays frontier prices for mechanical extraction that a cheaper tier probably handles well.",
+        "Synthesis needs the judgment of a stronger model, and retry loops on a weak synthesiser add cost and latency.",
+        "Switching models within one conversation breaks the prompt cache (caches are model-scoped) and can drop prior reasoning. Choose the model per route or conversation."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+    },
+    {
+      "id": "MSO4-003",
+      "subskill": "MSO.4",
+      "difficulty": 2,
+      "stem": "A fintech configured production with a model alias that the provider documents as a moving pointer to the newest snapshot. One morning, output formats subtly change and a downstream parser breaks, with no deploy on their side. How should model selection be configured going forward?",
+      "select": 1,
+      "options": [
+        "Keep the moving alias but add retries for parser failures",
+        "Pin a specific snapshot model ID in production config, and upgrade deliberately after running evals on the new snapshot",
+        "Resolve the model at startup by taking whichever model ID appears first in `GET /v1/models`, and cache it for the life of the process",
+        "Pin the SDK version, which also pins the model behaviour"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Retries cannot fix a systematic format change. The same input keeps producing the new format.",
+        "Correct. Production should run a fixed snapshot, so behaviour changes only when you choose to change it, with an eval gate. Note that every current Claude model ID, including the dateless ones, is itself a pinned snapshot. The aliases that resolved to dated IDs belong to older models.",
+        "Picking dynamically at startup makes the model choice even less predictable.",
+        "The SDK version does not determine which model the API serves. The model string does."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions"
+    },
+    {
+      "id": "MSO4-004",
+      "subskill": "MSO.4",
+      "difficulty": 1,
+      "stem": "A team switches the `model` string in the code below from an older generation to a recent one and starts getting 400 errors. Which TWO parts of the request are the likely cause on recent models? (Select TWO.)",
+      "code": {
+        "lang": "python",
+        "src": "resp = client.messages.create(\n    model=NEW_MODEL,\n    max_tokens=4096,\n    temperature=0.2, top_p=0.9,\n    thinking={\"type\": \"enabled\", \"budget_tokens\": 6000},\n    system=SYSTEM_PROMPT,\n    messages=history,\n)"
+      },
+      "select": 2,
+      "options": [
+        "`max_tokens=4096`",
+        "`temperature=0.2, top_p=0.9`",
+        "`system=SYSTEM_PROMPT` passed as a plain string rather than a list of blocks",
+        "`thinking={\"type\": \"enabled\", \"budget_tokens\": 6000}`",
+        "`messages=history`, where the history ends in a user turn after several assistant replies"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "`max_tokens` is still required and valid.",
+        "Correct. Recent models removed the sampling parameters, and sending them returns a 400. Delete them, and steer behaviour through the prompt and effort.",
+        "System prompts are unchanged.",
+        "Correct. Manual `budget_tokens` thinking was replaced by adaptive thinking. Use `thinking: {type: \"adaptive\"}` with `output_config.effort`.",
+        "A conversation ending in a user turn is the standard, valid shape."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+    },
+    {
+      "id": "MSO4-005",
+      "subskill": "MSO.4",
+      "difficulty": 2,
+      "stem": "Older extraction code forces JSON by ending `messages` with a prefilled assistant turn containing `{`. After moving to a recent model generation, every call returns a 400. What is the recommended replacement?",
+      "code": {
+        "lang": "typescript",
+        "src": "const resp = await client.messages.create({\n  model: NEW_MODEL,\n  max_tokens: 2048,\n  messages: [\n    { role: \"user\", content: `Extract fields from:\\n${doc}` },\n    { role: \"assistant\", content: \"{\" },\n  ],\n});"
+      },
+      "select": 1,
+      "options": [
+        "Put the `{` at the end of the user message instead",
+        "Keep the prefill, but add an `anthropic-beta` header to re-enable it",
+        "Use structured outputs (`output_config.format` with a JSON schema) so the response is guaranteed to match the schema",
+        "Keep asking for JSON in the prompt, then use a regex to pull the first `{...}` span out of the text and parse that"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A stray brace in the user turn does not constrain the output, and it may confuse the model.",
+        "No beta header restores last-turn prefill on these models.",
+        "Correct. Recent models reject a prefilled final assistant turn. Structured outputs replace the most common use of prefill (forcing JSON) with schema-guaranteed output. Assistant messages elsewhere in the history, for example in few-shot examples, are still fine.",
+        "Regex extraction is fragile defensive parsing. Structured outputs remove the need for it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+      "id": "MSO4-006",
+      "subskill": "MSO.4",
+      "difficulty": 2,
+      "stem": "A new model generation is released in the tier the team already uses. Product wants to switch immediately because of headline benchmark gains. Which THREE steps should happen before the switch reaches 100% of production traffic? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Run your own eval suite on representative traffic, comparing quality, cost per completed task and latency",
+        "Apply documented breaking changes (removed parameters, prefill, thinking config) behind a flag",
+        "Keep the old effort setting exactly as it was, so the comparison between the two models stays like-for-like",
+        "Re-check token counts and context budgets with `count_tokens`, because the tokenizer may differ between generations",
+        "Skip the evals, since a newer model in the same tier is strictly better on every workload and every metric",
+        "Switch all traffic at once, so the prompt caches warm up on the new model as quickly as possible"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ],
+      "explanations": [
+        "Correct. Public benchmarks do not predict results on your workload. Measure on your own evals before switching.",
+        "Correct. A model switch is a migration. Fix 400-causing changes before timing or evaluating the new model.",
+        "Effort defaults and calibration can differ between models, so carrying a setting over is not like-for-like. Re-sweep effort from the new model's defaults.",
+        "Correct. A different tokenizer changes costs and context headroom for the same text.",
+        "Newer is usually better on average, but behaviour, verbosity and cost per task can regress on specific workloads.",
+        "Cache warm-up is trivial next to the risk of an unvalidated switch. Roll out gradually."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+    },
+    {
+      "id": "MSO4-007",
+      "subskill": "MSO.4",
+      "difficulty": 3,
+      "stem": "To save money, a chat product uses a per-message router: easy messages go to a small tier, and hard ones to a large tier, within the same conversation. Costs went up, not down, and latency on hard turns worsened. What is the MOST likely cause, and the better design?",
+      "select": 1,
+      "options": [
+        "The router is too slow. Replace it with a regex.",
+        "Every model switch restarts the prompt cache (caches are model-scoped); pick the model per conversation and vary effort instead",
+        "Small-tier models cannot reuse the history the large tier already processed, so each one resends the whole history at a higher per-token price",
+        "The large tier gets rate-limited when used only intermittently, so the team should request a higher rate limit for it"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Router latency is small next to repeatedly re-processing the full history uncached.",
+        "Correct. Switching models mid-conversation means the new model re-processes the whole history at uncached prices (and may drop the earlier model's thinking). Per-turn effort changes are the in-conversation lever, and some models support them without breaking the cache.",
+        "Every tier receives the full history you send. The cost comes from losing the cache, not from a price difference on history.",
+        "Rate limits would show up as 429s, not as higher cost per conversation."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "MSO4-008",
+      "subskill": "MSO.4",
+      "difficulty": 3,
+      "stem": "A voice agent's users complain about dead air before the agent starts speaking. Responses are short (about 60 tokens). The agent uses a large-tier model with adaptive thinking at a high effort level, and the prompt is already cached. Which change is MOST likely to reduce the delay before the first word?",
+      "select": 1,
+      "options": [
+        "Enable fast mode on the current model, which raises generation speed so the first spoken word arrives sooner",
+        "Raise `max_tokens` so the model is not rushed",
+        "Switch to the Batches API to free up capacity",
+        "Evaluate a lower effort level and/or a faster tier, since up-front thinking and model speed dominate here"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Fast mode mainly raises output tokens per second, which helps long outputs, not time to first token. For a 60-token reply, the wait is before the first token.",
+        "`max_tokens` is only a cap. Raising it does not speed anything up.",
+        "Batch processing is asynchronous and makes responses slower, not faster.",
+        "Correct. With short outputs and a cached prompt, the wait is mostly thinking before the reply and the model's own speed. Lower effort means less thinking, and smaller tiers usually have shorter time to first token. Confirm quality on an eval."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "MSO4-009",
+      "subskill": "MSO.4",
+      "difficulty": 3,
+      "stem": "A contract-QA service runs on the most capable tier at its default effort and passes its eval with headroom. Leadership wants a 40% cost cut with minimal quality risk. What is the BEST order of experiments?",
+      "select": 1,
+      "options": [
+        "Switch straight to the smallest tier and add longer, more detailed prompt instructions to make up for any capability gap",
+        "Lower `max_tokens` by 40% to match the budget target",
+        "Sweep effort down on the current model first; only if quality holds, step down one tier and re-sweep from its default",
+        "Move all traffic to fast mode and negotiate a volume discount, since faster responses consume fewer resources"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Jumping several tiers is the riskiest change, and prompt patches rarely make up a large capability gap.",
+        "A tight cap truncates answers. It changes quality without reliably lowering cost per solved task.",
+        "Correct. Effort keeps the same model and is easy to reverse. Model changes come after, one step at a time, each validated on the eval.",
+        "Fast mode costs more per token. It buys speed, not savings."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    },
+    {
+      "id": "MSO4-010",
+      "subskill": "MSO.4",
+      "difficulty": 1,
+      "stem": "A team receives a deprecation notice for the pinned model snapshot its production service uses, with a published retirement date. What should the team expect, and what should it do?",
+      "select": 1,
+      "options": [
+        "After retirement, requests to that ID will fail, so schedule a migration with evals well before the date",
+        "Anthropic will silently route the pinned ID to the newest model in the same tier, so no action is needed at all",
+        "The snapshot keeps working indefinitely but at a higher price",
+        "Only the Batches API stops accepting the model; synchronous calls continue"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Retired models are no longer served. Plan the migration, including breaking changes, evals and a staged rollout, ahead of the date.",
+        "Pinned snapshot IDs are not silently remapped to other models. That is the point of pinning.",
+        "Retired models are removed, not repriced.",
+        "Retirement applies to the model, not to a single endpoint."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+      "id": "MSO4-011",
+      "subskill": "MSO.4",
+      "difficulty": 3,
+      "stem": "A coding-agent team is choosing between two configurations: (A) the mid tier at high effort, and (B) the most capable tier at low effort. B has roughly twice the per-token price. Which approach gives the MOST reliable decision?",
+      "select": 1,
+      "options": [
+        "Choose A, since a lower per-token price always means a lower cost per completed task, whatever the effort level",
+        "Choose B, because a larger model always finishes in fewer turns and therefore always costs less per task overall",
+        "Average both models' public benchmark scores and divide by per-token price, giving a quality-per-dollar ranking to pick from",
+        "Measure both on the team's eval: pass rate and cost per completed task, since price lists don't predict the ranking"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A stronger model at low effort can match or beat a cheaper model at high effort on cost per solved task. Price lists alone cannot tell you which will win.",
+        "Sometimes true, but not guaranteed. It depends on the workload.",
+        "Generic benchmarks do not reflect your tasks, tool loop or failure costs.",
+        "Correct. Only your own measurements of pass rate and cost per completed task can rank model x effort combinations. This is why each model-and-effort combination should be evaluated, not assumed."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    },
+    {
+      "id": "MSO4-012",
+      "subskill": "MSO.4",
+      "difficulty": 2,
+      "stem": "A healthcare scheduling assistant uses a mid tier. A Haiku-class trial cut cost by 70%, but the eval showed it missed multi-constraint scheduling rules 12% of the time, compared with 2% on the mid tier. A missed rule causes a staff-handled rebooking costing about $8. The mid tier costs $0.010 more per conversation than the small tier. Which choice is BEST on total cost?",
+      "select": 1,
+      "options": [
+        "Small tier, because model spend drops by 70% and that saving compounds across every conversation the assistant handles",
+        "Mid tier, but only because the latency is better",
+        "Small tier, with a retry on every response",
+        "Mid tier: the extra 10 points of failures add about $0.80 per conversation in rebookings, versus $0.010 saved"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This ignores downstream failure cost. Model spend is a small part of the total here.",
+        "The mid tier is not usually faster than the small tier. The reason to choose it is failure cost.",
+        "Blind retries pay twice and cannot detect missed rules without a checker, so the failure cost remains.",
+        "Correct. 0.10 x $8 = $0.80 of extra expected rebooking cost per conversation, against $0.010 of savings. Cost per completed task must include the cost of failures."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    }
+  ]
+}

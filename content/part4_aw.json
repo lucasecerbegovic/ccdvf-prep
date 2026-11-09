@@ -1,0 +1,1580 @@
+{
+  "lessons": [
+    {
+      "subskill": "AW.1",
+      "title": "Agent Construction with Claude",
+      "summary": "The exam tests whether you can pick the right way to build an agent (manual loop, Tool Runner, Claude Agent SDK, Managed Agents) from requirements about who runs the loop and who hosts tool execution, and whether you can configure the Agent SDK safely: permissions, hooks, subagents, sessions and limits.",
+      "keyPoints": [
+        "Two independent questions separate the four approaches: **who supplies the harness** (loop + context management) and **who supplies the deployment**. Manual loop = neither; Tool Runner and Agent SDK = harness only (you host); **Managed Agents** = harness **and** hosted per-session sandbox.",
+        "**Tool Runner** (`client.beta.messages.tool_runner` / `toolRunner`) lives in the regular Anthropic client SDK. It loops over tools *you* define (`@beta_tool`, `betaZodTool`), with per-turn hooks for approval gates, error interception, result modification, retries and `max_iterations`. No built-in tools, no filesystem, no sandbox.",
+        "**Claude Agent SDK** (`claude-agent-sdk` / `@anthropic-ai/claude-agent-sdk`) is Claude Code as a library: `query(prompt, options)` drives built-in tools (`Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, `Agent`), permissions, hooks, subagents, sessions, MCP and automatic compaction. It spawns a `claude` CLI subprocess that owns a shell, a working directory and session files on local disk.",
+        "**Managed Agents**: create a persisted, versioned **Agent** once (`model`, `system`, `tools`, `mcp_servers`, `skills`), then create a **Session** per run that references it. Updating an agent creates a new version; running sessions keep their pinned version. Extras: scheduled deployments, memory stores, multiagent threads, outcomes (rubric-graded iteration), vaults for credentials.",
+        "Managed Agents **self-hosted sandbox** (`config: {type: \"self_hosted\"}`): the agent loop stays on Anthropic's orchestration layer, tool execution (bash, files, code) moves to your infrastructure; your worker long-polls outbound, Anthropic never dials in. If the *loop itself* must run on your infra, use the Agent SDK or the Client SDK.",
+        "Agent SDK permission evaluation order: **hooks -> deny rules -> ask rules -> permission mode -> allow rules -> `canUseTool` callback**. A hook or deny rule can block even in `bypassPermissions`.",
+        "`allowed_tools` / `allowedTools` **auto-approves** listed tools; it does not hide the others. `disallowed_tools` with a bare tool name removes the tool. Modes: `default`, `dontAsk` (deny anything that would prompt: good for headless), `acceptEdits`, `plan`, `auto` (classifier), `bypassPermissions` (isolated environments only; `allowed_tools` does not constrain it).",
+        "SDK hooks are in-process callbacks registered under `options.hooks` with a `matcher` on the **tool name** (regex/pipe list such as `\"Write|Edit\"`). `PreToolUse` returns `permissionDecision` (`allow`/`deny`/`ask`) and optional `updatedInput`; `PostToolUse` can add context or replace output but cannot stop a tool that already ran. Hooks don't consume context.",
+        "Subagents: define them in `agents` with `AgentDefinition` (`description`, `prompt`, `tools`, `model`, ...); Claude invokes them through the `Agent` tool. A non-fork subagent starts with a fresh context: it gets only its own prompt plus the Agent tool's prompt string, and only its final message returns to the parent.",
+        "Sessions: read `session_id` from the result message; `resume` a specific ID, `continue` the most recent, `fork_session` / `forkSession` to branch history (not files). Transcripts live on local disk, so ephemeral containers need a `SessionStore` adapter or app-level state.",
+        "Bound every production run: `max_turns` / `maxTurns`, `max_budget_usd` / `maxBudgetUsd` (counts subagent spend). Check the `ResultMessage` `subtype` (`success`, `error_max_turns`, `error_max_budget_usd`, `error_during_execution`) before reading `result`.",
+        "Without a `systemPrompt`, or with a custom one, the Agent SDK does not use Claude Code's system prompt; use the `claude_code` preset (optionally with `append`) to get Claude Code's tool-use guidance. Project `CLAUDE.md` and `.claude/settings.json` load through `setting_sources` / `settingSources`."
+      ],
+      "traps": [
+        "Confusing the **Tool Runner** with the **Agent SDK**: the Tool Runner has no built-in file/bash tools and no permission system; the Agent SDK does. Neither hosts anything for you.",
+        "Assuming `allowed_tools=[\"Read\"]` makes an agent read-only. It only pre-approves `Read`; in `bypassPermissions` everything else is approved too. Use `disallowed_tools`, `dontAsk`, or a `PreToolUse` hook.",
+        "Putting security checks only in `canUseTool`: calls approved earlier (allow rule, `acceptEdits`, `bypassPermissions`) never reach it. Put must-run checks in a `PreToolUse` hook.",
+        "Expecting a `Write|Edit` matcher to protect a file: matchers match tool names, so a `Bash` redirect bypasses it. Match `Bash` too, add deny rules, or sandbox the filesystem.",
+        "Calling `agents.create()` on every request in Managed Agents. Create once, store the ID, update with `POST /v1/agents/{id}` (new version), and start sessions per run.",
+        "Believing the self-hosted sandbox option moves the agent loop on-prem. It moves tool execution only; tool inputs and outputs still flow to Anthropic so the model can see them."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "from claude_agent_sdk import query, ClaudeAgentOptions, HookMatcher\n\nasync def guard(input_data, tool_use_id, ctx):\n    cmd = input_data[\"tool_input\"].get(\"command\", \"\")\n    if \"rm -rf\" in cmd:\n        return {\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\",\n                \"permissionDecision\": \"deny\",\n                \"permissionDecisionReason\": \"Destructive command blocked\"}}\n    return {}\n\nopts = ClaudeAgentOptions(\n    allowed_tools=[\"Read\", \"Grep\", \"Glob\"], permission_mode=\"dontAsk\",\n    hooks={\"PreToolUse\": [HookMatcher(matcher=\"Bash\", hooks=[guard])]},\n    max_turns=30, max_budget_usd=5.0)\n# async for msg in query(prompt=\"Find the auth bug\", options=opts): ..."
+      },
+      "docs": [
+        {
+          "title": "Agent SDK overview",
+          "url": "https://code.claude.com/docs/en/agent-sdk/overview"
+        },
+        {
+          "title": "Agent SDK permissions",
+          "url": "https://code.claude.com/docs/en/agent-sdk/permissions"
+        },
+        {
+          "title": "Agent SDK hooks",
+          "url": "https://code.claude.com/docs/en/agent-sdk/hooks"
+        },
+        {
+          "title": "Agent SDK sessions",
+          "url": "https://code.claude.com/docs/en/agent-sdk/sessions"
+        },
+        {
+          "title": "Hosting the Agent SDK",
+          "url": "https://code.claude.com/docs/en/agent-sdk/hosting"
+        },
+        {
+          "title": "Tool Runner",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner"
+        },
+        {
+          "title": "Managed Agents overview",
+          "url": "https://platform.claude.com/docs/en/managed-agents/overview"
+        },
+        {
+          "title": "Managed Agents self-hosted sandboxes",
+          "url": "https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes"
+        }
+      ],
+      "drill": "Build the same tiny bug-finding agent twice: (1) with the Tool Runner and two custom tools (`read_file`, `run_tests`) you write yourself; (2) with the Agent SDK using `allowed_tools=[\"Read\",\"Grep\",\"Bash\"]`, `permission_mode=\"dontAsk\"`, a `PreToolUse` hook on `Bash` that denies `rm`, and `max_turns=15`. Run both, capture the SDK `session_id`, then `resume` it with a follow-up prompt and `fork_session=True` with another. Write down which features you had to build yourself in version (1)."
+    },
+    {
+      "subskill": "AW.2",
+      "title": "Agent Patterns & Frameworks",
+      "summary": "This sub-skill covers the mechanics inside any agent: the tool-use loop, how results flow back, how to keep context healthy over long runs (subagents, context editing, compaction, memory), and how third-party frameworks such as Strands Agents, LangGraph and Pydantic AI fit around Claude.",
+      "keyPoints": [
+        "The loop: call the Messages API with `tools` -> if `stop_reason == \"tool_use\"`, run each `tool_use` block -> append the **full** assistant `response.content`, then one user message with a `tool_result` per call (matching `tool_use_id`) -> repeat until `end_turn`. Handle `max_tokens`, `pause_turn` and `refusal` explicitly, and cap iterations.",
+        "Parallel tool use is on by default: return **all** `tool_result` blocks for a turn in a **single** user message. Splitting them across messages teaches Claude to stop making parallel calls.",
+        "Tool failures: return a `tool_result` with `is_error: true` and an actionable message so Claude can retry or adapt. Never drop the result (the next request is invalid) or crash the loop.",
+        "`pause_turn` (server-side tools hit their internal iteration limit): re-send the conversation with the assistant content as-is; don't add a \"Continue\" user message.",
+        "Promote an action from `bash` to a **dedicated tool** when you need to gate, render, audit or parallelize it: a `send_email` tool is easy to gate; `bash -c \"curl ...\"` is opaque to the harness.",
+        "**Subagents** isolate context: each runs in its own window and returns only a condensed result, so the orchestrator's context grows by a summary, not a transcript. Costs: extra tokens, latency and coordination; poor fit for tightly coupled steps that need shared state.",
+        "**Context editing** (`clear_tool_uses_20250919`, `clear_thinking_20251015`) clears stale tool results/thinking without summarizing. **Compaction** summarizes earlier context server-side near a threshold; you must append the full `response.content` (including the compaction block) each turn. **Memory** is for persistence **across** sessions.",
+        "The **memory tool** (`memory_20250818`) is client-side: Claude issues `view`/`create`/`str_replace`/`insert`/`delete`/`rename` on a `/memories` directory and *your* handler stores it. No built-in access control: use per-user directories, never store secrets.",
+        "In the Agent SDK, compaction is automatic (a `compact_boundary` system message marks it); durable rules belong in `CLAUDE.md` (re-injected every request), and a `PreCompact` hook can archive the full transcript first.",
+        "**Strands Agents** (AWS, open source): model-driven agent loop, `@tool` decorator, Amazon Bedrock is the default provider, Claude via Bedrock or the `AnthropicModel` provider (Anthropic API); multi-agent patterns include agents-as-tools, swarm, graph and workflow; MCP support; deploys to AgentCore, Lambda, containers.",
+        "**LangGraph**: low-level orchestration runtime; you build a graph of nodes and edges over shared state, mixing deterministic and LLM steps. Strengths: durable execution with checkpointing, human-in-the-loop interrupts, short- and long-term memory, streaming. Does not require LangChain; Claude usually comes in via `ChatAnthropic` (`langchain-anthropic`).",
+        "**Pydantic AI**: typed Python agent framework. `output_type` validates results against Pydantic models and asks the model to retry on validation failure; `deps_type` + `RunContext` inject dependencies into tools; `@agent.tool`; model chosen by string such as `anthropic:...`; OpenTelemetry/Logfire, durable execution, evals, and tool-approval support."
+      ],
+      "traps": [
+        "Appending only the assistant's text (not the full `content` list) to history: you lose `tool_use` blocks (next `tool_result` is orphaned -> 400) and compaction blocks.",
+        "Using compaction or context editing as \"memory\": both work **within** a session. Cross-session recall needs the memory tool, files, or a store.",
+        "Assuming more subagents always means better results: each adds tokens and latency, and subagents only know what you put in their prompt.",
+        "Treating a framework as a reason not to understand the prompts and tool calls underneath. Anthropic's guidance: start with the API, and if you use a framework, know what it sends.",
+        "Thinking LangGraph or Strands are Claude-specific or Anthropic-hosted. They are third-party, multi-provider frameworks you run yourself; Claude is one model provider among many.",
+        "Ending the loop on `stop_reason != \"tool_use\"` without checking `max_tokens`: a truncated answer gets reported as complete."
+      ],
+      "code": {
+        "lang": "typescript",
+        "src": "let msg = await client.messages.create({ model, max_tokens: 16000, tools, messages });\nfor (let i = 0; msg.stop_reason === \"tool_use\" && i < 25; i++) {\n  messages.push({ role: \"assistant\", content: msg.content }); // full content\n  const results = await Promise.all(\n    msg.content.filter((b) => b.type === \"tool_use\").map(async (b) => {\n      try { return { type: \"tool_result\", tool_use_id: b.id, content: await run(b) }; }\n      catch (e) { return { type: \"tool_result\", tool_use_id: b.id, is_error: true, content: String(e) }; }\n    }));\n  messages.push({ role: \"user\", content: results }); // one message, all results\n  msg = await client.messages.create({ model, max_tokens: 16000, tools, messages });\n}\nif (msg.stop_reason === \"max_tokens\") throw new Error(\"Truncated\");"
+      },
+      "docs": [
+        {
+          "title": "Tool use overview",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+        },
+        {
+          "title": "Parallel tool use",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use"
+        },
+        {
+          "title": "Memory tool",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool"
+        },
+        {
+          "title": "Context editing",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/context-editing"
+        },
+        {
+          "title": "Compaction",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/compaction"
+        },
+        {
+          "title": "Agent SDK subagents",
+          "url": "https://code.claude.com/docs/en/agent-sdk/subagents"
+        },
+        {
+          "title": "Strands Agents: Anthropic provider",
+          "url": "https://strandsagents.com/latest/documentation/docs/user-guide/concepts/model-providers/anthropic/"
+        },
+        {
+          "title": "LangGraph overview",
+          "url": "https://docs.langchain.com/oss/python/langgraph/overview"
+        },
+        {
+          "title": "Pydantic AI overview",
+          "url": "https://pydantic.dev/docs/ai/overview/"
+        }
+      ],
+      "drill": "Write a manual tool-use loop (no Tool Runner) with two tools, one of which randomly throws. Make it return `is_error` results, batch parallel results in one user message, cap iterations at 10 and handle `max_tokens`. Then add the memory tool with a per-user `/memories/<user_id>` directory and check that a fact saved in run 1 is recalled in a fresh run 2. Finally, sketch (on paper) the same agent as a LangGraph graph and as a Pydantic AI agent with an `output_type`, noting what each framework would take over."
+    },
+    {
+      "subskill": "AW.3",
+      "title": "Agent Architecture",
+      "summary": "This sub-skill is about choosing the simplest architecture that works: a single call, one of the five workflow patterns from \"Building effective agents\", or an autonomous agent, possibly with an orchestrator and workers. Expect scenarios that ask you to name the pattern, spot over-engineering, and weigh cost, latency and error recovery.",
+      "keyPoints": [
+        "**Workflows** run LLMs and tools through predefined code paths; **agents** let the LLM dynamically direct its own process and tool use. Start with the simplest solution (often one well-prompted call with retrieval and examples) and add complexity only when it measurably helps.",
+        "**Prompt chaining**: sequential calls, each consuming the previous output, with optional programmatic **gates** between steps. Trades latency for accuracy on tasks that split cleanly into fixed steps (outline -> check -> draft).",
+        "**Routing**: classify the input, then send it to a specialized prompt, tool set or model (e.g. refunds vs technical support; easy queries to Haiku, hard ones to Opus). Separation of concerns; the classifier can be an LLM or a traditional model.",
+        "**Parallelization**: **sectioning** splits a task into independent subtasks run at once (e.g. a guardrail screen running alongside the main response); **voting** runs the same task several times for diverse outputs or higher confidence (e.g. several vulnerability-review prompts).",
+        "**Orchestrator-workers**: a central LLM decides the subtasks at runtime, delegates them and synthesizes results. The key difference from parallelization is that the subtasks are **not predefined** (e.g. which files a change touches).",
+        "**Evaluator-optimizer**: one LLM generates, another critiques against clear criteria, in a loop. Use it only when evaluation criteria are clear and feedback measurably improves the output; always cap iterations.",
+        "Build an agent only if the task is complex and hard to specify in advance, valuable enough to justify cost and latency, within Claude's ability, and errors can be caught and recovered from (tests, review, rollback). If any answer is no, stay with a workflow.",
+        "Agents need ground truth from the environment at each step (tool results, test runs), human checkpoints for risky actions, and stopping conditions (max iterations, budget). Autonomy raises cost and the risk of compounding errors: test in sandboxes.",
+        "Supervisor/orchestrator hierarchies: workers get isolated contexts and only the brief you give them, so brief them with objective, scope boundaries, tools and output format; they return condensed results. Cap depth, concurrency and spend; use cheaper models for reading-heavy workers and a capable model for planning and synthesis.",
+        "Three principles from Anthropic: keep the design simple, make the agent's planning transparent, and invest in the agent-computer interface (clear tool docs, poka-yoke parameters such as requiring absolute paths)."
+      ],
+      "traps": [
+        "Calling any fan-out \"orchestrator-workers\". If the subtasks are fixed in code before the input arrives, it is parallelization (sectioning).",
+        "Reaching for a multi-agent supervisor when a routing workflow or a single call with retrieval meets the requirement. Over-engineering is the most common wrong answer.",
+        "Using evaluator-optimizer without explicit criteria: the loop oscillates and burns tokens. Add a rubric and an iteration cap, or drop the pattern.",
+        "Adding voter or checker agents to every answer of a high-volume Q&A flow \"for accuracy\": each pass multiplies cost. Prefer better context, higher effort and cheap deterministic checks.",
+        "Re-running an entire chain when one step fails. Validate at gates and retry the failing step with the error as feedback.",
+        "Assuming parallel workers share what they learn. Each worker sees only its brief, so overlapping or vague briefs produce duplicated and missed work."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "import asyncio\n\nasync def review(code: str):\n    # Parallelization (sectioning): independent checks run at once\n    sec, perf, style = await asyncio.gather(\n        ask(SECURITY_PROMPT, code), ask(PERF_PROMPT, code), ask(STYLE_PROMPT, code))\n    # Programmatic gate before the next chain step\n    if not all(r.ok for r in (sec, perf, style)):\n        raise ValueError(\"A reviewer returned malformed output\")\n    return await ask(SUMMARY_PROMPT, f\"{sec.text}\\n{perf.text}\\n{style.text}\")"
+      },
+      "docs": [
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        },
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        },
+        {
+          "title": "Effective context engineering for AI agents",
+          "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+        },
+        {
+          "title": "Agent SDK subagents (caps on depth, concurrency, spend)",
+          "url": "https://code.claude.com/docs/en/agent-sdk/subagents"
+        }
+      ],
+      "drill": "Take one business task (e.g. \"answer a customer email about an order\") and write five one-paragraph designs: single call, prompt chain with a gate, router, parallel sectioning, and orchestrator-workers. For each, estimate model calls per request and name the main failure mode. Pick the simplest one that meets a stated quality bar and justify it in two sentences, as you would on the exam."
+    }
+  ],
+  "questions": [
+    {
+      "id": "AW1-001",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A healthcare analytics company wants an agent that reads a repository, edits files and runs the test suite to fix failing builds. Compliance requires that the agent loop itself, the shell and all file contents run inside the company's own Kubernetes cluster, and the team does not want to write file, search or shell tools themselves. Which approach BEST meets the requirements?",
+      "select": 1,
+      "options": [
+        "A hand-written Messages API loop that declares the Anthropic-defined bash tool and lets Anthropic execute the commands",
+        "The Client SDK's Tool Runner, which provides file and shell tools out of the box and runs wherever you deploy it",
+        "The Claude Agent SDK, self-hosted on the cluster, using its built-in file, search and Bash tools",
+        "Managed Agents configured with a self-hosted sandbox environment, so that tool execution and file access happen inside the company's cluster"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The bash tool is client-side: your harness executes it. A manual loop also means building the harness and the file/search tools yourself, which the team wants to avoid.",
+        "The Tool Runner loops only over tools you define; it has no built-in file or shell tools, so the team would have to write them.",
+        "Correct. The Agent SDK supplies Claude Code's harness and built-in tools, and you host it, so the loop, shell and files stay on your infrastructure.",
+        "With a self-hosted sandbox only tool execution moves to your infrastructure; the agent loop still runs on Anthropic's orchestration layer, which violates the stated requirement."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/overview"
+    },
+    {
+      "id": "AW1-002",
+      "subskill": "AW.1",
+      "difficulty": 1,
+      "stem": "During design review, a tech lead says: \"We'll use the Tool Runner, which is basically the Claude Agent SDK, so we get file editing and permissions for free.\" Which statement CORRECTLY describes the Tool Runner?",
+      "select": 1,
+      "options": [
+        "It is a hosted service that runs your tools in an Anthropic-managed container for each session",
+        "It is a beta helper in the client SDK that loops over tools you define, with no built-in tools",
+        "It is the Python name for the Claude Agent SDK's `query()` function and includes the same built-in tools",
+        "It is a server-side tool you declare in the `tools` array, like web search, so Anthropic executes the loop and your functions"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "That describes Managed Agents. The Tool Runner runs in your own process; you host the compute.",
+        "Correct. `client.beta.messages.tool_runner` / `toolRunner` drives the loop over your own tool functions; it is not the Agent SDK and ships no file or shell tools.",
+        "The Agent SDK is a separate package (`claude-agent-sdk`); the Tool Runner is part of `anthropic` / `@anthropic-ai/sdk`.",
+        "Server tools run on Anthropic's side; the Tool Runner is a client-side SDK helper that calls your functions."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner"
+    },
+    {
+      "id": "AW1-003",
+      "subskill": "AW.1",
+      "difficulty": 1,
+      "stem": "A marketing team wants an agent that runs every night, pulls web analytics through an MCP server, writes a report in a sandbox and keeps its configuration versioned so prompt changes can be rolled back. They have no platform engineers and do not want to run schedulers, containers or loop code. Which option BEST fits?",
+      "select": 1,
+      "options": [
+        "Managed Agents, with a versioned agent and a scheduled deployment",
+        "Message Batches submitted nightly, since batch jobs are discounted and run asynchronously",
+        "The Claude Agent SDK packaged into a serverless function that a cloud scheduler triggers every night",
+        "The Tool Runner in a cron job on a small VM, with prompts stored in a Git repository"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Managed Agents hosts the loop and the per-session sandbox, stores versioned agent configs, and scheduled deployments fire sessions without a client-side scheduler.",
+        "Batches process independent single requests; they do not run multi-step tool-using agents with a sandbox and MCP.",
+        "Workable, but the team would own the container image, scheduler, session storage and config versioning, which is what they want to avoid.",
+        "This means hosting compute, writing MCP and sandbox handling, and running the scheduler yourselves."
+      ],
+      "ref": "https://platform.claude.com/docs/en/managed-agents/overview"
+    },
+    {
+      "id": "AW1-004",
+      "subskill": "AW.1",
+      "difficulty": 3,
+      "stem": "A bank is evaluating Managed Agents with `config: {type: \"self_hosted\"}` for its environment. The security team asks exactly what moves into the bank's network. Which description is ACCURATE?",
+      "select": 1,
+      "options": [
+        "The whole agent, including model inference and the agent loop, runs inside the bank's network; Anthropic receives only usage and billing metadata",
+        "The agent loop runs in the bank's worker and calls the Messages API, while Anthropic hosts the sandbox for file and shell tools",
+        "Tool execution runs in the bank's worker, which polls Anthropic outbound; the agent loop stays with Anthropic, and tool inputs and outputs still reach it so the model can see them",
+        "Anthropic opens an inbound connection into the bank's VPC to execute tools, so the bank must expose a public endpoint"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Inference and the loop stay with Anthropic. To run the loop on your own infrastructure you would use the Agent SDK or Client SDK.",
+        "This reverses the split: the sandbox is what moves to the bank; the loop stays with Anthropic.",
+        "Correct. Self-hosted sandboxes move tool execution only; connectivity is outbound-only long-polling, and results still flow to the control plane for the model.",
+        "The worker connects outbound to Anthropic's work queue; Anthropic never dials into the customer's network."
+      ],
+      "ref": "https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes"
+    },
+    {
+      "id": "AW1-005",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A developer wants a read-only code auditing agent and writes the configuration below. In testing, the agent edits a file and runs a shell command without any prompt. What is the MOST likely reason?",
+      "code": {
+        "lang": "python",
+        "src": "options = ClaudeAgentOptions(\n    allowed_tools=[\"Read\", \"Grep\", \"Glob\"],\n    permission_mode=\"bypassPermissions\",\n)\nasync for msg in query(prompt=\"Audit src/ for SQL injection\", options=options):\n    print(msg)"
+      },
+      "select": 1,
+      "options": [
+        "`allowed_tools` is ignored unless `setting_sources` includes \"project\"",
+        "Grep is implemented on top of Bash internally, so allowing Grep implicitly allows Bash and, through it, file writes",
+        "The prompt mentioned SQL injection, which makes the agent switch to `acceptEdits` mode automatically",
+        "`allowed_tools` only pre-approves listed tools, and `bypassPermissions` approves unlisted tools as well"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "`allowed_tools` is a programmatic option that applies regardless of setting sources.",
+        "Grep is a separate built-in tool; allowing it does not grant Bash.",
+        "Prompt content does not change the permission mode; the configured `bypassPermissions` mode is the cause.",
+        "Correct. To make the agent read-only, use `disallowed_tools` for write/exec tools, a non-bypass mode such as `dontAsk`, or a `PreToolUse` hook."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/permissions"
+    },
+    {
+      "id": "AW1-006",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A CI job runs an Agent SDK agent headlessly to summarize pull requests. Nobody is available to approve tool calls. The agent must be able to use Read, Glob and Grep, and any other call that would need approval must be refused immediately rather than waiting. Which configuration BEST meets this?",
+      "code": {
+        "lang": "typescript",
+        "src": "const options = {\n  allowedTools: [\"Read\", \"Glob\", \"Grep\"],\n  permissionMode: /* ??? */,\n};"
+      },
+      "select": 1,
+      "options": [
+        "`permissionMode: \"acceptEdits\"`, which approves only read operations in the working directory",
+        "`permissionMode: \"dontAsk\"`, so listed tools run and anything that would otherwise prompt is denied",
+        "`permissionMode: \"bypassPermissions\"`, because the allow list already restricts the agent to three tools",
+        "`permissionMode: \"plan\"`, since plan mode never executes any tool"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`acceptEdits` auto-approves file edits and filesystem commands, the opposite of what a read-only summarizer needs.",
+        "Correct. `dontAsk` converts every would-be prompt into a denial, which is the documented locked-down headless setup when paired with `allowedTools`.",
+        "`allowedTools` does not constrain `bypassPermissions`; Bash, Write and Edit would be approved too.",
+        "Plan mode is for exploring and planning; edits route to the approval callback and some calls still run, so it is not a hard deny policy for headless CI."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/permissions"
+    },
+    {
+      "id": "AW1-007",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "An internal agent built on the Agent SDK runs in `bypassPermissions` mode inside a disposable container. Security asks for a guarantee that the agent never writes to files under `/etc`, with the reason shown to the model so it can choose another approach. Where should the developer implement this check?",
+      "select": 1,
+      "options": [
+        "In a `PostToolUse` hook that reverts the file if the path starts with `/etc`",
+        "In a `PreToolUse` hook that returns `permissionDecision: \"deny\"` plus a `permissionDecisionReason` for the model",
+        "In the `canUseTool` callback, returning a denial message that explains the `/etc` restriction to the model",
+        "In the system prompt, with a firm instruction never to modify `/etc`"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`PostToolUse` fires after the tool ran; the write has already happened.",
+        "Correct. Hooks run before the permission mode is applied, a hook deny holds even in `bypassPermissions`, and the reason is passed back to Claude.",
+        "In `bypassPermissions` most calls are approved before `canUseTool` is consulted, so the check would be silently skipped.",
+        "Instructions steer behaviour but are not an enforcement guarantee; security requirements need a deterministic control."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/hooks"
+    },
+    {
+      "id": "AW1-008",
+      "subskill": "AW.1",
+      "difficulty": 3,
+      "stem": "A team registered the hook below to protect `.env` files. During a red-team exercise the agent still created `.env` by running `echo \"KEY=1\" > .env`. What is the MOST likely cause?",
+      "code": {
+        "lang": "typescript",
+        "src": "const protectEnv: HookCallback = async (input) => {\n  const p = (input as PreToolUseHookInput).tool_input as any;\n  if (p.file_path?.endsWith(\".env\")) {\n    return { hookSpecificOutput: { hookEventName: \"PreToolUse\",\n      permissionDecision: \"deny\", permissionDecisionReason: \"No .env\" } };\n  }\n  return {};\n};\nconst options = { hooks: { PreToolUse: [{ matcher: \"Write|Edit\", hooks: [protectEnv] }] } };"
+      },
+      "select": 1,
+      "options": [
+        "`permissionDecision: \"deny\"` is only honoured when `permissionMode` is `default`",
+        "The `Write|Edit` matcher is tested against the tool name, so the hook never ran for the Bash call",
+        "The hook must be registered under `PostToolUse` instead, because only then does it see the final, resolved file path that the tool wrote",
+        "Returning `{}` for other files caused the SDK to disable the hook after the first call"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A hook deny applies in every mode, including `bypassPermissions`.",
+        "Correct. Matchers match tool names only; a shell redirect goes through the Bash tool, which `Write|Edit` does not match.",
+        "`PostToolUse` runs after execution and cannot prevent the write; the problem is the matcher scope.",
+        "Returning `{}` simply allows that call; it does not unregister the hook."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/hooks"
+    },
+    {
+      "id": "AW1-009",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A developer is adding hooks to an Agent SDK application for auditing and safety. Which TWO statements about SDK hooks are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "A `PreToolUse` hook that returns a deny decision blocks the call even when the session is in `bypassPermissions` mode",
+        "A hook that returns an async output can still block the tool call once its background work finishes",
+        "A hook `matcher` such as `\"*.env\"` filters calls by the file path in the tool input",
+        "Hook callbacks run in the application's own process and do not consume the agent's context window",
+        "A `PostToolUse` hook can prevent a dangerous tool from executing by returning a deny decision"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Hooks are evaluated before the permission mode, and a hook deny holds in every mode.",
+        "Async outputs let the agent proceed immediately, so they cannot block, modify or inject context.",
+        "Matchers match the tool name (or event-specific field), not arguments; check `tool_input.file_path` inside the callback.",
+        "Correct. Hooks are callbacks in your process; they only affect context if they deliberately add context.",
+        "`PostToolUse` fires after the tool has run; blocking must happen in `PreToolUse`."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/hooks"
+    },
+    {
+      "id": "AW1-010",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A SaaS company runs an Agent SDK assistant in short-lived serverless containers. Each user message is handled by whichever container is free, and the code passes the stored `session_id` as `resume`. Users report that follow-ups often behave as if the agent has no memory of earlier turns. What should the team do FIRST?",
+      "select": 1,
+      "options": [
+        "Persist transcripts to shared storage, such as a `SessionStore` adapter, because session files are written to each container's local disk",
+        "Set `fork_session: true` on every request so each container gets its own copy of the session",
+        "Increase `max_turns` so that the full conversation fits in a single session",
+        "Switch to `continue: true`, which locates the right session by user rather than by ID and therefore works across containers"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Session transcripts are written to local disk by default; another host can only resume them if they are mirrored to shared storage (or the app passes needed state into a fresh session).",
+        "Forking still needs the original transcript to exist on that host; it does not solve missing files.",
+        "The turn limit is unrelated; the session exists, but its transcript is not on the container handling the request.",
+        "`continue` resumes the most recent session in the current directory on that machine; it has the same local-disk problem."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/sessions"
+    },
+    {
+      "id": "AW1-011",
+      "subskill": "AW.1",
+      "difficulty": 1,
+      "stem": "After an Agent SDK session has analyzed an authentication module, a developer wants to try an OAuth2 redesign in a separate conversation while keeping the original JWT-focused conversation untouched for later. Which option should they use?",
+      "select": 1,
+      "options": [
+        "Call `query()` with `continue_conversation=True`, which automatically creates a branch",
+        "Start a new `query()` and paste the original prompt, because sessions cannot be branched",
+        "Resume the original session ID with no extra options; the SDK automatically copies the history whenever the prompt changes topic",
+        "Resume the original session ID with `fork_session=True`"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "`continue` appends to the most recent session; it does not branch.",
+        "The SDK supports forking directly; a new query would also lose the analysis already performed.",
+        "Plain resume adds to the original session, modifying its history.",
+        "Correct. Forking branches the conversation history and leaves the original session unchanged. Note it does not branch file changes on disk."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/sessions"
+    },
+    {
+      "id": "AW1-012",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A nightly maintenance agent built with the TypeScript Agent SDK sometimes logs `undefined` as its final output. The relevant code is below. What is the BEST fix?",
+      "code": {
+        "lang": "typescript",
+        "src": "for await (const m of query({ prompt, options: { maxTurns: 8 } })) {\n  if (m.type === \"result\") {\n    await saveReport(m.result);   // sometimes undefined\n  }\n}"
+      },
+      "select": 1,
+      "options": [
+        "Wrap `saveReport` in a retry loop because the result is populated asynchronously after the message arrives",
+        "Branch on `m.subtype`: only `success` has `result`; handle `error_max_turns` and similar subtypes",
+        "Remove `maxTurns` so the agent can never stop early",
+        "Read the final answer from the last `system` message in the stream instead, since system messages always carry the completed output text"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The field is absent on error subtypes, not delayed; retrying will not populate it.",
+        "Correct. Error result subtypes carry cost, usage and `session_id` but no `result` field, so the code must branch on `subtype`.",
+        "Unbounded runs are risky in production; the correct move is to handle the limit, not delete it.",
+        "System messages carry lifecycle events such as `init` and `compact_boundary`, not the final answer."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/agent-loop"
+    },
+    {
+      "id": "AW1-013",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "In an Agent SDK app, the main agent discusses a failing test (`tests/test_billing.py::test_tax`) with the user for several turns, then delegates the fix to a custom `test-fixer` subagent. The subagent spends many turns searching for \"the failing test\" and fixes the wrong one. What is the MOST likely cause?",
+      "select": 1,
+      "options": [
+        "Non-fork subagents start fresh: they see only their own prompt and the Agent tool's prompt string",
+        "The parent's `max_turns` limit was reached during the discussion, so the subagent received only a truncated copy of the parent transcript",
+        "Subagents cannot read files outside the directory in which they are defined",
+        "The subagent's `model` defaulted to a smaller model that cannot read pytest output"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Anything the subagent needs, such as the test ID and error, must be included in the delegation prompt (and the parent's instructions can require that).",
+        "Subagents never receive the parent transcript at all, truncated or otherwise.",
+        "Subagents use the session's working directory and whatever tools they are granted; there is no per-definition directory restriction.",
+        "Model choice affects quality, but the symptom (not knowing which test) points to missing context, not capability."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+    },
+    {
+      "id": "AW1-014",
+      "subskill": "AW.1",
+      "difficulty": 3,
+      "stem": "A team migrates an internal coding assistant from the Claude Code CLI to the Agent SDK, passing only `prompt`, `allowedTools` and `cwd`. The new agent uses tools less effectively and ignores conventions the CLI followed, such as how it reports progress and verifies edits. CLAUDE.md content does appear in its context. What change is MOST likely to restore the CLI-like behaviour?",
+      "select": 1,
+      "options": [
+        "Add \"project\" to the setting sources so that CLAUDE.md is loaded",
+        "Use the `claude_code` system prompt preset, adding custom text with `append`",
+        "Switch `permissionMode` to `acceptEdits`, which enables the CLI's verification behaviour",
+        "Raise `maxTurns`, because the CLI allows many more turns by default and the SDK agent stops before it gets to its verification steps"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The scenario says CLAUDE.md is already in context; the missing piece is the Claude Code system prompt.",
+        "Correct. With no system prompt, or a custom one, the SDK does not build Claude Code's system prompt; the preset restores its tool-use guidance.",
+        "Permission modes control approvals, not how the model reports or verifies its work.",
+        "The symptom is behavioural style from the first turn, not running out of turns."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+    },
+    {
+      "id": "AW1-015",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "A team uses the Tool Runner for a customer-service agent with a `send_refund_email` tool. Product now requires that a human approve every refund email before it is sent. One engineer proposes rewriting the whole agent as a manual loop to add the approval step. What is the BEST response?",
+      "select": 1,
+      "options": [
+        "Migrate to the Agent SDK, since only the Agent SDK supports human-in-the-loop approvals",
+        "Keep the Tool Runner and gate the call, in the tool function or before the runner executes it",
+        "Rewrite as a manual loop, because the Tool Runner always executes tool functions as soon as Claude requests them and cannot be interrupted",
+        "Set `tool_choice` to `none` for refund turns so Claude describes the email and a human sends it manually"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The Agent SDK has approvals too, but switching frameworks is far more work than the requirement needs.",
+        "Correct. The Tool Runner yields each assistant message before tools run and supports approval gates; dropping to a manual loop is unnecessary.",
+        "The runner executes tools only if you do not intervene; approval gates are a supported pattern.",
+        "This removes the tool from use rather than gating it, and requires detecting \"refund turns\" in advance."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner"
+    },
+    {
+      "id": "AW1-016",
+      "subskill": "AW.1",
+      "difficulty": 1,
+      "stem": "A web service starts a Managed Agents session for each incoming request using the code below. After a week the Console shows thousands of nearly identical agents, and request latency is higher than expected. What should the developer change?",
+      "code": {
+        "lang": "python",
+        "src": "def handle(req):\n    agent = client.beta.agents.create(\n        name=\"triage\", model=MODEL, system=SYSTEM, tools=TOOLS)\n    session = client.beta.sessions.create(\n        agent=agent.id, environment_id=ENV_ID)\n    return run(session, req.text)"
+      },
+      "select": 1,
+      "options": [
+        "Archive each agent at the end of the request to keep the Console clean",
+        "Pass `model`, `system` and `tools` directly to `sessions.create()` and stop creating agents",
+        "Cache the agent object in process memory for the lifetime of each worker process, re-creating it whenever a worker starts or the code is redeployed",
+        "Create the agent once, store its ID, and only create sessions per request; update the agent to change it"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Archiving is permanent and still pays the create latency on every request; it treats the symptom.",
+        "Those are agent fields; sessions reference a pre-created agent.",
+        "Better than per-request, but every deploy or new worker still creates agents. Persist the ID in config or secrets instead.",
+        "Correct. The mandatory flow is Agent (once) -> Session (every run); creating agents in the hot path accumulates orphaned agents and adds latency."
+      ],
+      "ref": "https://platform.claude.com/docs/en/managed-agents/overview"
+    },
+    {
+      "id": "AW1-017",
+      "subskill": "AW.1",
+      "difficulty": 3,
+      "stem": "An operations team updates a Managed Agents agent's system prompt to fix a bad escalation rule. New sessions behave correctly, but several long-running sessions started yesterday still apply the old rule. What explains this, and what is the appropriate action?",
+      "select": 1,
+      "options": [
+        "Sessions pin the agent version they started with; start new sessions to get the fix",
+        "Agent updates only take effect after the old agent is archived",
+        "The update failed silently for those sessions because their containers cached the old prompt at startup; restarting the containers will apply it",
+        "System prompt edits require creating a brand-new agent; updates only change metadata such as the name"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Versioning lets running sessions continue unaffected while new sessions use the latest version.",
+        "Archiving is permanent and unnecessary; updates create versions immediately.",
+        "Pinning is by design, not a cache bug; restarting containers does not change the pinned version.",
+        "`POST /v1/agents/{id}` updates configuration and bumps the version; creating new agents is the anti-pattern."
+      ],
+      "ref": "https://platform.claude.com/docs/en/managed-agents/overview"
+    },
+    {
+      "id": "AW1-018",
+      "subskill": "AW.1",
+      "difficulty": 2,
+      "stem": "An architect is comparing the Client SDK's Tool Runner with the Claude Agent SDK for a new internal agent. Which THREE capabilities does the Agent SDK provide out of the box that the Tool Runner does NOT? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Sessions persisted to disk that can be resumed or forked later",
+        "Built-in tools for reading, editing and searching files and running shell commands",
+        "Calling Claude through the Messages API with your API credentials",
+        "Anthropic-managed hosting of the agent loop and a per-session sandbox",
+        "Executing Python or TypeScript functions you define as tools",
+        "Permission modes plus declarative allow and deny rules for tool calls"
+      ],
+      "answer": [
+        0,
+        1,
+        5
+      ],
+      "explanations": [
+        "Correct. The Agent SDK writes session transcripts and supports `resume` and `fork_session`.",
+        "Correct. The Agent SDK ships Read, Edit, Write, Glob, Grep, Bash and more; the Tool Runner has none.",
+        "Both ultimately call the Claude API; this is not a differentiator.",
+        "Neither provides hosting; that is what Managed Agents adds.",
+        "Both support custom tools; the Tool Runner exists precisely for this.",
+        "Correct. `permission_mode`, `allowed_tools` and `disallowed_tools` are Agent SDK features."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/overview"
+    },
+    {
+      "id": "AW1-019",
+      "subskill": "AW.1",
+      "difficulty": 1,
+      "stem": "A Managed Agents agent uses the prebuilt agent toolset. A new compliance rule says a human must approve every bash command the agent runs, while file reads and edits may continue automatically. What is the BEST way to implement this?",
+      "select": 1,
+      "options": [
+        "Register a `PreToolUse` hook in the agent configuration that intercepts and denies bash calls until a human has reviewed the command",
+        "Disable the bash tool and ask the agent to describe commands for a human to run",
+        "Add a system prompt rule telling the agent to ask the user before every bash command",
+        "Set bash's `permission_policy` to `always_ask` and answer with tool confirmations"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "`PreToolUse` callback hooks are an Agent SDK feature, and denying bash outright is not the same as approval.",
+        "This removes the capability instead of gating it, and slows every task.",
+        "A prompt instruction is not an enforced approval gate.",
+        "Correct. Per-tool permission policies on server-executed tools pause the session until your client sends `user.tool_confirmation`."
+      ],
+      "ref": "https://platform.claude.com/docs/en/managed-agents/overview"
+    },
+    {
+      "id": "AW1-020",
+      "subskill": "AW.1",
+      "difficulty": 3,
+      "stem": "A platform team hosts one long-running container that serves Agent SDK sessions for many customer tenants. A customer reports seeing another tenant's coding conventions in the agent's answers. Which TWO changes are MOST appropriate to isolate tenants? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Run every tenant in `bypassPermissions` mode so permission prompts cannot reveal other tenants' files",
+        "Use a single shared session and fork it per tenant so histories stay separate",
+        "Lower `max_turns` so sessions end before they read other tenants' files",
+        "Set setting sources to an empty list (and isolate config directories) so user and project settings and CLAUDE.md files are not loaded from shared locations",
+        "Pass a distinct per-tenant `cwd` on every `query()` call so each tenant has its own working directory"
+      ],
+      "answer": [
+        3,
+        4
+      ],
+      "explanations": [
+        "This widens access rather than isolating it.",
+        "A fork copies the shared history into each tenant, which is the opposite of isolation.",
+        "Turn limits bound run length; they are not an isolation mechanism.",
+        "Correct. Default settings loading reads CLAUDE.md and settings from the filesystem, which leaks across tenants in a shared container.",
+        "Correct. The project tier of memory and working-directory artifacts come from `cwd`; sharing it leaks context."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/hosting"
+    },
+    {
+      "id": "AW2-001",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A developer's hand-written agent loop fails on the second iteration with a 400 error saying a `tool_result` block has no corresponding `tool_use` block. Based on the code below, what is the fix?",
+      "code": {
+        "lang": "python",
+        "src": "resp = client.messages.create(model=MODEL, max_tokens=16000,\n                              tools=TOOLS, messages=messages)\nwhile resp.stop_reason == \"tool_use\":\n    text = \"\".join(b.text for b in resp.content if b.type == \"text\")\n    messages.append({\"role\": \"assistant\", \"content\": text})\n    results = [run_tool(b) for b in resp.content if b.type == \"tool_use\"]\n    messages.append({\"role\": \"user\", \"content\": results})\n    resp = client.messages.create(model=MODEL, max_tokens=16000,\n                                  tools=TOOLS, messages=messages)"
+      },
+      "select": 1,
+      "options": [
+        "Send the tool results as a `system` message instead of a `user` message",
+        "Set `tool_choice` to `none` on follow-up requests so the API stops validating tool blocks",
+        "Strip the `tool_use_id` field from each result so the API falls back to matching tool results to tool calls by their position",
+        "Append `resp.content` (the full block list, including `tool_use` blocks) as the assistant turn"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Tool results belong in a user message; changing the role does not restore the missing `tool_use` blocks.",
+        "That prevents further tool calls and does not fix the malformed history.",
+        "`tool_use_id` is required to pair results with calls; removing it makes things worse.",
+        "Correct. Each `tool_result` must answer a `tool_use` block in the preceding assistant turn; keeping only the text drops those blocks."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "id": "AW2-002",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "An agent used to call three independent lookup tools in one turn, but after a harness refactor it now calls them one per turn, tripling latency. The new result-handling code is below. What is the MOST likely cause?",
+      "code": {
+        "lang": "typescript",
+        "src": "for (const block of msg.content) {\n  if (block.type !== \"tool_use\") continue;\n  const out = await runTool(block);\n  messages.push({ role: \"user\", content: [\n    { type: \"tool_result\", tool_use_id: block.id, content: out },\n  ]});\n}"
+      },
+      "select": 1,
+      "options": [
+        "Parallel tool use must be re-enabled explicitly with a beta header whenever the harness changes how it builds messages",
+        "Each result goes in its own user message instead of one message for the turn",
+        "The tool results are missing `is_error: false`, so Claude assumes the tools are unreliable",
+        "`await` inside the loop disables parallel tool use on the API side"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Parallel tool use is on by default; no header is needed.",
+        "Correct. Splitting parallel results across messages trains Claude away from making parallel calls; return them all in one message (and run them concurrently).",
+        "`is_error` defaults to false and only needs to be set for failures.",
+        "Sequential execution in your code is slower but does not change what the API allows; the message structure is the problem."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use"
+    },
+    {
+      "id": "AW2-003",
+      "subskill": "AW.2",
+      "difficulty": 1,
+      "stem": "An agent's `get_invoice` tool sometimes times out when calling a billing service. The team wants Claude to recover gracefully, for example by retrying or asking the user. Which TWO practices should the harness follow? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Raise an exception that ends the loop, so the user can retry the whole conversation",
+        "Keep the `tool_use_id` of the failed call on the error result, in the same user message as the other results for that turn",
+        "Return a `tool_result` for that call with `is_error: true` and a short, actionable error message",
+        "Omit the failed call from the results so Claude does not see confusing error text",
+        "Send the error later as a plain text user message after the other tool results"
+      ],
+      "answer": [
+        1,
+        2
+      ],
+      "explanations": [
+        "Crashing the loop throws away progress when Claude could have recovered.",
+        "Correct. Every `tool_use` must get a matching result, including failures, in the single results message.",
+        "Correct. An error result lets Claude reason about the failure and choose a recovery path.",
+        "A missing result makes the next request invalid and hides the failure from Claude.",
+        "Errors should be structured `tool_result` blocks tied to the call, not free text in a separate message."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "id": "AW2-004",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A team's agent loop treats every response whose `stop_reason` is not `tool_use` as finished. Users occasionally receive answers that end mid-sentence, and the logs show nothing abnormal. Which change BEST addresses the root cause?",
+      "code": {
+        "lang": "typescript",
+        "src": "while (true) {\n  const msg = await client.messages.create({ model, max_tokens: 1024, tools, messages });\n  if (msg.stop_reason !== \"tool_use\") return finalText(msg);\n  messages.push({ role: \"assistant\", content: msg.content });\n  messages.push({ role: \"user\", content: await runTools(msg) });\n}"
+      },
+      "select": 1,
+      "options": [
+        "Switch to streaming so the client receives the rest of the answer as it is generated",
+        "Retry the identical request whenever the final text does not end with sentence punctuation, up to three times, and return the longest version",
+        "Branch on every stop reason; treat `max_tokens` as truncation, and cap iterations",
+        "Add \"Always finish your sentences\" to the system prompt"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Streaming changes delivery, not the `max_tokens` cap that truncates the output.",
+        "Retrying the same request with the same cap usually truncates again, and text heuristics are unreliable.",
+        "Correct. Only `end_turn` means a complete answer; `max_tokens` with a low limit explains mid-sentence endings.",
+        "The model cannot exceed `max_tokens`; this does not address the cap."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+      "id": "AW2-005",
+      "subskill": "AW.2",
+      "difficulty": 3,
+      "stem": "A research agent uses the server-side web search tool. Some responses come back with `stop_reason: \"pause_turn\"`. The developer handles this by appending the assistant content plus a new user message saying \"Continue.\" and calling the API again. Results are inconsistent, sometimes restarting the search. What should they do instead?",
+      "select": 1,
+      "options": [
+        "Disable web search and implement a client-side search tool instead, because server-side tool turns cannot be resumed once paused",
+        "Raise `max_tokens`, because `pause_turn` means the output limit was reached",
+        "Treat `pause_turn` as completion and return the text gathered so far",
+        "Re-send with the paused assistant content last and no added user message"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Server tool turns are resumable by design; re-implementing search is unnecessary.",
+        "That is `max_tokens`; `pause_turn` comes from the server-side tool loop's iteration limit.",
+        "The turn is incomplete; returning early drops the rest of the work.",
+        "Correct. For `pause_turn`, send the assistant content back as-is; adding a user turn changes what the model is responding to."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+      "id": "AW2-006",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A due-diligence agent must review 40 contracts and produce a risk memo. Running everything in one loop, the agent's context fills with full contract text and tool output, and by contract 25 its analysis gets noticeably worse. Which design change BEST addresses this?",
+      "select": 1,
+      "options": [
+        "Raise `max_tokens` so the model has more room to reason over the contracts",
+        "Ask the agent in the prompt to \"forget\" contracts once it has finished them",
+        "Delegate contracts to subagents that return short structured risk summaries",
+        "Move all 40 contracts into a cached system prompt so they are cheaper to resend on each turn and always available to the agent"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "`max_tokens` limits output length; it does not relieve input context pressure.",
+        "The model cannot remove content from its own context; the harness must manage what is sent.",
+        "Correct. Subagents isolate the reading-heavy work so the coordinator's context grows by summaries, not transcripts.",
+        "Caching reduces cost, not context load; the window still fills with all the text."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+    },
+    {
+      "id": "AW2-007",
+      "subskill": "AW.2",
+      "difficulty": 1,
+      "stem": "A coaching app's agent should remember each user's goals and preferences between sessions that can be weeks apart, and each session starts a new conversation. Which mechanism is designed for this?",
+      "select": 1,
+      "options": [
+        "The memory tool, backed by storage your application persists",
+        "Server-side compaction, which keeps a running summary of each user's earlier conversations available to later ones",
+        "Context editing with `clear_tool_uses`, which retains the important parts of past sessions",
+        "Prompt caching with a long TTL, so last week's conversation stays in Claude's memory"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Memory is for cross-session persistence; your handler stores the files.",
+        "Compaction summarizes within one conversation; a new conversation does not inherit it.",
+        "Context editing removes stale content within a conversation; it stores nothing across sessions.",
+        "Caching reuses identical prompt prefixes to save cost; it is not a memory of past sessions."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool"
+    },
+    {
+      "id": "AW2-008",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A team is planning context management for an agent that runs for hours with many tool calls. Which TWO statements are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Context editing clears old tool results (and optionally thinking blocks) from what Claude sees, without summarizing the conversation",
+        "With server-side compaction, the client must append the full `response.content`, including the compaction block, to the history on each turn",
+        "Compaction summaries persist across separate sessions, so a new conversation starts with the previous summary",
+        "The memory tool is executed by Anthropic's servers, which store the files for you",
+        "Context editing works by asking Claude to write a summary block that replaces earlier turns"
+      ],
+      "answer": [
+        0,
+        1
+      ],
+      "explanations": [
+        "Correct. Strategies such as `clear_tool_uses_20250919` prune stale content rather than summarize it.",
+        "Correct. The compaction block replaces earlier history on the next request; keeping only text loses it.",
+        "Compaction operates within a conversation; cross-session state needs memory.",
+        "The memory tool is client-side: your harness implements the storage.",
+        "That describes compaction, not context editing."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/context-editing"
+    },
+    {
+      "id": "AW2-009",
+      "subskill": "AW.2",
+      "difficulty": 3,
+      "stem": "A team enabled server-side compaction for a long-running support agent. Token usage still climbs until requests fail near the context limit, even though compaction blocks appear in responses. Their history-update code is below. What is the MOST likely cause?",
+      "code": {
+        "lang": "python",
+        "src": "resp = client.beta.messages.create(\n    model=MODEL, max_tokens=16000, betas=[COMPACT_BETA],\n    context_management={\"edits\": [{\"type\": \"compact_20260112\"}]},\n    messages=history)\nreply = \"\".join(b.text for b in resp.content if b.type == \"text\")\nhistory.append({\"role\": \"assistant\", \"content\": reply})"
+      },
+      "select": 1,
+      "options": [
+        "Only the text is appended, so the compaction block is dropped and the full history is resent; append `resp.content` instead",
+        "Compaction only applies to tool results, and this agent mostly produces text",
+        "Compaction must be combined with context editing to have any effect",
+        "The compaction trigger threshold is set too high, so compaction never actually runs"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. The API uses the returned compaction block to replace earlier context; dropping it silently loses the compaction state.",
+        "Compaction summarizes earlier context in general, not only tool results.",
+        "Compaction works on its own; the issue is how the history is stored.",
+        "The compaction blocks in responses show it is running."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/compaction"
+    },
+    {
+      "id": "AW2-010",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A log-investigation agent runs dozens of `grep` and `read_file` calls per session. Most of those results are irrelevant after a few turns, but the reasoning and decisions in the conversation must stay intact word for word. Which technique BEST reduces context usage?",
+      "select": 1,
+      "options": [
+        "A model with a larger context window",
+        "The memory tool, writing each tool result to a file",
+        "Context editing that clears older tool results",
+        "Server-side compaction, which summarizes the entire earlier conversation"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "That postpones the problem and raises cost; stale results still crowd the window.",
+        "Memory is for cross-session persistence; it does not by itself remove results already in context.",
+        "Correct. Clearing stale tool results prunes the bulk of the context without rewriting the conversation's reasoning.",
+        "Compaction would also summarize the reasoning the team wants kept verbatim."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/context-editing"
+    },
+    {
+      "id": "AW2-011",
+      "subskill": "AW.2",
+      "difficulty": 1,
+      "stem": "A multi-tenant SaaS product adds the memory tool using an SDK's reference memory backend that writes to a shared `/memories` directory. Before launch, what is the MOST important change?",
+      "select": 1,
+      "options": [
+        "Switch to server-side compaction, which is tenant-isolated by default",
+        "Mark the memory tool `strict: true` so Claude cannot read other users' files",
+        "Scope memory per user with authorization in the handler; never store secrets",
+        "Encrypt the memory directory at rest but keep a single shared directory, so Claude can learn useful patterns across all users"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Compaction does not provide cross-session memory, so it does not replace the feature.",
+        "`strict` validates tool input against the schema; it is not an authorization control.",
+        "Correct. Reference implementations have no access control; multi-user systems must isolate and authorize memory, and secrets must not be stored.",
+        "Encryption at rest does not stop one user's memories from being read into another user's session."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool"
+    },
+    {
+      "id": "AW2-012",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A fintech team is building a loan-processing assistant on Claude. They need explicit control over the flow (some steps deterministic, some LLM-driven), checkpoints so a run can resume after a crash or a multi-day pause, and points where a human can inspect and edit state before continuing. Which framework is designed around exactly these needs?",
+      "select": 1,
+      "options": [
+        "The Tool Runner, which persists conversation checkpoints to disk automatically",
+        "Message Batches, which can be paused and resumed by `custom_id`",
+        "LangGraph, with Claude plugged in as the chat model",
+        "Pydantic AI, whose central strength is validating model outputs against Pydantic models and retrying on failure"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The Tool Runner drives a tool loop in-process; it has no checkpointing or graph model.",
+        "Batches process independent requests asynchronously; they are not a stateful workflow engine.",
+        "Correct. Durable execution, checkpointing and interrupts are LangGraph's core features, and Claude plugs in as a chat model.",
+        "Pydantic AI has graphs and durable execution integrations, but its signature strength is typed outputs and dependency injection, not graph-level state control."
+      ],
+      "ref": "https://docs.langchain.com/oss/python/langgraph/overview"
+    },
+    {
+      "id": "AW2-013",
+      "subskill": "AW.2",
+      "difficulty": 1,
+      "stem": "A Python team building a Claude-powered extraction agent wants type-checked code, results validated against Pydantic models with the model automatically asked to retry when validation fails, and a clean way to inject a database connection into tools for testing. Which framework BEST matches these goals?",
+      "select": 1,
+      "options": [
+        "Pydantic AI, with `output_type`, `deps_type`/`RunContext` and `@agent.tool`",
+        "Strands Agents, because its `@tool` decorator retries the whole run whenever the final answer fails Pydantic validation",
+        "LangGraph, because its checkpointers validate every node's output against a schema",
+        "The Claude Agent SDK, since `allowed_tools` enforces Pydantic schemas on tool inputs"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. These are Pydantic AI's core design ideas, and it supports Anthropic models by model string.",
+        "Strands' `@tool` builds tool schemas from type hints and docstrings; validated typed outputs with retries and `RunContext` dependency injection are Pydantic AI's defining design.",
+        "Checkpointers persist state; LangGraph's focus is orchestration, not typed output validation with retries.",
+        "`allowed_tools` controls permissions, not schema validation."
+      ],
+      "ref": "https://pydantic.dev/docs/ai/overview/"
+    },
+    {
+      "id": "AW2-014",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "An AWS-centric company wants to standardize on Strands Agents for internal agents and deploy them to AWS services. A developer asks how Strands works with Claude. Which statement is ACCURATE?",
+      "select": 1,
+      "options": [
+        "Strands can reach Claude only through an MCP server that proxies the Messages API",
+        "Strands is Anthropic's own managed agent service on AWS, so adopting it replaces Managed Agents and the Agent SDK",
+        "Strands requires LangChain's `ChatAnthropic` class to talk to Claude",
+        "Bedrock is the default model provider, so Claude works through Bedrock, and the `AnthropicModel` provider calls the Claude API directly"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "MCP connects tools; models are configured through Strands' model providers.",
+        "Strands is an open source AWS toolkit that you run yourself, not an Anthropic service.",
+        "Strands has its own model providers and does not depend on LangChain.",
+        "Correct. Bedrock is the default provider; the Anthropic provider runs agents against Claude models directly."
+      ],
+      "ref": "https://strandsagents.com/latest/documentation/docs/user-guide/concepts/model-providers/anthropic/"
+    },
+    {
+      "id": "AW2-015",
+      "subskill": "AW.2",
+      "difficulty": 3,
+      "stem": "A tech lead is preparing a comparison of third-party agent frameworks for teams that build on Claude. Which TWO statements are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Using a framework removes the need to inspect the underlying prompts and responses, because the framework optimizes them",
+        "Strands Agents supports only Amazon Bedrock models, so the Anthropic API cannot be used directly",
+        "Pydantic AI is model-agnostic and selects models with provider-prefixed strings such as `anthropic:...`",
+        "LangGraph does not require LangChain, although many examples use LangChain integrations such as `ChatAnthropic`",
+        "LangGraph is a runtime hosted by Anthropic that executes Claude agents on Anthropic infrastructure"
+      ],
+      "answer": [
+        2,
+        3
+      ],
+      "explanations": [
+        "Anthropic warns that abstractions can obscure prompts and responses; developers should understand what the framework does underneath.",
+        "Strands lists an Anthropic provider alongside Bedrock and others.",
+        "Correct. Pydantic AI supports many providers, including Anthropic, via model strings.",
+        "Correct. LangGraph's docs state it can be used without LangChain.",
+        "LangGraph is a LangChain-ecosystem open source runtime that you run (or deploy via LangChain's own platform)."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW2-016",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A startup built its first Claude agent with a heavyweight framework. When the agent misbehaves, engineers cannot tell what prompt Claude received or why it chose a tool, and fixes take days. Following Anthropic's guidance in \"Building effective agents\", what should they do?",
+      "select": 1,
+      "options": [
+        "Expose the real prompts and tool calls, and consider writing the core loop directly on the API",
+        "Add a second agent that monitors the first agent's tool calls and writes a natural-language explanation of each decision",
+        "Switch to a more capable model so the framework's prompts work more reliably",
+        "Increase the number of examples in the framework's default prompt template"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Anthropic recommends starting with the API directly and, if using a framework, understanding the code underneath; opaque abstractions make debugging harder.",
+        "This adds complexity and another opaque layer instead of exposing what is sent.",
+        "A stronger model may hide symptoms but does not solve the visibility problem.",
+        "Without seeing the real prompts, tuning templates is guesswork."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW2-017",
+      "subskill": "AW.2",
+      "difficulty": 3,
+      "stem": "To speed up a small refactor (renaming a function and updating its four call sites in two files), a developer configures the main agent to spawn five subagents, one per edit. The job now takes longer, uses several times more tokens, and two subagents made conflicting edits to the same file. What is the BEST recommendation?",
+      "select": 1,
+      "options": [
+        "Do this coupled task in the main agent; save subagents for independent, context-heavy work",
+        "Keep the five subagents but also give each one Bash access so they can take file locks before editing shared files",
+        "Raise the concurrency limit so all subagents finish sooner",
+        "Pass the parent's full conversation transcript to each subagent so they coordinate"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Subagents add tokens and coordination cost and do not share state; small, interdependent edits are better done in one context.",
+        "This adds more machinery to a task that does not benefit from delegation.",
+        "More concurrency increases the risk of conflicting edits and does nothing for cost.",
+        "This erases the context-isolation benefit and still does not prevent concurrent conflicting writes."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+    },
+    {
+      "id": "AW2-018",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "A sales-ops agent currently performs every action through a general `bash` tool, including sending customer emails with `curl` to the mail API. The team now needs to require human approval before any email is sent and to log the recipient and subject. What is the BEST design change?",
+      "select": 1,
+      "options": [
+        "Add a system prompt rule telling Claude to ask for approval before sending email",
+        "Promote email sending to a dedicated `send_email` tool with typed recipient, subject and body arguments the harness can gate and log",
+        "Keep the bash tool and match `curl` commands to the mail API with a regular expression that triggers an approval prompt",
+        "Remove network access from the bash tool so emails cannot be sent at all"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Instructions are not an enforced approval gate.",
+        "Correct. A dedicated tool gives the harness an action-specific hook with structured arguments; an opaque bash command string is hard to gate reliably.",
+        "Fragile: the same action can be expressed many ways in shell, and recipient/subject are buried in an opaque string.",
+        "That blocks the required capability rather than gating it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "id": "AW2-019",
+      "subskill": "AW.2",
+      "difficulty": 2,
+      "stem": "An Agent SDK agent runs long sessions that trigger automatic compaction. After compaction, the agent sometimes forgets a rule stated in the initial prompt (\"never touch the migrations folder\"), and auditors want the complete pre-compaction transcript retained. Which TWO actions address these needs? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Have subagents return their full transcripts to the parent so nothing is ever summarized",
+        "Register a `PreCompact` hook that archives the full transcript before it is summarized",
+        "Add more MCP servers so the agent can look the rule up when needed",
+        "Set `max_turns` low enough that compaction never happens",
+        "Move persistent rules into CLAUDE.md, which is re-injected on every request, instead of relying on the initial prompt"
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "Subagents return only their final message, and pulling transcripts in would accelerate compaction.",
+        "Correct. `PreCompact` runs before compaction and is the documented place to archive transcripts.",
+        "Extra tool definitions consume more context and do not preserve the rule.",
+        "This caps the agent's work instead of managing context, and long tasks would fail.",
+        "Correct. Compaction summarizes older history, so early instructions may be lost; CLAUDE.md content is loaded each request."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/agent-loop"
+    },
+    {
+      "id": "AW3-001",
+      "subskill": "AW.3",
+      "difficulty": 1,
+      "stem": "A content team's pipeline asks Claude to write a product-launch outline, runs a code check that the outline covers five required sections, and only then asks Claude to write the full announcement from the approved outline. Which pattern from \"Building effective agents\" is this?",
+      "select": 1,
+      "options": [
+        "Prompt chaining, with a programmatic gate that checks the outline before the drafting step runs",
+        "Orchestrator-workers, because one call produces the plan the next call executes",
+        "Evaluator-optimizer, because the outline is checked before drafting",
+        "Routing, because the outline decides which prompt runs next"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Sequential LLM calls where each consumes the previous output, with a code check as the gate.",
+        "An orchestrator decides subtasks dynamically and delegates them to workers; this flow is fixed in code.",
+        "Evaluator-optimizer loops an LLM critic and generator; this is a single deterministic check on the way through.",
+        "Routing classifies an input and dispatches it to one of several specialized paths; here every input follows the same fixed sequence."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-002",
+      "subskill": "AW.3",
+      "difficulty": 1,
+      "stem": "A telecom support system first classifies each incoming message as billing, technical outage, or general question. Billing messages go to a prompt with refund tools, outages to a prompt with network-status tools, and simple general questions to a smaller, cheaper model. Which pattern is being used?",
+      "select": 1,
+      "options": [
+        "Prompt chaining, because classification happens before the answer is written",
+        "Parallelization (sectioning), because each category is handled by a separate prompt",
+        "Orchestrator-workers, because the classifier delegates to specialized workers",
+        "Routing: classify first, then dispatch to a specialized prompt, tool set or model"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Chaining sends every input through the same sequence; routing chooses among different downstream paths.",
+        "Sectioning runs independent subtasks of the same input at the same time; here each input takes exactly one path.",
+        "An orchestrator breaks one task into dynamic subtasks and synthesizes results; a classifier picking a single path is routing.",
+        "Correct. Classify, then send to a specialized follow-up path or model; this also enables cost savings by sending easy queries to smaller models."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-003",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "A security team runs the same pull request through three differently worded vulnerability-review prompts at the same time and flags the PR if any reviewer reports a high-severity issue. Which pattern is this, and what is its main benefit?",
+      "select": 1,
+      "options": [
+        "Routing; each prompt specializes in one class of vulnerability",
+        "Prompt chaining; each review builds on the previous review's findings",
+        "Parallelization (voting), for higher recall and confidence",
+        "Evaluator-optimizer; the reviewers critique the code and the developer revises it until all three pass"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "All three prompts look at the same task and the PR is not dispatched to only one of them.",
+        "The reviews are independent and simultaneous, not sequential.",
+        "Correct. Voting runs the same task several times for diverse outputs; aggregation rules (here, any-flag) trade false positives against misses.",
+        "No generator is revising the code in a feedback loop here."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-004",
+      "subskill": "AW.3",
+      "difficulty": 1,
+      "stem": "A consumer chat app must screen each user message for policy violations without adding latency to the reply. The team runs a guardrail classification call and the main response call at the same time and suppresses the reply if the guardrail flags the message. Which pattern does this implement?",
+      "select": 1,
+      "options": [
+        "Routing, since the guardrail decides whether the response is shown",
+        "Parallelization (voting): two calls vote on whether the reply is safe",
+        "Evaluator-optimizer: the guardrail evaluates and the main call optimizes",
+        "Parallelization (sectioning) of independent subtasks within one request"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "The guardrail is not choosing among specialized handlers; both calls always run.",
+        "Voting runs the same task multiple times; here the two calls do different jobs.",
+        "There is no feedback loop in which the response is revised based on the evaluation.",
+        "Correct. Anthropic gives exactly this guardrail-alongside-response example for sectioning."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-005",
+      "subskill": "AW.3",
+      "difficulty": 3,
+      "stem": "A developer-tools company builds a feature that applies a requested API change across a customer's codebase. The number and identity of the files that must change are unknown until the codebase is inspected, and the edits must be combined into one coherent pull request. Which pattern fits BEST?",
+      "select": 1,
+      "options": [
+        "Prompt chaining, with one step per file in alphabetical order",
+        "Orchestrator-workers: a central model inspects the code, decides which files need edits, delegates them and synthesizes one change",
+        "Parallelization (sectioning), splitting the repository into fixed directory chunks that are edited in parallel and then concatenated",
+        "Routing, sending each file to the most capable model for its language"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Chaining needs a fixed sequence known in advance; here the files are not known until inspection.",
+        "Correct. The defining feature is that subtasks are determined at runtime, as in Anthropic's multi-file coding example.",
+        "Fixed chunks are predefined subtasks; they ignore which files actually need changes and still require coherent synthesis.",
+        "Routing picks one path per input; it does not plan or synthesize a multi-file change."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-006",
+      "subskill": "AW.3",
+      "difficulty": 1,
+      "stem": "A publisher translates literary essays. Editors have a clear rubric (fidelity, tone, idiom), and in tests, a critique-then-revise cycle consistently improves the translation over one pass. Which pattern is MOST appropriate?",
+      "select": 1,
+      "options": [
+        "Parallelization (voting) across several translators, picking the longest output",
+        "Routing between a fast and a slow translation model",
+        "Evaluator-optimizer, with a capped number of critique-and-revise iterations",
+        "An autonomous agent with web search to look up idioms"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Voting selects among attempts but gives no feedback to improve one, and length is a poor proxy for quality.",
+        "Routing does not provide iterative critique and revision.",
+        "Correct. Clear criteria plus demonstrated gains from feedback are the conditions where evaluator-optimizer works; literary translation is Anthropic's own example.",
+        "Open-ended autonomy adds cost and unpredictability; the task has a clear iterative structure."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-007",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "An accounts-payable team processes 50,000 invoices per day. Each invoice needs the same steps: extract fields, validate totals against the purchase order, and flag mismatches. Auditors require predictable, explainable behaviour and stable cost per invoice. Which architecture is MOST appropriate?",
+      "select": 1,
+      "options": [
+        "An autonomous agent with file and database tools that decides for each invoice how to proceed",
+        "A multi-agent supervisor with separate extraction, validation and reporting agents",
+        "A workflow: structured-output extraction, then code-based validation and flagging, calling the model only where judgment is needed",
+        "An evaluator-optimizer loop that iterates on every invoice until a grader is satisfied"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Autonomy adds cost, latency and variance to a fully specified process, and makes audits harder.",
+        "Over-engineered for a fixed, known sequence; coordination overhead and cost rise with no benefit.",
+        "Correct. The steps are known in advance, so a predefined code path is cheaper, faster and more auditable than an agent.",
+        "Every invoice paying for multiple iterations breaks the cost goal; validation can be done in code."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-008",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "A product manager wants to replace a reliable rules-based process with an autonomous Claude agent. Which TWO conditions are strong reasons to stay with a workflow or a single call instead? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "The task can be fully specified in advance as a fixed sequence of steps",
+        "Each completed task is worth far more than the extra tokens and latency an agent uses",
+        "Mistakes cannot be caught or rolled back before they reach customers (no tests, review or undo)",
+        "The number of steps varies widely and cannot be predicted ahead of time",
+        "The environment returns clear ground-truth feedback, such as test results, after each step"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. If the path is known, a predefined workflow is simpler, cheaper and more predictable.",
+        "High value per task supports, rather than argues against, an agent.",
+        "Correct. Low recoverability of errors is a key reason not to grant autonomy.",
+        "Unpredictable step counts are what agents are good for.",
+        "Environmental feedback is what lets agents self-correct, so it favours an agent."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-009",
+      "subskill": "AW.3",
+      "difficulty": 3,
+      "stem": "A team plans a hierarchical multi-agent system (a supervisor, a retrieval agent and an answer agent) to answer employee questions about an 80-page HR handbook. No prototype or evaluation set exists yet. What should they do FIRST?",
+      "select": 1,
+      "options": [
+        "Prototype one well-prompted call with the relevant content, measure it on a small eval set, then add complexity",
+        "Start with an autonomous agent that can browse the intranet, since it can discover answers the handbook lacks",
+        "Fine-tune a model on the handbook so no retrieval or agents are needed",
+        "Build the full supervisor architecture now but use Haiku-tier models for every agent so that the cost of the extra calls stays low"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Anthropic's guidance is to find the simplest solution first; one call with retrieval and examples often suffices.",
+        "Adds scope, cost and risk without evidence that it is needed.",
+        "Costly and slow to iterate; it also skips the step of measuring a simple baseline.",
+        "This still commits to the most complex design before knowing whether it is needed."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-010",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "In an orchestrator-workers research system, the lead agent delegates with briefs like \"research the semiconductor shortage\". Logs show workers duplicating each other's searches, some drifting into unrelated topics, and the lead struggling to merge their free-form outputs. What is the MOST effective fix?",
+      "select": 1,
+      "options": [
+        "Let the workers read each other's full transcripts in real time so they can see what others have searched and avoid overlapping work",
+        "Replace the workers with a single agent that does all research sequentially",
+        "Give each worker a specific objective, scope boundaries, tool guidance and an output format",
+        "Add an evaluator agent that rejects duplicate findings after they are produced"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "This defeats context isolation, multiplies tokens, and still does not define who owns what.",
+        "This may avoid overlap but gives up parallelism and context isolation for broad research instead of fixing the briefs.",
+        "Correct. Workers see only their brief; vague delegation causes duplication and drift, and a fixed output format makes synthesis reliable.",
+        "This catches waste after paying for it rather than preventing it."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "AW3-011",
+      "subskill": "AW.3",
+      "difficulty": 3,
+      "stem": "A policy Q&A assistant answers one employee question at a time from a document set. To improve accuracy, the team added three voter agents that each re-answer every question and a fourth agent that picks the majority. Accuracy rose slightly, but cost per answer quadrupled and latency doubled. Which alternative BEST balances accuracy and cost?",
+      "select": 1,
+      "options": [
+        "Keep the voters but cache their system prompts and documents, so that the three extra calls per answer cost much less",
+        "Keep the voters but switch all four to the most capable model tier",
+        "Replace the voters with an evaluator-optimizer loop that revises every answer up to five times",
+        "One agent with good context, a self-check, higher effort, and a cheap code check on citations"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Caching trims input cost but the redundant generations, and the latency, remain.",
+        "This raises cost further while keeping the per-answer multiplication.",
+        "Still multiple model passes per answer, potentially costing even more.",
+        "Correct. For one-question-at-a-time Q&A, extra solver or voter passes multiply cost per answer; better context, effort and deterministic checks usually improve accuracy more cheaply."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-012",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "A five-step prompt chain generates regulatory filings. Step 3 (converting extracted data to a specific JSON schema) fails validation in about 5% of runs, and the current code restarts the whole chain on any error, wasting tokens and time. What is the BEST improvement?",
+      "select": 1,
+      "options": [
+        "Raise the temperature on step 3 so that retries produce different outputs",
+        "Add a code gate after step 3 that validates its output and retries only that step, feeding back the validation error, with a retry cap",
+        "Run the entire chain three times in parallel for every filing and keep whichever run finishes successfully first",
+        "Convert the chain into an autonomous agent that decides on its own how to recover"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Sampling changes do not make outputs schema-compliant; use structured outputs plus validation and a targeted retry instead.",
+        "Correct. Gates between chain steps catch errors early, and targeted retries with feedback avoid re-running successful steps.",
+        "Triples cost on every filing to address a 5% failure in one step.",
+        "Replacing a predictable workflow with an agent adds variance; the failure is localized to one step."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-013",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "A code-review service makes three independent model calls per pull request (security, performance, style), one after another, then a fourth call to summarize. End-to-end latency is 40 seconds and the target is under 20. Which TWO changes MOST directly reduce latency without lowering review quality on the hard checks? (Select TWO.)",
+      "code": {
+        "lang": "python",
+        "src": "sec = await ask(SECURITY, diff)\nperf = await ask(PERF, diff)\nstyle = await ask(STYLE, diff)\nreturn await ask(SUMMARY, sec + perf + style)"
+      },
+      "select": 2,
+      "options": [
+        "Chain the reviews so each one receives the previous reviewer's findings",
+        "Set every call to the maximum effort level",
+        "Run the three independent reviews concurrently (for example with `asyncio.gather`) before the summary call",
+        "Add an evaluator-optimizer loop to the summary step",
+        "Route the simple style check to a smaller, faster model while keeping the more capable model for security"
+      ],
+      "answer": [
+        2,
+        4
+      ],
+      "explanations": [
+        "Chaining is sequential by definition and keeps latency high.",
+        "Higher effort typically increases latency.",
+        "Correct. Sectioning independent subtasks means latency is set by the slowest call rather than the sum.",
+        "Extra iterations add latency.",
+        "Correct. Routing easy subtasks to a faster tier cuts latency while preserving quality where it matters."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-014",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "An autonomous data-cleanup agent occasionally loops for hours, repeatedly re-running the same failing query and running up a large bill. Which TWO safeguards BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "A spend or token budget for the run, enforced by the harness",
+        "Removing error details from tool results so the agent stops trying once a tool fails",
+        "Switching to a model with a larger context window so the loop has more room",
+        "A hard cap on iterations or turns, after which the run stops and reports partial progress",
+        "Raising the effort level so the agent thinks harder before each retry"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. A budget cap (such as `max_budget_usd` in the Agent SDK) bounds cost even when the agent keeps going.",
+        "Hiding errors removes the ground truth the agent needs to change strategy.",
+        "More context lets the loop run longer; it does not stop it.",
+        "Correct. Stopping conditions such as a maximum iteration count are a standard agent guardrail.",
+        "May help some cases but is not a safeguard and can increase cost per iteration."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/agent-loop"
+    },
+    {
+      "id": "AW3-015",
+      "subskill": "AW.3",
+      "difficulty": 3,
+      "stem": "A routing workflow sends support tickets to refund, technical or account handlers. About 8% of tickets are ambiguous (for example, a refund request caused by a technical fault) and get misrouted, and the refund handler then issues wrong refunds. What is the BEST improvement?",
+      "select": 1,
+      "options": [
+        "Replace routing with a fully autonomous agent that has every tool from all three handlers",
+        "Add an \"uncertain\" route to a general handler or human, and evaluate the router on labelled tickets",
+        "Add more few-shot refund examples to the refund handler's prompt",
+        "Remove the router and send every ticket to all three handlers in parallel, then merge their answers and actions into one response"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Loses the separation of concerns and gives one agent broad refund powers, increasing risk.",
+        "Correct. Routing works when categories are distinct; an explicit fallback path and a measured classifier handle the ambiguous cases safely.",
+        "This tunes the downstream handler, not the misclassification that sends tickets there.",
+        "Triples cost for every ticket to fix 8% of them and creates conflicting actions."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-016",
+      "subskill": "AW.3",
+      "difficulty": 1,
+      "stem": "According to Anthropic's \"Building effective agents\", what distinguishes an agent from a workflow?",
+      "select": 1,
+      "options": [
+        "An agent runs on Anthropic's infrastructure with a managed sandbox, while a workflow always runs on the customer's own servers",
+        "An agent uses tools, while a workflow cannot call tools",
+        "An agent always uses multiple models, while a workflow uses a single model",
+        "In an agent, the LLM dynamically directs its own process and tool use; in a workflow, LLMs and tools follow predefined code paths"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Hosting location is unrelated to the definition.",
+        "Workflows can call tools along predefined paths.",
+        "Model count is not the distinction; both can use one or many models.",
+        "Correct. This is Anthropic's definition."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-017",
+      "subskill": "AW.3",
+      "difficulty": 2,
+      "stem": "A team uses an evaluator-optimizer loop to polish marketing taglines. The evaluator prompt says only \"make it better\". Logs show the loop often runs to its 10-iteration cap, flip-flopping between two phrasings, and quality ratings do not improve after the first revision. What is the BEST action?",
+      "select": 1,
+      "options": [
+        "Give the evaluator explicit criteria and a pass threshold, keep a low cap, or drop the loop",
+        "Use the same prompt for generator and evaluator so they agree faster",
+        "Raise the iteration cap to 25 so the loop has time to converge",
+        "Run five evaluators in parallel each round and average their scores, so that a single noisy evaluator cannot stall the loop"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Evaluator-optimizer only works with clear criteria and measurable improvement from feedback.",
+        "Agreement is not quality; the evaluator still has no criteria.",
+        "Without criteria, more iterations just extend the oscillation.",
+        "Adds cost without fixing the underlying lack of criteria."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "AW3-018",
+      "subskill": "AW.3",
+      "difficulty": 3,
+      "stem": "An engineering org is designing an orchestrator-workers system that migrates logging calls across hundreds of repositories. Which THREE design choices are sound? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Have every worker receive the orchestrator's full transcript so they all share the same knowledge",
+        "Require the orchestrator to fix the full list of subtasks in code before inspecting any repository",
+        "Give each worker an isolated context and have it return a concise summary of what it changed and what it could not do",
+        "Let each worker spawn unlimited sub-workers to maximize parallelism",
+        "Use a cheaper, faster model for the reading-heavy per-repo workers and a more capable model for planning and synthesis",
+        "Cap concurrency, nesting depth and total spend for the run"
+      ],
+      "answer": [
+        2,
+        4,
+        5
+      ],
+      "explanations": [
+        "This removes the main benefit of isolation and multiplies token cost.",
+        "Predefining subtasks turns this into parallelization and loses the orchestrator's main advantage: deciding the work at runtime.",
+        "Correct. Isolation keeps the orchestrator's context small, and condensed reports make synthesis tractable.",
+        "Unbounded nesting is a classic runaway-cost failure mode.",
+        "Correct. Matching model tier to subtask difficulty is a standard cost lever in hierarchies.",
+        "Correct. Fan-out can grow quickly; limits such as maximum concurrent subagents, spawn depth and a budget bound cost and rate-limit pressure."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+    }
+  ]
+}

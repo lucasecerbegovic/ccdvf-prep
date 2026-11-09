@@ -1,0 +1,1857 @@
+{
+ "lessons": [
+  {
+   "subskill": "AI.2",
+   "title": "Software Engineering Foundations",
+   "summary": "The exam checks that you can wire Claude into normal production software without breaking basic engineering rules: HTTP semantics (status codes, retries, idempotency, pagination), solid JSON handling, bounded async concurrency against rate limits, and using Claude in git, CI and code review while humans keep control. Most questions describe a real failure (duplicate emails, a 429 storm, a CI job that never runs) and ask which fix goes to the root cause.",
+   "keyPoints": [
+    "**Idempotency**: `POST /v1/messages` is not idempotent. Retrying after a timeout can start a second billed generation. If **your** endpoint has side effects (it writes a row or sends an email), accept a client idempotency key and store the result under it before you add retries anywhere.",
+    "**Status codes**: 400 `invalid_request_error`, 401 authentication, 403 permission, 404 not found or model not available, 413 `request_too_large` (fix the request). 429 `rate_limit_error` is **your** quota: honor `retry-after`. 500 `api_error` and 529 `overloaded_error` are server-side: back off and retry.",
+    "**Retry only** 429, 5xx/529 and connection errors, with exponential backoff and jitter. Never retry a 400/401/403/404/413 unchanged, because the same request fails the same way.",
+    "The official SDKs **already retry** connection errors, 408, 409, 429 and >=500 with exponential backoff (2 retries by default). Tune `max_retries` and `timeout`. Don't wrap another retry loop around the SDK, because the attempts multiply.",
+    "**Pagination**: list endpoints (Models, Message Batches, Files) use cursors: `limit`, `after_id`/`before_id`, and responses with `has_more`/`first_id`/`last_id`. SDK list calls auto-paginate when you iterate (`for await` in TS, plain `for` in Python). A cursor stays correct when new items are inserted; an offset doesn't.",
+    "**JSON**: parse with a real parser and validate with a schema (Pydantic/Zod). A `tool_use` block's `input` arrives **already parsed** as an object. When you need a guaranteed shape, use structured outputs (`output_config` JSON schema) or `strict` tools instead of regex cleanup.",
+    "JSON numbers above 2^53 lose precision in JavaScript. Send large IDs as **strings** in tool schemas and results.",
+    "**Async**: use `AsyncAnthropic` (Python) or the promise-based TS client for I/O-bound fan-out. **Bound** concurrency with `asyncio.Semaphore` or `p-limit`, sized to whichever limit binds first (RPM, input TPM or output TPM). A bare `gather`/`Promise.all` over thousands of items causes a 429 storm.",
+    "Create the client **once** and reuse it so connections are pooled. Never call a sync client inside an `async def` handler, because it blocks the event loop.",
+    "For large jobs that aren't urgent (results within 24 h), the **Message Batches API** is asynchronous and costs 50% less. It usually beats hand-rolled concurrency.",
+    "**Claude Code GitHub Actions** (`anthropics/claude-code-action@v1`): quick setup is `/install-github-app`. With no `prompt` input it runs in interactive mode and answers `@claude`. With a `prompt` input it runs in automation mode, for example on every PR. CLI flags go in `claude_args` (`--max-turns`, `--model`, `--allowedTools`). Keep keys in GitHub Secrets, or use OIDC for Bedrock/Vertex/Foundry.",
+    "**Code review and refactoring**: the repo-root `CLAUDE.md` carries review criteria and conventions into CI runs. AI review adds to required human approval and tests but doesn't replace them. Before a refactor, have Claude write characterization tests, then change code in small commits on a branch or worktree."
+   ],
+   "traps": [
+    "Stacking your own 5-attempt retry on top of the SDK's default retries gives up to 15 HTTP calls per request (5 attempts x 3 SDK tries) during an outage, which makes the outage worse. Use one retry layer.",
+    "Reading 429 as an Anthropic outage, or 529 as a problem with your quota. A 429 means your rate limit: slow down. A 529 means server overload: back off and possibly route elsewhere.",
+    "Using an unbounded `Promise.all` or `asyncio.gather` and counting on SDK retries to soak up the 429s. Throttle before you send.",
+    "Calling `json.loads(block.input)` on a tool_use block. The input is already a dict, so this raises `TypeError`.",
+    "Passing `github_token: ${{ secrets.GITHUB_TOKEN }}` to the action. GitHub doesn't trigger workflows from commits pushed with that token, so CI never runs on Claude's commits.",
+    "Putting team conventions in `CLAUDE.local.md` or `~/.claude/CLAUDE.md`. Neither exists on the CI runner; only the committed repo `CLAUDE.md` does."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "import asyncio\nfrom anthropic import AsyncAnthropic\n\nclient = AsyncAnthropic(max_retries=4)  # one retry layer: the SDK's\nsem = asyncio.Semaphore(8)              # cap in-flight requests\n\nasync def summarize(doc: str) -> str:\n    async with sem:\n        msg = await client.messages.create(\n            model=MODEL_ID, max_tokens=512,\n            messages=[{\"role\": \"user\", \"content\": f\"Summarize:\\n{doc}\"}])\n        return next(b.text for b in msg.content if b.type == \"text\")\n\nasync def run(docs):\n    return await asyncio.gather(*(summarize(d) for d in docs), return_exceptions=True)"
+   },
+   "docs": [
+    {
+     "title": "API errors",
+     "url": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+     "title": "Rate limits",
+     "url": "https://platform.claude.com/docs/en/api/rate-limits"
+    },
+    {
+     "title": "Message Batches",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    },
+    {
+     "title": "Structured outputs",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+     "title": "Claude Code GitHub Actions",
+     "url": "https://code.claude.com/docs/en/github-actions"
+    },
+    {
+     "title": "Python SDK (async, retries, pagination)",
+     "url": "https://github.com/anthropics/anthropic-sdk-python"
+    }
+   ],
+   "drill": "Write an async script that summarizes 200 short texts, first with an unbounded `gather`/`Promise.all` and then with a semaphore of 5. Log every 429 and its `retry-after` value, and compare the wall-clock time of the two runs. Then iterate a `client.models.list()` call and confirm it pages automatically. Bonus: in a throwaway GitHub repo, run `/install-github-app`, comment `@claude add a README badge` on an issue, and read the workflow log."
+  },
+  {
+   "subskill": "AI.4",
+   "title": "Configuration Management",
+   "summary": "Here the exam tests whether you put each piece of configuration in the right place and scope: CLAUDE.md memory files, settings.json scopes and their precedence, pinned model versions versus floating aliases, prompt versioning with change control, and MCP and plugin dependencies. The usual pattern is a team, a personal and an org setting that conflict, and the question asks which one wins or where something belongs.",
+   "keyPoints": [
+    "**CLAUDE.md scopes**: managed policy (org-wide, deployed by IT), user `~/.claude/CLAUDE.md` (you, every project), project `./CLAUDE.md` or `./.claude/CLAUDE.md` (committed and shared with the team), local `./CLAUDE.local.md` (just you in this project; keep it out of git).",
+    "**Loading**: Claude Code loads the CLAUDE.md files in the working directory and every parent directory at launch and **concatenates** them; they don't override each other. CLAUDE.md files in **subdirectories** load on demand, once Claude reads or edits files there.",
+    "**Imports**: `@path/to/file`. A relative path resolves from the **importing file**, not the working directory. Imports inside code spans and code blocks are ignored. The first time a project imports something outside the repo, Claude Code asks for approval. Imports help you organize but **don't reduce** context cost.",
+    "**What belongs in CLAUDE.md**: build and test commands, conventions, architecture notes, 'always do X' rules, written specifically enough to verify. Aim for under ~200 lines. Move multi-step procedures to **skills** and area-specific rules to `.claude/rules/*.md` with `paths:` frontmatter.",
+    "CLAUDE.md is **context, not enforcement**. To guarantee a block, use a permission `deny` rule or a PreToolUse hook.",
+    "**settings.json scopes**: user `~/.claude/settings.json`, shared project `.claude/settings.json` (commit it), project local `.claude/settings.local.json` (personal; Claude Code keeps it out of git), and managed.",
+    "**Precedence, highest first**: managed > command line (`--settings`) > project local > shared project > user. Nothing in your own files overrides a managed key.",
+    "**Array settings** such as `permissions.allow` **merge** across scopes. Scalar keys take the highest-precedence value. `deny` rules beat `allow` rules. Run `/status` to see which settings sources loaded. Settings files are strict JSON, so comments and trailing commas are errors.",
+    "**Model pinning**: aliases such as Claude Code's `opus`/`sonnet` point to the recommended version and **change over time**. For reproducible CI and production, pin a full model ID (`--model`, the `model` setting, `ANTHROPIC_MODEL`) or remap an alias with `ANTHROPIC_DEFAULT_SONNET_MODEL`/`ANTHROPIC_DEFAULT_OPUS_MODEL`. Admins restrict choices with `availableModels`.",
+    "In API apps, keep the model ID in **one config value per environment** and change it through the same PR, eval and rollout process you use for code.",
+    "**Prompt versioning**: treat prompts as code. Keep them in version control with a version ID, log `prompt_version` and the model ID on every request, gate every change with a regression eval, and roll out gradually with a fast rollback.",
+    "**MCP scopes**: local (the default, stored in `~/.claude.json`), project (`.mcp.json`, committed, needs approval before use) and user. On a name clash, local beats project beats user, and the winning entry is used whole, not merged. `.mcp.json` expands `${VAR}` and `${VAR:-default}`, so secrets stay out of git.",
+    "**Plugins** come from marketplaces (`.claude-plugin/marketplace.json`). For a team rollout, commit `extraKnownMarketplaces` and `enabledPlugins` in `.claude/settings.json`. For reproducible installs, pin git-based plugin sources to a `ref` or `sha`. Check marketplaces and plugins with `claude plugin validate`."
+   ],
+   "traps": [
+    "Assuming user settings beat project settings. It's the other way round: local > project > user, and managed beats everything.",
+    "Expecting a line in CLAUDE.md like 'NEVER edit migrations/' to be enforced. Only permissions and hooks enforce anything.",
+    "Committing personal items (sandbox URLs, a preferred model) to the shared CLAUDE.md or settings.json. Use `CLAUDE.local.md` or `settings.local.json` instead.",
+    "Splitting a 900-line CLAUDE.md into `@imports` to save tokens. Imported files load in full anyway; use path-scoped rules or skills.",
+    "Running production or CI on a floating alias, then being surprised when behavior changes after a release.",
+    "Hard-coding credentials in a committed `.mcp.json` instead of using `${VAR}` expansion."
+   ],
+   "code": {
+    "lang": "json",
+    "src": "{\n  \"model\": \"claude-sonnet-4-6\",\n  \"env\": { \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"claude-sonnet-4-6\" },\n  \"permissions\": {\n    \"allow\": [\"Bash(npm run test *)\", \"Bash(npm run lint)\"],\n    \"deny\":  [\"Read(./.env)\", \"Read(./.env.*)\", \"Edit(./migrations/**)\"]\n  },\n  \"enabledPlugins\": { \"team-tools@acme-marketplace\": true }\n}"
+   },
+   "docs": [
+    {
+     "title": "Claude Code memory (CLAUDE.md)",
+     "url": "https://code.claude.com/docs/en/memory"
+    },
+    {
+     "title": "Settings files and precedence",
+     "url": "https://code.claude.com/docs/en/settings"
+    },
+    {
+     "title": "Model configuration (aliases, pinning)",
+     "url": "https://code.claude.com/docs/en/model-config"
+    },
+    {
+     "title": "MCP in Claude Code (scopes, .mcp.json)",
+     "url": "https://code.claude.com/docs/en/mcp"
+    },
+    {
+     "title": "Plugin marketplaces",
+     "url": "https://code.claude.com/docs/en/plugin-marketplaces"
+    }
+   ],
+   "drill": "In a scratch repo, set `model` (or any scalar key) to a different value in each of `~/.claude/settings.json`, `.claude/settings.json` and `.claude/settings.local.json`. Predict which value wins, then check with `/status` and the startup header. Add `permissions.allow` entries in two scopes and confirm both apply. Then write a CLAUDE.md that `@imports` `docs/conventions.md`, add a `.claude/rules/api.md` with `paths: [\"src/api/**\"]`, and use `/context` to watch when each one loads."
+  },
+  {
+   "subskill": "AI.5",
+   "title": "Understanding Requirements",
+   "summary": "This area tests whether you can turn a business request into measurable functional and non-functional requirements, then pick the simplest Claude architecture that meets them. Expect requirements such as latency, throughput, data residency, retention/ZDR, compliance and a cost ceiling, each mapped to a concrete design choice.",
+   "keyPoints": [
+    "**Functional** requirements say what the system does: inputs, outputs, integrations and tools, formats, business rules. **Non-functional** requirements say how well and under which limits: latency, throughput, availability, data residency, retention, compliance, cost and auditability.",
+    "Make vague goals measurable. 'Fast' becomes 'p95 time-to-first-token < 1 s'. 'Accurate' becomes '>= 95% on a 300-item labeled eval set'. 'Cheap' becomes '<= $X per month at Y requests per day'. Without numbers you can't evaluate or accept the system.",
+    "**Latency levers**: streaming (perceived latency is TTFT), a faster or smaller tier (Haiku-class), lower effort or no extended thinking, shorter outputs (`max_tokens`, concise format), prompt caching for long stable prefixes, and parallel independent calls.",
+    "**Throughput**: rate limits are measured in requests per minute plus input and output tokens per minute, per model. Plan capacity (limit increases, queues, backpressure) and load-test **before** launch. Retries don't add capacity.",
+    "**Real-time vs batch**: if a user is waiting, use the Messages API with streaming. If results can arrive within 24 h, the Message Batches API saves 50%.",
+    "**Cost model**: (input tokens x input rate + output tokens x output rate) x volume. The levers are routing to a cheaper tier, caching shared prefixes, batching, capping output and trimming context. Give each cost estimate with its assumptions and compare it to the ceiling.",
+    "**Data residency and cloud fit**: Claude is available through the Claude API and through cloud platforms (Amazon Bedrock, Google Cloud Vertex AI, Microsoft Foundry). Pick the platform and region that satisfy residency, existing cloud commitments and IAM. The Claude API also has inference-geography controls. A system-prompt instruction **never** satisfies a residency requirement.",
+    "**Zero Data Retention (ZDR)** is an arrangement at the organization level, and **not every feature is eligible**. Check that each feature you depend on is eligible before designing around it, and prefer stateless calls.",
+    "**Compliance and PII**: minimize and redact before sending, enforce redaction in code (DLP checks), use least-privilege tools, keep audit logs, and put a human in the loop for high-impact actions.",
+    "**Architecture choice**: start with the simplest option: one call, then a workflow (prompt chain or routing), and an agent **only** when the steps can't be predicted. Fixed, auditable processes favor workflows with programmatic gates.",
+    "When requirements conflict (best quality, lowest cost, sub-second latency), quantify the trade-offs with prototypes or evals and have stakeholders set priorities. Don't resolve it silently."
+   ],
+   "traps": [
+    "Treating a nightly or offline job as real-time. Batches cost half as much and remove rate-limit pressure on your interactive traffic.",
+    "Optimizing total latency when users complain the app feels slow. Streaming usually fixes how fast it feels.",
+    "Defaulting to the most capable model when the requirement is a cost ceiling or high-volume classification. Route by task.",
+    "Writing 'keep data in the EU' or 'don't retain data' in a prompt. A prompt can't control where processing happens or how long data is kept.",
+    "Assuming an org-level ZDR agreement covers every API feature.",
+    "Choosing an autonomous agent for a fixed, regulated process that needs the same steps in the same order every time."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "# Back-of-envelope check against a monthly cost ceiling.\n# Rates come from YOUR rate card (USD per million tokens).\ndef monthly_cost(req_per_month, in_tok, out_tok, in_rate, out_rate,\n                 cached_tok=0, cache_read_rate=0.0):\n    uncached = in_tok - cached_tok\n    per_req = (uncached * in_rate + cached_tok * cache_read_rate\n               + out_tok * out_rate) / 1_000_000\n    return per_req * req_per_month\n\nceiling = 3_000\ncost = monthly_cost(900_000, 2_000, 300, in_rate=1, out_rate=5,\n                    cached_tok=1_500, cache_read_rate=0.1)\nprint(f\"${cost:,.0f} vs ceiling ${ceiling:,}\")  # $1,935 vs ceiling $3,000"
+   },
+   "docs": [
+    {
+     "title": "Rate limits",
+     "url": "https://platform.claude.com/docs/en/api/rate-limits"
+    },
+    {
+     "title": "Pricing",
+     "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+     "title": "Reducing latency",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+     "title": "Message Batches",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    },
+    {
+     "title": "Building effective agents",
+     "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    }
+   ],
+   "drill": "Take this brief: 'Insurance claims team wants AI to triage 40k emails a day, flag fraud and draft replies; EU customers; legal says no data kept.' Write 5 functional and 6 non-functional requirements, each with a number. Map every non-functional requirement to a design choice (platform and region, real-time or batch, model tier, caching, redaction, human review). Estimate monthly cost with made-up rates and say which requirement would force a different architecture if it changed."
+  },
+  {
+   "subskill": "AI.6",
+   "title": "Systems Life Cycle",
+   "summary": "This area tests whether you run an LLM system like any other production service: evaluate before you ship, roll out in stages, monitor quality and cost as well as errors, and handle model deprecations as planned migrations. Typical questions describe a deprecation notice, a silent quality drop or a cost jump, and ask for the right first step.",
+   "keyPoints": [
+    "**Life cycle**: develop (prompt, tools, eval set), then evaluate offline (golden set, regression suite, rubric-based LLM judge with human spot checks), then a staged rollout (shadow or canary behind a flag), then monitor, then maintain (prompt and model updates, migrations).",
+    "**Every change is a deploy**: a new prompt, model ID, tool schema, effort level or `max_tokens` value. Version it, evaluate it, roll it out gradually and keep a one-step rollback.",
+    "**Deprecations**: Anthropic announces deprecations with retirement dates, and after retirement requests to that model **fail**. They aren't silently redirected. Inventory every place the model ID is used, start migrating early, and run regression evals on the successor.",
+    "**Regression evals before switching models**: run the same test set and compare task quality, format/schema compliance, refusal rate, latency, and **token usage and cost**. Different models can tokenize the same text differently and differ in how much they write.",
+    "**After a migration**, re-baseline the prompts. Shouty workarounds written for an older model ('CRITICAL: you MUST...') can make a newer, more instruction-following model overtrigger. Remove them and evaluate again.",
+    "**Per-request logging**: request ID (`request-id` header; `_request_id` in the SDKs), model, prompt version, `usage` (input, output and cache tokens), latency (TTFT and total), `stop_reason`, and the error status code. Don't log sensitive content by default.",
+    "**Watch the `stop_reason` mix**: a rise in `max_tokens` means outputs are being cut off, and a jump in `refusal` or tool errors is a signal too. Quality regressions still return HTTP 200, so a dashboard of error rates alone misses them.",
+    "**Online quality monitoring**: sample production traffic into rubric-based or LLM-judge scoring, tagged by prompt version, and feed failures back into the eval set.",
+    "**Usage and cost**: the Console usage and cost pages and the Admin API usage and cost reports give org-wide numbers. Alert on cost per day against budget, 429 and 5xx/529 rates, and p95 latency.",
+    "**Claude Code OpenTelemetry**: set `CLAUDE_CODE_ENABLE_TELEMETRY=1` plus `OTEL_METRICS_EXPORTER`/`OTEL_LOGS_EXPORTER` and the OTLP endpoint. Metrics include `claude_code.token.usage` and `claude_code.cost.usage`. Prompts are **redacted unless** `OTEL_LOG_USER_PROMPTS=1`. To enforce it org-wide, put these variables in the managed settings `env`; a repo's `.claude/settings.json` can't enable exporters.",
+    "Give support the `request_id` of a failing call. Never send API keys."
+   ],
+   "traps": [
+    "Swapping in a newer model ID because 'newer is better', without a regression eval and a staged rollout.",
+    "Waiting for the retirement date in the belief that traffic will be routed to a successor automatically.",
+    "Monitoring only HTTP success rates. Truncation, refusals and quality drift all come back as 200.",
+    "Comparing models on price per token alone and ignoring changes in token counts and output length.",
+    "Turning on full prompt and response logging to a third-party backend by default, which leaks PII.",
+    "A big-bang rollout with no feature flag, no control group and no rollback path."
+   ],
+   "code": {
+    "lang": "typescript",
+    "src": "const t0 = Date.now();\nconst msg = await client.messages.create({ model: MODEL_ID, max_tokens: 1024, messages });\nlogger.info({\n  request_id: msg._request_id,\n  model: msg.model,\n  prompt_version: PROMPT_VERSION,\n  stop_reason: msg.stop_reason,\n  input_tokens: msg.usage.input_tokens,\n  output_tokens: msg.usage.output_tokens,\n  cache_read_tokens: msg.usage.cache_read_input_tokens,\n  latency_ms: Date.now() - t0,\n});\nif (msg.stop_reason === \"max_tokens\") metrics.increment(\"llm.truncated\");"
+   },
+   "docs": [
+    {
+     "title": "Model deprecations",
+     "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+     "title": "Models overview",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    },
+    {
+     "title": "Develop tests / evals",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+     "title": "Usage and Cost API",
+     "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"
+    },
+    {
+     "title": "Claude Code monitoring (OpenTelemetry)",
+     "url": "https://code.claude.com/docs/en/monitoring-usage"
+    }
+   ],
+   "drill": "Build a 30-item golden set for a small extraction task. Score it on two Claude model IDs and record accuracy, schema-valid rate, average input/output tokens and p95 latency in a table. Write a one-paragraph go/no-go with a canary plan (percentage, metrics, rollback trigger). Then run Claude Code with `CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_METRICS_EXPORTER=console` and find `claude_code.token.usage` in the output."
+  }
+ ],
+ "questions": [
+  {
+   "id": "AI2-001",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A support platform exposes `POST /tickets/{id}/summarize`. The handler calls Claude, saves the summary and emails it to the customer. The mobile client times out after 30 s and retries automatically, and customers now sometimes get two different summary emails for the same ticket. Which change BEST fixes the root cause?",
+   "select": 1,
+   "options": [
+    "Raise the mobile client's timeout to 120 s so the request usually finishes before the client gives up and retries.",
+    "Require an idempotency key per request, store the outcome under it, and return the stored result on repeats.",
+    "Change the route from POST to PUT, because PUT is defined as idempotent in HTTP and clients may safely retry it.",
+    "Set the Anthropic SDK's `max_retries` to 0 so a single ticket can never trigger more than one Claude generation."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "This makes duplicates less frequent but doesn't prevent them. Any slow request or dropped connection still produces a second email.",
+    "Correct. Idempotency keys make a non-idempotent POST safe to retry: a duplicate request returns the first result instead of repeating the side effects.",
+    "Renaming the method changes nothing about what the handler does. It would still generate and email a new summary on every call.",
+    "The duplicates come from the client retrying your endpoint, not from SDK retries. Turning off SDK retries also makes transient 429/5xx errors more likely to fail."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "AI2-002",
+   "subskill": "AI.2",
+   "difficulty": 1,
+   "stem": "Your nightly job calls the Messages API and records these failures. Which TWO should be retried automatically with exponential backoff? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "529 `overloaded_error`",
+    "400 `invalid_request_error`",
+    "429 `rate_limit_error`",
+    "401 `authentication_error`",
+    "413 `request_too_large`"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Retryable. The API is temporarily overloaded, so backing off and retrying is the documented fix.",
+    "Not retryable. The request itself is malformed, and the same request fails the same way.",
+    "Retryable. You've exceeded a rate limit; wait for `retry-after` and back off.",
+    "Not retryable. The API key is missing or invalid; fix the credential.",
+    "Not retryable. The payload is over the size limit, so make it smaller or split it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "AI2-003",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A data team's backfill script suddenly fails with many HTTP 429 responses. Each response includes a `retry-after` header. Nothing has changed on Anthropic's status page. What should the developer do FIRST?",
+   "select": 1,
+   "options": [
+    "Retry each failed request immediately in a tight loop until it succeeds, because rate-limit windows reset every few seconds.",
+    "Lower `max_tokens` on every request so each call finishes sooner and frees capacity for the next request in the queue.",
+    "Honor `retry-after`, back off with jitter, and lower the script's concurrency to stay under your limits.",
+    "Treat it as an Anthropic incident, pause the backfill and open a support ticket, since a 429 shows the service is degraded."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Retrying immediately keeps you over the limit and produces even more 429s. Back off as `retry-after` says.",
+    "Output tokens are only one of the limits, and shorter calls don't fix a request rate that's too high. This also risks truncating outputs.",
+    "Correct. A 429 means your own request or token rate is over the limit. Back off as the header says and reduce how fast you send.",
+    "That describes a 529 or 5xx. A 429 is about your usage relative to your limits."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/rate-limits"
+  },
+  {
+   "id": "AI2-004",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "An app sends 40 scanned PDF contracts as base64 document blocks in a single Messages API request so Claude can compare them. The request fails immediately with HTTP 413 `request_too_large`. Which response BEST addresses the error?",
+   "select": 1,
+   "options": [
+    "Retry the same request with exponential backoff, since a 413 usually clears once the API has spare capacity again.",
+    "Send less per request: split the documents across several calls, or upload them once and reference file IDs.",
+    "Switch to a model with a larger context window, because 413 means the documents exceed the model's token limit.",
+    "Increase the SDK's request timeout to 10 minutes so the large upload has enough time to finish transferring."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A 413 isn't transient. The same oversized request fails every time.",
+    "Correct. A 413 means the request exceeds the size limit, so the fix is to send less per request.",
+    "A 413 is about the HTTP request size, not the model's context window, so changing models won't fix it.",
+    "A timeout would show up as a timeout error. A 413 means the server rejected the request because of its size."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "AI2-005",
+   "subskill": "AI.2",
+   "difficulty": 3,
+   "stem": "During a brief API overload, the service below sent far more requests to the Messages API than it received from users, and recovery took longer. What is the MOST likely cause, and the right fix?",
+   "code": {
+    "lang": "python",
+    "src": "from tenacity import retry, stop_after_attempt, wait_exponential\nfrom anthropic import Anthropic\n\nclient = Anthropic()  # SDK defaults\n\n@retry(stop=stop_after_attempt(5), wait=wait_exponential(min=1, max=30))\ndef classify(text: str):\n    return client.messages.create(model=MODEL_ID, max_tokens=50,\n        messages=[{\"role\": \"user\", \"content\": text}])"
+   },
+   "select": 1,
+   "options": [
+    "A sync `Anthropic()` client sends duplicate requests under load. Switching to `AsyncAnthropic` would stop the amplification.",
+    "`max_tokens=50` makes the API reject requests during overload. Raising it to 1024 would cut the retries.",
+    "`wait_exponential` with `max=30` is too short; raising the maximum wait to several minutes would eliminate the extra traffic during incidents.",
+    "Stacked retry layers: each of tenacity's 5 attempts includes the SDK's own retries. Keep one layer (e.g. tune `max_retries`)."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Sync and async clients retry the same way. The duplication comes from stacked retry layers.",
+    "`max_tokens` has nothing to do with retry behavior. Overload errors happen regardless of output size.",
+    "Longer waits spread the traffic out but don't reduce the multiplied number of attempts.",
+    "Correct. The SDK already retries 429/5xx with backoff (2 retries by default), so 5 outer attempts can mean up to 15 HTTP calls per user request, which piles load onto an overloaded service."
+   ],
+   "ref": "https://github.com/anthropics/anthropic-sdk-python"
+  },
+  {
+   "id": "AI2-006",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A nightly reconciliation job is supposed to process every Message Batch in the workspace. It logs success, but batches created earlier in the month are never reconciled. What is the BEST fix?",
+   "code": {
+    "lang": "typescript",
+    "src": "const page = await client.messages.batches.list({ limit: 20 });\nfor (const batch of page.data) {\n  await reconcile(batch);\n}\nconsole.log(\"reconciled all batches\");"
+   },
+   "select": 1,
+   "options": [
+    "Raise `limit` to 100000 so the API returns every batch in one response and no pagination is needed.",
+    "Add an `offset` parameter that increases by 20 on each loop iteration and stop when the API returns an empty `data` array.",
+    "Sort the list by `created_at` ascending so the oldest batches come back first and get reconciled.",
+    "Iterate with `for await (const batch of client.messages.batches.list({ limit: 20 }))` so the SDK follows every page."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Page sizes have a maximum, so a huge `limit` doesn't remove the need to paginate.",
+    "These endpoints use cursor pagination (`after_id`/`before_id`), not offsets. Offsets also skip or repeat items when new batches are created mid-scan.",
+    "Changing the order still returns just one page, so the job still misses most batches.",
+    "Correct. The code reads only the first page. SDK list results auto-paginate when you iterate them, following `has_more` and `after_id` for you."
+   ],
+   "ref": "https://github.com/anthropics/anthropic-sdk-typescript"
+  },
+  {
+   "id": "AI2-007",
+   "subskill": "AI.2",
+   "difficulty": 1,
+   "stem": "A team is choosing how a dashboard should page through a list of jobs that grows constantly while users scroll. Why is cursor pagination (`after_id`, `has_more`) generally preferred over offset pagination (`?offset=40&limit=20`) for this kind of list?",
+   "select": 1,
+   "options": [
+    "Offset pagination is unsupported by HTTP caches, so cursor pagination is mainly about CDN caching.",
+    "Cursors let the server return every remaining item in one response once `has_more` is true.",
+    "A cursor anchors on a specific item, so new inserts don't make the client skip or repeat items between pages.",
+    "Cursors are encrypted, so they stop clients from reading items they aren't authorized to see."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Caching isn't the reason. The issue is stability while the data changes.",
+    "`has_more` only says another page exists. You still request it.",
+    "Correct. With offsets, an insert shifts every later item and you get duplicates or gaps. A cursor continues after a known item.",
+    "A cursor is a position marker, not an access control. Authorization has to be enforced separately."
+   ],
+   "ref": "https://github.com/anthropics/anthropic-sdk-python"
+  },
+  {
+   "id": "AI2-008",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "An invoice-extraction service asks Claude to 'return JSON only'. About 3% of responses fail `JSON.parse` because they're wrapped in Markdown code fences or followed by a short explanation. The downstream system needs a fixed schema. Which approach BEST meets the requirement?",
+   "select": 1,
+   "options": [
+    "Add 'IMPORTANT: output ONLY raw JSON, no prose' in capitals at the start and end of the system prompt.",
+    "Set temperature to 0 so the model produces the same well-formed JSON on every request.",
+    "Use structured outputs with a JSON schema in `output_config`, then validate the parsed object with Zod before using it.",
+    "Strip code fences with a regex and cut the text at the last closing brace before calling `JSON.parse`."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Stronger wording may lower the failure rate, but it guarantees nothing. Constraining the output is the reliable fix.",
+    "Lower randomness doesn't guarantee format compliance, and some newer models reject non-default sampling parameters.",
+    "Correct. Structured outputs constrain the response to valid JSON matching your schema, and validation catches business-rule problems the schema can't express.",
+    "This fixes today's failure pattern but breaks on nested braces or new formats, and it still doesn't guarantee the schema."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "AI2-009",
+   "subskill": "AI.2",
+   "difficulty": 1,
+   "stem": "A developer adds the tool-handling code below. What happens the first time Claude returns a `tool_use` block?",
+   "code": {
+    "lang": "python",
+    "src": "for block in msg.content:\n    if block.type == \"tool_use\":\n        args = json.loads(block.input)\n        result = run_tool(block.name, **args)"
+   },
+   "select": 1,
+   "options": [
+    "It raises `TypeError`: `block.input` is already a dict. Drop `json.loads` and validate the dict instead.",
+    "It raises `KeyError`, because Claude puts tool arguments in `block.arguments` as a JSON string, not in `block.input`.",
+    "It works, because `block.input` is a JSON string that has to be decoded before use.",
+    "It works, but `args` is always empty until the tool definition sets `strict: true`."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The SDK gives you tool input as a parsed object, and `json.loads` only accepts str, bytes or bytearray.",
+    "Claude tool_use blocks carry their arguments in `input`. `arguments` is another vendor's field name.",
+    "In the Python SDK, tool input arrives already decoded as a dict.",
+    "`strict` controls schema conformance. It doesn't change whether `input` is parsed."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+  },
+  {
+   "id": "AI2-010",
+   "subskill": "AI.2",
+   "difficulty": 1,
+   "stem": "A FastAPI service defines `async def` endpoints that call `Anthropic().messages.create(...)` (the sync client). Under load, p95 latency for every endpoint, including the health check, climbs sharply. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Raise the SDK timeout so slow Claude calls aren't cut off and retried under load.",
+    "Run more Uvicorn worker processes so each process handles fewer concurrent requests.",
+    "Create one `AsyncAnthropic` client at startup and `await client.messages.create(...)` in the handlers.",
+    "Switch the endpoints to streaming so the first tokens reach users sooner."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Timeouts aren't the problem. Blocking the event loop is.",
+    "This adds capacity but leaves the cause in place: each worker's event loop still blocks on the sync calls.",
+    "Correct. A sync HTTP call inside `async def` blocks the event loop and stalls every request. The async client yields while waiting on I/O.",
+    "Streaming improves perceived latency for one response but doesn't stop sync calls from blocking the loop."
+   ],
+   "ref": "https://github.com/anthropics/anthropic-sdk-python"
+  },
+  {
+   "id": "AI2-011",
+   "subskill": "AI.2",
+   "difficulty": 3,
+   "stem": "You need to summarize 2,000 documents of about 8,000 input tokens each with one model. Your limits for that model are 1,000 requests per minute and 400,000 input tokens per minute. Prompt caching isn't in use. An unbounded `asyncio.gather` produced a wall of 429s. Which concurrency control BEST maximizes throughput without errors?",
+   "select": 1,
+   "options": [
+    "Process documents one at a time in a plain loop so the job can never exceed any rate limit, however long it takes to finish.",
+    "An `asyncio.Semaphore(1000)` sized to the requests-per-minute limit, since RPM is the limit the API enforces most strictly.",
+    "Keep the unbounded `gather` but raise the client's `max_retries` to 10 so the SDK's backoff absorbs every 429 automatically.",
+    "A token-aware limiter holding about 50 requests/minute (400k input TPM / 8k tokens), the binding limit here."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "This avoids 429s but leaves most of the allowed throughput unused, so it isn't the best answer.",
+    "The binding limit is input tokens, not requests. 1,000 requests of 8k tokens is 8M tokens per minute, about 20 times the 400k limit.",
+    "Retries don't add capacity. You keep hitting the limit and waste time in backoff.",
+    "Correct. Size throttling to whichever limit binds first. Here that's input tokens per minute, which allows roughly 50 of these requests per minute."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/rate-limits"
+  },
+  {
+   "id": "AI2-012",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "This code tags 5,000 archived support tickets for an analytics report due next week. It fails partway through with rate-limit errors. Which TWO changes are MOST appropriate? (Select TWO.)",
+   "code": {
+    "lang": "typescript",
+    "src": "const results = await Promise.all(\n  tickets.map((t) =>\n    client.messages.create({\n      model: MODEL_ID,\n      max_tokens: 300,\n      messages: [{ role: \"user\", content: prompt(t) }],\n    }),\n  ),\n);"
+   },
+   "select": 2,
+   "options": [
+    "Bound in-flight requests with a concurrency limiter such as `p-limit`, sized to the account's rate limits.",
+    "Wrap each `create` call in `setTimeout(..., 0)` so the requests are spread across event-loop ticks.",
+    "Create a new `Anthropic` client inside the `map` callback so each request gets its own connection pool.",
+    "Because results aren't needed in real time, submit the work through the Message Batches API.",
+    "Set `maxRetries: 0` on the client so failing requests are dropped quickly instead of blocking the run."
+   ],
+   "answer": [
+    0,
+    3
+   ],
+   "explanations": [
+    "Correct. `Promise.all` over 5,000 items starts all of them at once. A limiter keeps the in-flight count under your limits.",
+    "A zero-delay timeout only defers to the next tick. All 5,000 requests still fire almost at once.",
+    "More clients don't raise your rate limits, and you lose connection reuse.",
+    "Correct. Batches run asynchronously at 50% of the cost and suit large jobs that aren't urgent.",
+    "This throws away retryable work and leaves the report incomplete."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "AI2-013",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A retailer wants Claude to categorize 200,000 product reviews every night. Results only need to be ready within 24 hours, and the team has been asked to cut LLM spend. Which approach BEST meets the requirements?",
+   "select": 1,
+   "options": [
+    "Send each review with `AsyncAnthropic` at high concurrency and stream the responses into the database.",
+    "Submit the reviews through the Message Batches API and collect the results when the batch ends.",
+    "Put all 200,000 reviews into one large prompt so a single request categorizes them together.",
+    "Run a synchronous loop on a cheap model, processing one review at a time overnight."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "This works, but you pay full price and compete with interactive traffic for rate limits. Streaming doesn't help here.",
+    "Correct. Batches handle large asynchronous jobs at 50% of the standard price and normally finish within 24 hours.",
+    "That would exceed the context window, makes per-item results unreliable, and makes failures hard to isolate.",
+    "Sequential processing at 200k scale may not finish, and it misses the batch discount."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "AI2-014",
+   "subskill": "AI.2",
+   "difficulty": 1,
+   "stem": "In a long-running web service, where should the Anthropic SDK client normally be created?",
+   "select": 1,
+   "options": [
+    "Once at process startup, then reused by all handlers so HTTP connections are pooled.",
+    "Inside each request handler, so every request starts with a fresh, isolated client.",
+    "Once per signed-in user, cached in that user's session.",
+    "Once per outbound call, with a new HTTP connection pool configured for each call."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. SDK clients are designed to be long-lived and shared. Use `with_options()` for per-call overrides.",
+    "This throws away connection pooling and adds a connection setup to every request.",
+    "Clients aren't tied to users, and per-user clients waste resources without any isolation benefit.",
+    "Same problem as per-request clients: no connection reuse and extra latency."
+   ],
+   "ref": "https://github.com/anthropics/anthropic-sdk-python"
+  },
+  {
+   "id": "AI2-015",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A team on github.com wants developers to type `@claude fix the failing test` in PR comments and have Claude push a fix. One engineer has repo admin rights and Claude Code installed locally. What is the FASTEST correct setup?",
+   "select": 1,
+   "options": [
+    "Run `/install-github-app` in Claude Code; it installs the GitHub App, stores the secret and opens the workflow PR.",
+    "Paste the API key into `.github/workflows/claude.yml` as an `env:` value so the action can authenticate without extra setup.",
+    "Set up a GitHub webhook that forwards PR comments to a developer workstation running Claude Code in interactive mode.",
+    "Have every developer add a git `post-commit` hook that runs `claude -p` locally on each commit to the PR branch."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. This is the documented quick-setup path; merge the PR and `@claude` mentions start working.",
+    "Never commit keys. Store them as GitHub Secrets and reference them with `${{ secrets.ANTHROPIC_API_KEY }}`.",
+    "This is fragile and insecure, and it reinvents what the GitHub Action already does.",
+    "Local hooks don't respond to PR comments and depend on each laptop's setup. They aren't a CI integration."
+   ],
+   "ref": "https://code.claude.com/docs/en/github-actions"
+  },
+  {
+   "id": "AI2-016",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A team already has `anthropics/claude-code-action@v1` answering `@claude` mentions. They now want Claude to review every new or updated pull request automatically, with no one mentioning it. What is the correct change?",
+   "select": 1,
+   "options": [
+    "Add a workflow triggered on `pull_request` (opened, synchronize) that passes the review instructions in the `prompt` input.",
+    "Use `direct_prompt:` with the review instructions, as in the original action examples.",
+    "Set `trigger_phrase: \"\"` so every comment and PR event counts as a mention.",
+    "Add `mode: agent` to the action's inputs so it switches from tag mode to automatic execution."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. When a `prompt` is given, the action runs in automation mode on whatever event triggers the workflow.",
+    "`direct_prompt` is the beta name. In v1 it was replaced by `prompt`.",
+    "An empty trigger phrase isn't how you run on PR events. Without a `prompt`, the action still waits for a mention.",
+    "`mode` was a beta-era input. In v1 the mode is detected automatically and the `mode` input was removed."
+   ],
+   "ref": "https://code.claude.com/docs/en/github-actions"
+  },
+  {
+   "id": "AI2-017",
+   "subskill": "AI.2",
+   "difficulty": 3,
+   "stem": "Claude pushes fix commits to PR branches as expected, but the repository's required `ci.yml` checks never start on those commits, so the PRs can't merge. Other contributors' pushes trigger CI normally. What is the MOST likely cause?",
+   "code": {
+    "lang": "yaml",
+    "src": "- uses: anthropics/claude-code-action@v1\n  with:\n    anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}\n    github_token: ${{ secrets.GITHUB_TOKEN }}\n    claude_args: \"--max-turns 8\""
+   },
+   "select": 1,
+   "options": [
+    "`claude_args` lacks `--allowedTools Bash`, so Claude can't run the test commands that would kick off the required CI checks.",
+    "Pushes made with the default `GITHUB_TOKEN` don't trigger workflows; let the action use the Claude GitHub App instead.",
+    "`--max-turns 8` ends Claude's session before it can trigger the CI workflow.",
+    "The checkout step uses `fetch-depth: 1`, so GitHub can't link Claude's commits to the PR."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Running tests locally in the job is unrelated to whether GitHub starts `ci.yml` for a push.",
+    "Correct. GitHub deliberately skips workflow runs for pushes made with `GITHUB_TOKEN` to prevent loops. The documented fix is to authenticate as an app.",
+    "Claude doesn't trigger CI; GitHub does, on a push. The turn limit doesn't affect that.",
+    "Shallow clones don't stop pushed commits from triggering CI."
+   ],
+   "ref": "https://code.claude.com/docs/en/github-actions"
+  },
+  {
+   "id": "AI2-018",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "Finance reports that some Claude Code GitHub Action jobs ran for over an hour and consumed far more tokens than expected. Which TWO changes MOST directly cap runaway cost? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Use `fetch-depth: 0` so Claude has full git history and needs fewer turns to understand changes.",
+    "Set a job-level `timeout-minutes` and a `concurrency` group so jobs can't run indefinitely or pile up.",
+    "Pin the action to `@beta`, which has lower default turn limits than v1.",
+    "Delete the repository's CLAUDE.md so Claude reads less context on each run.",
+    "Add `--max-turns` to `claude_args` to limit how many iterations Claude can take per run."
+   ],
+   "answer": [
+    1,
+    4
+   ],
+   "explanations": [
+    "Full history makes checkout bigger and doesn't limit iterations or runtime.",
+    "Correct. Workflow timeouts and concurrency controls are documented guardrails against runaway jobs.",
+    "The beta version is outdated, and moving back to it isn't a cost control.",
+    "Keeping CLAUDE.md short is good advice, but deleting it removes the team's standards and doesn't cap a runaway loop.",
+    "Correct. This is the documented way to cap the agent loop in the action."
+   ],
+   "ref": "https://code.claude.com/docs/en/github-actions"
+  },
+  {
+   "id": "AI2-019",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A security reviewer is approving a rollout of the Claude Code GitHub Action across an organization's repositories. Which THREE practices should be required? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Grant each workflow only the `permissions:` it needs, such as read-only contents for a review-only job.",
+    "Supply credentials only through GitHub Secrets or OIDC federation, never in workflow files.",
+    "Let any GitHub user trigger the action on public repos so outside contributors can benefit too.",
+    "Store the API key base64-encoded in a committed `.env` file so rotation is just a PR.",
+    "Set `permissions: write-all` on every workflow so Claude never fails because a permission is missing.",
+    "Keep human review and required status checks in place before merging PRs that Claude authored."
+   ],
+   "answer": [
+    0,
+    1,
+    5
+   ],
+   "explanations": [
+    "Correct. Least privilege limits what a misbehaving run or an injected prompt can do.",
+    "Correct. The docs explicitly say never to commit API keys or OAuth tokens to the repo.",
+    "By default only users with write access can trigger the action. Opening it to everyone invites abuse and token spend.",
+    "Base64 isn't encryption. That's still a committed secret.",
+    "This breaks least privilege and widens the impact of any compromise.",
+    "Correct. The docs advise reviewing Claude's changes before merging. Branch protection enforces it."
+   ],
+   "ref": "https://code.claude.com/docs/en/github-actions"
+  },
+  {
+   "id": "AI2-020",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "An engineering manager wants Claude-assisted PR reviews to catch security problems (injection, missing authz checks) consistently across 30 repos. Today, developers paste diffs and ask 'review this', and the results vary a lot. Which approach BEST improves consistency while keeping appropriate control?",
+   "select": 1,
+   "options": [
+    "Replace the unit test suite with Claude review, since Claude can reason about behavior the tests miss.",
+    "Ask developers to add 'be thorough and check security' to their ad-hoc review requests.",
+    "Let Claude approve and auto-merge any PR where it reports no issues, so human reviewers can spend their time only on the PRs Claude flagged.",
+    "Put explicit review criteria in the committed CLAUDE.md or review prompt, run review on every PR, and keep human approval and tests required."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Review doesn't execute code. Tests are needed to verify behavior, including behavior Claude claims is correct.",
+    "Vague instructions produce vague, inconsistent reviews, and this still depends on each person remembering.",
+    "This removes human control and treats a confident-sounding review as proof. AI review should add to required approvals, not replace them.",
+    "Correct. Specific, shared criteria make reviews consistent. Automation makes them happen every time. Humans and CI stay as the gate."
+   ],
+   "ref": "https://code.claude.com/docs/en/code-review"
+  },
+  {
+   "id": "AI2-021",
+   "subskill": "AI.2",
+   "difficulty": 3,
+   "stem": "A team wants to use Claude Code to refactor a 3,000-line billing module that has no automated tests and is business-critical. What should they do FIRST?",
+   "select": 1,
+   "options": [
+    "Have Claude explain the module and document its design, then let a senior engineer refactor by hand.",
+    "Have Claude refactor first, then generate tests against the new code to confirm it works.",
+    "Ask Claude to rewrite the whole module into clean, smaller files in one pass, then review the full diff carefully.",
+    "Have Claude write characterization tests that capture current behavior, get them passing in CI, then refactor in small commits on a branch."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Documentation helps, but this skips the step that makes any refactor safe: tests that pin current behavior.",
+    "Tests written after the refactor describe the new behavior, so they can't catch regressions from the old behavior.",
+    "With no tests, a large diff can't be checked for behavior changes, and one big change is hard to review or revert.",
+    "Correct. Characterization tests lock in existing behavior so each small refactor step can be checked automatically."
+   ],
+   "ref": "https://code.claude.com/docs/en/common-workflows"
+  },
+  {
+   "id": "AI2-022",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A developer runs two Claude Code sessions at once in the same checkout: one fixing a bug, one adding a feature. Edits from one session keep showing up in the other's diffs and test runs. Which approach BEST isolates the work?",
+   "select": 1,
+   "options": [
+    "Have each session run `git stash` before every turn and `git stash pop` afterward.",
+    "Run each session in its own git worktree on its own branch.",
+    "Tell each session in CLAUDE.md to touch only the files related to its task.",
+    "Open the two sessions in separate terminal windows so their contexts and file views stay independent."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "This is error-prone and racy with concurrent sessions, and it often causes conflicts.",
+    "Correct. Worktrees give each session its own files and branch without a second clone, which is the standard way to run parallel Claude sessions.",
+    "That's guidance, not isolation. Shared files, builds and test runs still collide.",
+    "Separate terminals still edit the same files on disk."
+   ],
+   "ref": "https://code.claude.com/docs/en/worktrees"
+  },
+  {
+   "id": "AI2-023",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A company uses the Claude Code GitHub Action. Claude's PRs keep using `npm install` and default exports, although the team uses pnpm and named exports only. A developer has these rules in `CLAUDE.local.md` in the repo root, and they work fine on his laptop. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Add the rules to the PR description template so Claude reads them when it opens a PR.",
+    "Copy the rules into `~/.claude/CLAUDE.md` on the developer's laptop so they apply in every project.",
+    "Move the rules into the committed project `CLAUDE.md` at the repository root.",
+    "Store the rules in a repository secret and pass them to the action through an environment variable."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A PR template is read after the work is done, and it isn't loaded as standing instructions.",
+    "User-level memory lives only on that machine. The CI runner never sees it.",
+    "Correct. The action checks out the repo, and Claude reads the committed CLAUDE.md. `CLAUDE.local.md` is personal and kept out of git, so it never reaches the runner.",
+    "Secrets are for credentials. Conventions belong in version-controlled CLAUDE.md where people can review them."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory"
+  },
+  {
+   "id": "AI2-024",
+   "subskill": "AI.2",
+   "difficulty": 1,
+   "stem": "Your internal 'summarize' microservice wraps the Claude API. After the SDK's retries are exhausted, the upstream call still fails with 529 `overloaded_error`. Which response should your service return to its own callers?",
+   "select": 1,
+   "options": [
+    "`200 OK` with a JSON body `{\"summary\": null, \"error\": \"overloaded\"}`.",
+    "`503 Service Unavailable` with a `Retry-After` header.",
+    "`400 Bad Request` with the upstream error body, so callers can see what went wrong.",
+    "`404 Not Found`, because the model wasn't available to serve the request."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A 200 for a failure breaks HTTP semantics, and clients and monitors can't tell success from failure.",
+    "Correct. This tells callers the failure is temporary and on your side, and when to retry.",
+    "400 tells callers their request was malformed, so they won't retry even though the failure is temporary and on the server side.",
+    "404 means the resource doesn't exist and misleads both clients and alerting."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "AI2-025",
+   "subskill": "AI.2",
+   "difficulty": 3,
+   "stem": "A queue consumer reads 'summarize document' messages, calls Claude and writes the summary to Postgres. The queue guarantees at-least-once delivery, and the team sees about 4% duplicate Claude calls, which they pay for, plus occasional double rows. Which TWO changes BEST address this? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Before calling Claude, record the message ID in a dedupe table with a unique constraint and skip messages that are already present.",
+    "Turn off the queue's redelivery so each message is delivered at most once.",
+    "Make the database write an upsert keyed on document ID and version instead of a plain insert.",
+    "Set temperature to 0 so duplicate calls produce identical summaries and the duplicates don't matter.",
+    "Replace the queue with synchronous HTTP calls from the upload service so there's no redelivery."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. An idempotent consumer avoids paying for duplicate generations under at-least-once delivery.",
+    "This trades duplicates for lost work. Crashed or failed messages would never be processed.",
+    "Correct. Idempotent writes stop duplicate rows even if a duplicate slips through.",
+    "You'd still pay for each duplicate call and still insert duplicate rows, and output isn't guaranteed identical anyway.",
+    "Synchronous calls bring client retries back, along with the same duplicate problem, and you lose buffering."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "AI2-026",
+   "subskill": "AI.2",
+   "difficulty": 3,
+   "stem": "A TypeScript agent calls a `lookup_order` tool that returns order IDs such as `9007199254740993` as JSON numbers. Claude later passes an ID to `refund_order`, and refunds sometimes hit the wrong order, off by one. Which change BEST fixes the root cause?",
+   "select": 1,
+   "options": [
+    "Represent order IDs as strings in the tool results and in the `refund_order` input schema.",
+    "Add 'copy order IDs exactly, digit for digit' to the tool descriptions.",
+    "Turn on `strict: true` on the `refund_order` tool so the ID always matches the schema's `integer` type.",
+    "Ask Claude to repeat the order ID back to the user before calling `refund_order`, as a confirmation step."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. JSON numbers above 2^53 lose precision when parsed into JavaScript numbers. String IDs keep them exact end to end.",
+    "The model isn't the main problem. The precision is lost when JavaScript parses the number.",
+    "Schema conformance doesn't stop a 64-bit integer being rounded to a float in JavaScript.",
+    "Confirmation might catch some errors, but the corrupted value comes from your own parsing."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+  },
+  {
+   "id": "AI2-027",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "A Python script uses `asyncio.gather` to run 500 Claude calls. After 480 have finished, one call raises an exception that survives the SDK retries. The whole `gather` raises, the script exits, and the 480 results are lost because they were going to be saved at the end. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Capture failures per item (`return_exceptions=True`), save results as they complete, and retry only failures.",
+    "Raise the client's `max_retries` to 20 so no single call can fail the run.",
+    "Replace `asyncio.gather` with a synchronous for-loop so failures are easier to see.",
+    "Put a try/except around the whole `gather` and rerun all 500 calls from the start whenever any single one of them fails."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Isolating failures and writing results as they finish keeps completed work and makes the job resumable.",
+    "Some failures, such as a 400, will never succeed on retry. The run is still all-or-nothing.",
+    "This is far slower and still loses unsaved results if the loop crashes.",
+    "This throws away and pays again for 499 successful calls each time one fails."
+   ],
+   "ref": "https://github.com/anthropics/anthropic-sdk-python"
+  },
+  {
+   "id": "AI2-028",
+   "subskill": "AI.2",
+   "difficulty": 2,
+   "stem": "An internal REST endpoint triggers a Claude report generation that takes 60 to 120 seconds. The corporate load balancer cuts any HTTP request off at 30 seconds, so users see gateway timeouts even though the report finishes in the background. Which API design BEST fixes this?",
+   "select": 1,
+   "options": [
+    "Return `200 OK` right away with an empty body and email the report to the user when it's ready.",
+    "Change the endpoint to `GET /reports?generate=true` so proxies can cache the response and serve it faster.",
+    "Make `POST /reports` return `202 Accepted` with a job ID, then let the client poll `GET /reports/{id}`.",
+    "Raise the load balancer's idle timeout to 5 minutes for this route so the synchronous request can finish."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A 200 with no resource or status link misrepresents what happened and gives API clients nothing to track.",
+    "GET must be safe and free of side effects. Generating a report on GET breaks HTTP semantics, and caching doesn't help the first slow request.",
+    "Correct. The asynchronous job pattern decouples long-running work from the request/response cycle and fits within proxy timeouts.",
+    "This might work today, but it ties up connections, fails again when reports get longer, and gives clients no way to resume."
+   ],
+   "ref": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/202"
+  },
+  {
+   "id": "AI4-001",
+   "subskill": "AI.4",
+   "difficulty": 1,
+   "stem": "A developer wants Claude Code to know their personal sandbox URL and preferred test accounts when working in one specific repository. Teammates shouldn't see these instructions. Where should they go?",
+   "select": 1,
+   "options": [
+    "`./CLAUDE.local.md` in the project root, kept out of version control.",
+    "`./CLAUDE.md` in the project root, under a 'Personal notes' heading.",
+    "`~/.claude/CLAUDE.md`, since user memory is private to the developer.",
+    "The `env` block of the committed `.claude/settings.json`."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. CLAUDE.local.md is for personal instructions in one project and loads alongside the project CLAUDE.md.",
+    "The project CLAUDE.md is committed and shared, so every teammate would get these notes.",
+    "It's private, but it applies to every project, and these notes belong to just one repo.",
+    "That file is shared with the team, and settings aren't the place for instructions to Claude."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory"
+  },
+  {
+   "id": "AI4-002",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "On one machine, `~/.claude/settings.json` sets `\"model\": \"model-A\"`, the repo's committed `.claude/settings.json` sets `\"model\": \"model-B\"`, and `.claude/settings.local.json` sets `\"model\": \"model-C\"`. There are no managed settings, flags or model environment variables. Which model does a new session in this repo start with?",
+   "select": 1,
+   "options": [
+    "The account default, because conflicting `model` values cancel out and Claude Code falls back.",
+    "model-C, because project local settings rank above shared project and user settings.",
+    "model-B, because the team's committed settings take priority over individual files.",
+    "model-A, because user settings express the developer's own choice and override project files."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Scalar conflicts don't cancel. The highest-precedence value wins.",
+    "Correct. The order is managed > command line > local > project > user.",
+    "Shared project settings rank above user settings but below project local settings.",
+    "User settings have the lowest precedence of these three files."
+   ],
+   "ref": "https://code.claude.com/docs/en/settings"
+  },
+  {
+   "id": "AI4-003",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "An organization's managed settings include `\"permissions\": {\"deny\": [\"Bash(curl *)\"]}`. A developer adds `\"Bash(curl *)\"` to `permissions.allow` in their `.claude/settings.local.json` and starts a new session. What happens when Claude tries to run `curl https://example.com`?",
+   "select": 1,
+   "options": [
+    "It runs, because the allow rule was added more recently than the managed deny rule.",
+    "It runs without a prompt, because local settings are the most specific scope for this project.",
+    "It's denied. Managed settings are the highest precedence, and a deny rule wins over an allow rule.",
+    "Claude Code prompts the developer, since the allow and deny rules conflict and need a human decision."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Precedence comes from scope and rule type, not from when the rule was written.",
+    "Local settings never override managed settings, and deny rules take priority over allow rules.",
+    "Correct. Nothing in user, project or local files overrides a managed policy.",
+    "A deny rule doesn't turn into a prompt. The command is blocked."
+   ],
+   "ref": "https://code.claude.com/docs/en/settings"
+  },
+  {
+   "id": "AI4-004",
+   "subskill": "AI.4",
+   "difficulty": 3,
+   "stem": "In a trusted project, `~/.claude/settings.json` has `\"permissions\": {\"allow\": [\"Bash(npm run lint)\"]}` and the committed `.claude/settings.json` has `\"permissions\": {\"allow\": [\"Bash(npm run test *)\"]}`. No other settings define permissions. Which commands can Claude run without a permission prompt?",
+   "select": 1,
+   "options": [
+    "Only `npm run lint`, because personal allow rules take priority over team rules.",
+    "Only `npm run test *`, because the project file overrides the user file for the same key.",
+    "Both `npm run lint` and `npm run test *`, because `permissions.allow` lists merge across scopes.",
+    "Neither, because conflicting `permissions` objects make Claude Code fall back to prompting for everything."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Neither list replaces the other. They're combined.",
+    "That's how scalar keys behave. List settings such as `permissions.allow` merge across scopes.",
+    "Correct. Each scope can add entries without removing another scope's. In a trusted folder the project's allow rules apply as well.",
+    "These rules don't conflict. Both lists apply."
+   ],
+   "ref": "https://code.claude.com/docs/en/settings"
+  },
+  {
+   "id": "AI4-005",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "The project CLAUDE.md says: 'Never modify files under `db/migrations/` - generate a new migration instead.' Claude still occasionally edits existing migrations during large refactors. The team needs a guarantee. What should they do?",
+   "select": 1,
+   "options": [
+    "Put a copy of the rule in a `db/migrations/CLAUDE.md` file as well as the root CLAUDE.md.",
+    "Rewrite the instruction in capitals with 'CRITICAL' and repeat it at the top and bottom of CLAUDE.md.",
+    "Move the instruction into `~/.claude/CLAUDE.md` so it loads before the project file.",
+    "Add a permission deny rule such as `Edit(./db/migrations/**)`, or a PreToolUse hook that blocks edits to that path."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Nested files help with relevance but are still guidance only. There's no hard guarantee.",
+    "CLAUDE.md is context, not enforcement. Stronger wording may help, but it can't guarantee anything.",
+    "Load order doesn't make an instruction binding, and it would no longer be shared with the team.",
+    "Correct. Permissions and hooks are enforced by the harness no matter what the model decides."
+   ],
+   "ref": "https://code.claude.com/docs/en/hooks"
+  },
+  {
+   "id": "AI4-006",
+   "subskill": "AI.4",
+   "difficulty": 3,
+   "stem": "A team's root CLAUDE.md has grown to 900 lines, and Claude follows it less reliably. Someone proposes splitting it into ten files pulled in with `@docs/claude/*.md` imports 'to cut context usage'. What is the MOST accurate assessment?",
+   "select": 1,
+   "options": [
+    "Bad plan, because Claude Code ignores `@` imports in project CLAUDE.md files for security reasons.",
+    "Good plan, but use `CLAUDE.local.md` files instead of imports, since local files don't count toward context.",
+    "Good plan. Imported files are read only when Claude decides they're relevant to the current task, so context usage drops sharply across sessions.",
+    "It organizes but doesn't save context: imports load with the parent file. Use path-scoped `.claude/rules/` and skills instead."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Project imports work. Only imports pointing outside the project need a one-time approval.",
+    "Local files load into context just like CLAUDE.md, and they aren't shared with the team.",
+    "That describes skills, not `@imports`. Imports are expanded at load time.",
+    "Correct. The docs say imports don't reduce context cost. Path-scoped rules load only for matching files, and skills load on demand."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory"
+  },
+  {
+   "id": "AI4-007",
+   "subskill": "AI.4",
+   "difficulty": 3,
+   "stem": "A developer is writing `@` imports in a project's `.claude/CLAUDE.md`. Which TWO statements about how imports resolve are correct? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "A relative import path resolves from the file that contains the import, not from the session's working directory.",
+    "Relative import paths always resolve from the directory where the developer launched `claude`.",
+    "Imported files can't contain imports of their own, which keeps loading predictable.",
+    "An import pointing outside the repo (for example into the home directory) loads silently with no prompt.",
+    "Text such as `` `@README` `` inside a Markdown code span isn't treated as an import."
+   ],
+   "answer": [
+    0,
+    4
+   ],
+   "explanations": [
+    "Correct. Relative imports are resolved against the importing file's location.",
+    "They resolve from the importing file. Launching from a subdirectory doesn't change that.",
+    "Recursive imports are supported, up to a limited depth.",
+    "The first time a project uses imports from outside the working directory, Claude Code shows an approval dialog.",
+    "Correct. Import parsing skips code spans and fenced code blocks, so you can mention a path without importing it."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory"
+  },
+  {
+   "id": "AI4-008",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "A monorepo team wants Claude to follow API-specific conventions (validation, error format) only when it works on files under `src/api/`, without adding those lines to every session's context. What is the BEST mechanism?",
+   "select": 1,
+   "options": [
+    "An `env` variable `API_RULES` in `.claude/settings.json` holding the conventions.",
+    "A `.claude/rules/api.md` file with `paths: [\"src/api/**/*.ts\"]` frontmatter.",
+    "An `## API` section near the top of the root CLAUDE.md.",
+    "A user-level `~/.claude/CLAUDE.md` on each API developer's machine."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Environment variables don't put instructions into Claude's context.",
+    "Correct. Path-scoped rules load only when Claude reads or edits matching files.",
+    "The root CLAUDE.md loads in every session, which is the context cost the team wants to avoid.",
+    "This loads for every project on those machines, isn't shared, and doesn't depend on which files Claude touches."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory"
+  },
+  {
+   "id": "AI4-009",
+   "subskill": "AI.4",
+   "difficulty": 3,
+   "stem": "A platform team runs Claude Code in CI to generate code-migration PRs. They noticed the output style changed overnight without any repo change. Their committed `.claude/settings.json` has `\"model\": \"sonnet\"`. They want the model to change only when they decide. What should they do?",
+   "select": 1,
+   "options": [
+    "Pin a full model ID (or set `ANTHROPIC_DEFAULT_SONNET_MODEL`) in committed settings and upgrade deliberately.",
+    "Add 'always behave like the previous Sonnet version' to the project CLAUDE.md.",
+    "Have each engineer run `/model` in their local session to choose the version.",
+    "Leave `sonnet` as is, because an alias always resolves to the same model version once a project has started using it."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Pinning a full model name keeps CI reproducible, and upgrades become a conscious, tested change.",
+    "Instructions can't control which model serves the request.",
+    "That changes individual defaults, not the CI runner, and isn't shared or reproducible.",
+    "Aliases point to the recommended version and update over time. That's why the behavior changed."
+   ],
+   "ref": "https://code.claude.com/docs/en/model-config"
+  },
+  {
+   "id": "AI4-010",
+   "subskill": "AI.4",
+   "difficulty": 1,
+   "stem": "Which practice BEST manages the model identifier in a production application built on the Claude API?",
+   "select": 1,
+   "options": [
+    "Pin a specific model ID in configuration per environment and change it through review, evals and a staged rollout.",
+    "Use whichever floating 'latest' alias is available so the app gets improvements automatically.",
+    "Let end users choose any model from a dropdown so the team never has to manage upgrades.",
+    "Hard-code the model ID string at each `messages.create` call site so it's visible where it's used."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. A pinned, centralized ID gives reproducible behavior and controlled upgrades.",
+    "Automatic upgrades skip evaluation and can change behavior, format or cost without warning.",
+    "This hands a cost, quality and compliance decision to users and makes the system impossible to evaluate.",
+    "Scattered IDs make migrations error-prone, and it's easy to miss one."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/overview"
+  },
+  {
+   "id": "AI4-011",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "A support assistant's system prompt is stored in a database row that ops staff edit through an admin UI, and changes take effect immediately in production. After a week of complaints about worse answers, nobody can say what changed or when. What is the BEST corrective process?",
+   "select": 1,
+   "options": [
+    "Append 'Always be accurate and helpful' to the prompt to stop further quality drift.",
+    "Version prompts in git, change them via PR with a regression-eval gate, log the version per request, roll back by version.",
+    "Restrict admin UI access to one senior engineer who must personally approve every prompt edit before it goes live in production.",
+    "Take nightly database backups so the previous prompt can be restored if complaints come in."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Generic instructions don't fix a process with no change control, and adding them is itself an untracked change.",
+    "Correct. Treating prompts as code gives you history, review, testing and quick rollback, and per-request logging ties quality changes to a version.",
+    "One gatekeeper doesn't add testing, versioning or traceability.",
+    "Backups make recovery possible but give you no diff, no review, no eval gate and no way to link a version to the complaints."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI4-012",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "A team is setting up change control for prompts in an LLM feature that handles insurance claims. Which THREE practices should be part of it? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Log the prompt version and model ID with every request so outputs can be traced to a configuration.",
+    "Raise temperature with each prompt version so you can see whether the new wording is more robust.",
+    "Run the regression eval suite on every prompt change and block deployment if quality drops.",
+    "Let prompt authors hot-edit the live prompt so urgent fixes skip review.",
+    "Roll out prompt changes behind a feature flag or percentage split, with a one-step rollback.",
+    "Keep only the latest prompt text and delete old versions to avoid confusion."
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. Without this you can't attribute a quality or cost change to a specific change.",
+    "Changing sampling and wording together confounds the evaluation, and it isn't part of change control.",
+    "Correct. An eval gate catches regressions before users see them.",
+    "That removes the traceability and testing change control exists to provide.",
+    "Correct. A staged rollout limits the impact and makes reverting cheap.",
+    "Without old versions you can't diff or roll back."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI4-013",
+   "subskill": "AI.4",
+   "difficulty": 1,
+   "stem": "A team wants every developer's Claude Code to connect to the same internal Postgres MCP server. The connection string includes a password that must not be committed. What is the BEST setup?",
+   "select": 1,
+   "options": [
+    "Commit `.mcp.json` with the full connection string, since the repository is private.",
+    "Add the connection string to the project CLAUDE.md so Claude can connect when it needs to.",
+    "Commit a project `.mcp.json` that uses `${PG_URL}`; each developer sets `PG_URL` locally.",
+    "Have each developer run `claude mcp add` with the default local scope and paste the connection string."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A private repo is still the wrong place for a credential. Anyone with access, and every clone, gets the password.",
+    "CLAUDE.md is model context. A secret there leaks into prompts, and it doesn't configure MCP.",
+    "Correct. Project scope shares the server definition through git, and `${VAR}` expansion keeps the secret out of the repo.",
+    "This works per person but isn't shared, so the definitions drift between developers."
+   ],
+   "ref": "https://code.claude.com/docs/en/mcp"
+  },
+  {
+   "id": "AI4-014",
+   "subskill": "AI.4",
+   "difficulty": 3,
+   "stem": "A developer added an MCP server named `tickets` with local scope (pointing at a staging URL). The repo's committed `.mcp.json` also defines `tickets`, pointing at production with an extra auth header. Which configuration does Claude Code use for `tickets` in that repo?",
+   "select": 1,
+   "options": [
+    "A merge of the two: the staging URL from local scope plus the auth header from the project entry.",
+    "Both servers, connected separately, with tool names automatically prefixed by scope.",
+    "The project entry, because a committed team configuration takes priority over personal settings.",
+    "The local-scope entry, in full: the staging URL without the project's auth header."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Fields aren't merged across scopes. The winning entry is used as a whole.",
+    "When the same name appears in several scopes, Claude Code connects only once.",
+    "For MCP servers, local scope ranks above project scope.",
+    "Correct. Precedence is local > project > user, and the whole entry from the winning scope is used."
+   ],
+   "ref": "https://code.claude.com/docs/en/mcp"
+  },
+  {
+   "id": "AI4-015",
+   "subskill": "AI.4",
+   "difficulty": 2,
+   "stem": "An organization maintains an internal Claude Code plugin in a private git marketplace. Every developer on a repo should have the plugin enabled from the repo's shared config, at a known, reproducible version. Which TWO steps BEST achieve this? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Reference the plugin's files from the project CLAUDE.md with `@` imports.",
+    "Commit `extraKnownMarketplaces` and `enabledPlugins` entries in the repo's `.claude/settings.json`.",
+    "Ask each developer to copy the plugin folder into `~/.claude/` by hand.",
+    "Put the plugin in `.claude/settings.local.json` so each developer can approve it.",
+    "Pin the plugin's git source in `marketplace.json` to a specific `ref` or `sha`."
+   ],
+   "answer": [
+    1,
+    4
+   ],
+   "explanations": [
+    "Imports add text to context. They don't install plugin components such as hooks, MCP servers or skills.",
+    "Correct. This registers the marketplace and enables the plugin for everyone who trusts the project (each developer still installs a plugin with an external git source once).",
+    "Manual copies drift and give no version guarantee.",
+    "Local settings are personal and kept out of git, so they don't roll anything out to the team.",
+    "Correct. Pinning a git-based plugin source makes installs reproducible."
+   ],
+   "ref": "https://code.claude.com/docs/en/plugin-marketplaces"
+  },
+  {
+   "id": "AI4-016",
+   "subskill": "AI.4",
+   "difficulty": 1,
+   "stem": "A developer adds a key to `.claude/settings.json`, but Claude Code seems to ignore it. What should they check FIRST?",
+   "select": 1,
+   "options": [
+    "Run `/status` to see which settings sources loaded and whether a higher scope overrides the key.",
+    "Add a `// enable` comment above the key so the parser recognizes it.",
+    "Delete `~/.claude.json` to clear any cached configuration.",
+    "Reinstall Claude Code, because changes to settings files only take effect after a clean reinstall of the CLI."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. `/status` lists the loaded sources. Local, command-line or managed settings can override the project file.",
+    "Settings files are strict JSON, and a comment would itself cause a Settings Error.",
+    "That file holds account and project state. Deleting it is destructive and unrelated.",
+    "Claude Code watches settings files and reloads most edits. Reinstalling doesn't diagnose anything."
+   ],
+   "ref": "https://code.claude.com/docs/en/settings"
+  },
+  {
+   "id": "AI5-001",
+   "subskill": "AI.5",
+   "difficulty": 2,
+   "stem": "Users of an internal knowledge assistant call it 'slow'. Responses average 12 s to complete. Prompts are short and vary per user, and answer quality is rated highly. The product requirement is 'feels responsive'. Which change BEST meets it?",
+   "select": 1,
+   "options": [
+    "Move the requests to the Message Batches API to cut cost and reduce load.",
+    "Stream responses so text appears within a second or two, and track time-to-first-token.",
+    "Add prompt caching to the system prompt, since cached prefixes reduce latency on every request regardless of prompt length.",
+    "Raise `max_tokens` so the model never has to stop and continue."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Batches are asynchronous and much slower to return. They suit offline work, not interactive chat.",
+    "Correct. Perceived latency depends mostly on time to first token. Streaming improves it without changing quality.",
+    "With short prompts that vary per user there's little stable prefix to cache, so the gain is minimal.",
+    "A higher `max_tokens` doesn't make generation faster. It only raises the output cap."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/streaming"
+  },
+  {
+   "id": "AI5-002",
+   "subskill": "AI.5",
+   "difficulty": 1,
+   "stem": "A VP says the new contract-review tool 'must be accurate and fast'. What should the engineer do with this requirement before designing the system?",
+   "select": 1,
+   "options": [
+    "Write 'Be accurate and fast' at the top of the system prompt.",
+    "Build a quick prototype first and then ask the VP whether it feels accurate and fast enough to launch to the business.",
+    "Pick the most capable model available, since that best covers 'accurate'.",
+    "Turn it into measurable acceptance criteria (e.g. '>= 95% F1 on 300 labeled contracts', 'p95 under 20 s')."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A prompt instruction isn't a requirement and can't be tested.",
+    "Prototypes help, but without agreed metrics the acceptance decision stays subjective.",
+    "This picks a solution before the requirement is defined, and it may break unstated cost or latency limits.",
+    "Correct. Measurable criteria let you pick an architecture, build evals and decide whether to ship."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI5-003",
+   "subskill": "AI.5",
+   "difficulty": 2,
+   "stem": "A bank must run a quarterly compliance review over 1.2 million archived documents. The same 6,000-token review instructions are sent with every document. Results are due two weeks after the quarter closes, and the budget is tight. Which TWO choices BEST fit the requirements? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Run the job through the Message Batches API instead of real-time requests.",
+    "Use the most capable model tier for every document so no review needs to be redone.",
+    "Put the shared instructions first in the prompt and mark them for prompt caching.",
+    "Raise `max_tokens` to the model maximum on each request to avoid truncated reviews.",
+    "Stream every response so reviewers can watch results arrive."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. No user is waiting, and batches cost 50% less while staying off real-time rate limits.",
+    "Without an eval showing a smaller tier falls short, this ignores the budget requirement.",
+    "Correct. A long, identical prefix repeated across many requests is exactly what prompt caching is for.",
+    "Set `max_tokens` to what the task needs. The maximum adds no value and makes runaway outputs more costly.",
+    "Nobody is watching in real time, and streaming doesn't cut cost."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "AI5-004",
+   "subskill": "AI.5",
+   "difficulty": 2,
+   "stem": "A European health-tech company runs everything in its own AWS account in an EU region and has a contractual requirement that patient data is processed in the EU under its existing IAM and audit controls. It wants to add Claude-based summarization. Which approach BEST meets the requirement?",
+   "select": 1,
+   "options": [
+    "Download the Claude model weights and run them on the company's own EU GPU cluster.",
+    "Call the Claude API directly and add 'process and store this data only in the EU' to the system prompt.",
+    "Use Claude through Amazon Bedrock in an EU region that offers the needed model, so traffic stays in their AWS account under existing IAM and logging.",
+    "Encrypt patient notes on the client before sending them to Claude, so where they're processed doesn't matter."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Claude models aren't distributed for self-hosting.",
+    "A prompt can't control where inference runs or where data is processed.",
+    "Correct. Cloud-platform access lets you choose the region and reuse existing identity and audit controls. Confirm the model's availability in that region.",
+    "Claude can't summarize ciphertext, and encryption in transit is already standard."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock"
+  },
+  {
+   "id": "AI5-005",
+   "subskill": "AI.5",
+   "difficulty": 3,
+   "stem": "Legal requires Zero Data Retention for a new product, and the company has a ZDR arrangement with Anthropic. The proposed design relies on several API features, including some that keep data or state on the server between requests. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Proceed. An organization-level ZDR arrangement automatically applies to every API feature.",
+    "Delete uploaded files and stored state with a nightly cleanup job, which satisfies the ZDR requirement for those features.",
+    "Add 'do not retain any data from this conversation' to the system prompt as an extra safeguard.",
+    "Check ZDR eligibility feature by feature and replace ineligible ones, e.g. with stateless Messages API calls."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Not every feature is ZDR-eligible. Features that keep server-side state may be excluded.",
+    "Your own cleanup schedule isn't the same as a contractual zero-retention guarantee.",
+    "The model can't control the platform's data retention.",
+    "Correct. Confirm eligibility feature by feature and design around the exceptions before you build."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/overview"
+  },
+  {
+   "id": "AI5-006",
+   "subskill": "AI.5",
+   "difficulty": 2,
+   "stem": "A new customer-facing feature is forecast to peak at about 3,000 requests per minute on one model at launch. The organization's current rate limit for that model is 1,000 requests per minute. Launch is in three weeks. What should the team do FIRST?",
+   "select": 1,
+   "options": [
+    "Spread traffic across API keys created in several separate organizations so that each one stays safely under its own limit.",
+    "Treat throughput as a launch requirement: secure higher limits, add queueing/backpressure, and load-test first.",
+    "Send the interactive requests through the Message Batches API, which has separate limits.",
+    "Rely on the SDK's automatic retries to absorb the excess at peak."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "This dodges the limits instead of planning capacity, fragments billing and governance, and may break terms of use.",
+    "Correct. Throughput is a non-functional requirement to plan and verify ahead of time, not something to discover in production.",
+    "Batches are asynchronous and can't serve users waiting for a response.",
+    "Retries don't add capacity. At three times the limit most requests would fail or queue for a long time."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/rate-limits"
+  },
+  {
+   "id": "AI5-007",
+   "subskill": "AI.5",
+   "difficulty": 3,
+   "stem": "A support assistant must stay under $3,000 a month. Each request has a 2,000-token input, of which 1,500 tokens are an identical system prompt, and a 300-token output. Volume is 900,000 requests a month, and the feature is interactive. Evals show both models are acceptable. Rates (USD per million tokens): Model A input $3, output $15. Model B input $1, output $5. Cache reads cost 10% of the input rate; ignore cache-write cost. Which option meets the ceiling?",
+   "select": 1,
+   "options": [
+    "Model B with prompt caching on the system prompt.",
+    "Model B without caching.",
+    "Model A through the Message Batches API at a 50% discount.",
+    "Model A with prompt caching on the system prompt."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Uncached input 450 MTok x $1 = $450, cached 1,350 MTok x $0.10 = $135, output 270 MTok x $5 = $1,350. Total about $1,935.",
+    "Input 1,800 MTok x $1 = $1,800, output 270 MTok x $5 = $1,350. Total $3,150, just over the ceiling.",
+    "Halving Model A's uncached cost ($9,450) gives about $4,725, still over. Batches also don't fit an interactive feature.",
+    "Uncached input 450 MTok x $3 = $1,350, cached 1,350 MTok x $0.30 = $405, output 270 MTok x $15 = $4,050. Total about $5,805, over the ceiling."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/pricing"
+  },
+  {
+   "id": "AI5-008",
+   "subskill": "AI.5",
+   "difficulty": 1,
+   "stem": "Which TWO of the following are non-functional requirements for a Claude-based invoice-processing system? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Extract the invoice number, supplier VAT ID and total amount into JSON.",
+    "Flag invoices whose supplier isn't in the vendor master list.",
+    "p95 time-to-first-token must be under 1 second during business hours.",
+    "Invoice content must be processed only in EU regions.",
+    "Create an approval task in the ERP when the total exceeds EUR 10,000."
+   ],
+   "answer": [
+    2,
+    3
+   ],
+   "explanations": [
+    "Functional: it defines what the system produces.",
+    "Functional: it's a specific behavior.",
+    "Correct. Latency is a quality attribute, not a behavior.",
+    "Correct. Data residency is a constraint on how and where the system runs.",
+    "Functional: it's a business rule the system has to carry out."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI5-009",
+   "subskill": "AI.5",
+   "difficulty": 2,
+   "stem": "A lender's regulators require every loan application to go through the same five documented checks in a fixed order (identity, income, debt ratio, sanctions, policy exceptions), with an audit record of each step's input and output. The team wants Claude to help with the checks. Which architecture BEST fits?",
+   "select": 1,
+   "options": [
+    "A deterministic workflow (prompt chain) that runs the five checks in code-defined order, with programmatic gates and logs for each step.",
+    "A single large prompt containing all five check procedures that returns one combined verdict.",
+    "An autonomous agent with tools for all five checks that decides which checks to run and in what order.",
+    "A multi-agent swarm in which specialist agents negotiate a consensus verdict."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. When the steps are known and fixed, a workflow gives predictability and auditability. Use agents for open-ended problems.",
+    "This hides each step's output, making per-check auditing and debugging difficult.",
+    "Agent autonomy adds unpredictability where the process has to be fixed and auditable.",
+    "This over-engineers a fixed sequence and makes audit trails harder to produce."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "AI5-010",
+   "subskill": "AI.5",
+   "difficulty": 2,
+   "stem": "A product owner requires 'the best model's quality, full responses in under 300 ms, and the lowest possible cost' for a document-drafting feature. Early tests show the most capable tier takes several seconds for typical drafts. What should the engineer do?",
+   "select": 1,
+   "options": [
+    "Make the conflict explicit: measure quality, latency and cost of options, and ask stakeholders to prioritize or relax one.",
+    "Choose the most capable tier, since quality matters most, and handle latency later.",
+    "Commit to all three and plan to tune the prompt until the most capable tier reliably meets the 300 ms target in production.",
+    "Quietly pick the fastest, cheapest tier and report that the requirements are met."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Conflicting requirements need explicit, data-backed trade-off decisions by the people who own them.",
+    "This drops two stated requirements without discussion.",
+    "Prompt tuning can't close a gap of several seconds, so this sets up a missed commitment.",
+    "This misrepresents the trade-off and skips stakeholder alignment."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+  },
+  {
+   "id": "AI5-011",
+   "subskill": "AI.5",
+   "difficulty": 1,
+   "stem": "A routing step classifies 50 million short customer messages a month into one of 12 intents. Latency and cost are the main requirements, and a labeled eval shows the fastest, cheapest tier reaches the required accuracy. Which model choice BEST fits?",
+   "select": 1,
+   "options": [
+    "The balanced tier with extended thinking on, so each classification is reasoned through.",
+    "The most capable tier, with high effort, to get the best possible accuracy.",
+    "The fastest, lowest-cost tier (Haiku-class) for the classifier, with periodic eval monitoring.",
+    "The most capable tier for consistency with the rest of the product's features."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Thinking adds latency and tokens a short-text classifier doesn't need.",
+    "Paying more for accuracy beyond what the eval requires breaks the latency and cost requirements.",
+    "Correct. High-volume, latency-sensitive classification is the textbook use for the fast tier once evals confirm accuracy.",
+    "Consistency across features isn't a requirement here. Pick the tier per task."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/overview"
+  },
+  {
+   "id": "AI5-012",
+   "subskill": "AI.5",
+   "difficulty": 3,
+   "stem": "A contact center wants Claude to summarize call transcripts. The transcripts sometimes contain payment card numbers, and the compliance requirement is that card numbers are never sent to any third-party service. Which TWO measures BEST satisfy the requirement? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Tell Claude in the system prompt to ignore and never repeat any card numbers it sees.",
+    "Rely on the organization's Zero Data Retention arrangement, since unretained data is compliant.",
+    "Add an automated pre-send check (pattern plus Luhn validation) that blocks or masks any request still containing a card number, and alert on it.",
+    "Redact or tokenize card numbers in the ingestion pipeline before any prompt is built.",
+    "Encrypt transcripts end to end so Claude receives ciphertext it can't read."
+   ],
+   "answer": [
+    2,
+    3
+   ],
+   "explanations": [
+    "The data has already been sent by then, which is the violation. A prompt can't undo transmission.",
+    "ZDR limits retention but doesn't change the fact that the data was sent to a third party.",
+    "Correct. A second, enforced control catches redaction misses so the requirement holds in code, not by convention.",
+    "Correct. Data that is never sent can't leak. Redaction has to happen before the API call.",
+    "Claude can't summarize text it can't read, so the feature would stop working."
+   ],
+   "ref": "https://www.pcisecuritystandards.org/"
+  },
+  {
+   "id": "AI5-013",
+   "subskill": "AI.5",
+   "difficulty": 1,
+   "stem": "A business stakeholder asks the team to 'build an AI agent that handles customer refunds'. What should the engineer do FIRST?",
+   "select": 1,
+   "options": [
+    "Pick the most capable model so the agent can handle any refund scenario.",
+    "Gather requirements first: volumes, refund limits, approval thresholds, systems of record, audit needs, success metrics.",
+    "Write a detailed system prompt describing the company's refund policy.",
+    "Build a prototype agent with full access to the refund API so that stakeholders can quickly see everything that's possible end to end."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Model choice follows from the requirements. It isn't the first step.",
+    "Correct. These requirements decide whether you need an agent at all, which tools it gets, and where humans must approve.",
+    "Useful later, but premature before you know scope, constraints and success criteria.",
+    "Giving an unscoped prototype a money-moving tool before requirements and guardrails exist is risky."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "AI6-001",
+   "subskill": "AI.6",
+   "difficulty": 2,
+   "stem": "Anthropic announces that a model your company uses will be retired in 60 days. The model ID appears in at least 14 services owned by different teams. What should the platform team do FIRST?",
+   "select": 1,
+   "options": [
+    "Ask Anthropic for an extension, since 60 days isn't enough to migrate 14 services.",
+    "Run a repo-wide find-and-replace to the successor model ID and deploy it to all services this week to meet the deadline.",
+    "Nothing yet. After retirement, requests to the old ID are routed automatically to the recommended successor.",
+    "Inventory every use of the model ID, assign owners, and plan migrations with regression evals and staged rollouts."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "This is the wrong first move. Start migrating now within the published timeline.",
+    "Swapping without evals or a staged rollout risks quality, format and cost regressions in all 14 services at once.",
+    "Retired models stop serving requests. Calls to them fail rather than being redirected.",
+    "Correct. You can't migrate what you haven't found. The inventory and owners make the deadline manageable and the migration testable."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "AI6-002",
+   "subskill": "AI.6",
+   "difficulty": 2,
+   "stem": "Before switching a production extraction pipeline to a newer Claude model, the team runs a regression evaluation. Which THREE comparisons are MOST important to include? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Token usage per request and latency, both input/output tokens and p95 time.",
+    "Task quality on the same labeled golden set used for the current model.",
+    "Output format and schema compliance, such as the JSON parse and validation success rate.",
+    "A few manual chats in the Console to get a feel for the new model.",
+    "HTTP success rate of the new model in a staging smoke test.",
+    "Public leaderboard scores for the two models."
+   ],
+   "answer": [
+    0,
+    1,
+    2
+   ],
+   "explanations": [
+    "Correct. Tokenization and verbosity can differ between models, which changes cost and latency even at the same per-token price.",
+    "Correct. Same data, same metric is the core regression check.",
+    "Correct. A newer model can be smarter yet still break downstream parsers.",
+    "Too small and too subjective to detect regressions.",
+    "Quality regressions still return 200, so this measures availability, not quality.",
+    "Generic benchmarks don't tell you how the model does on your task and data."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI6-003",
+   "subskill": "AI.6",
+   "difficulty": 3,
+   "stem": "After switching a summarization service to a newer model with the same per-token price, monthly cost rose about 25% at unchanged request volume. Quality improved, and the prompts and `max_tokens` settings are unchanged. What is the MOST likely explanation to check first?",
+   "select": 1,
+   "options": [
+    "The new model uses more tokens for the same work (tokenizer or verbosity); compare `usage` per request across models.",
+    "The account is still being billed at the old model's rates until the next invoice cycle.",
+    "Streaming responses cost more per token than non-streaming, and the new model streams by default.",
+    "Prompt caching stays disabled after a model change until it's re-enabled in the Console, so every request is billed uncached."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Token counts can differ between model generations for identical text, and verbosity changes output tokens. Usage data will show which one it is.",
+    "The price is the same by assumption, so a billing lag wouldn't cause an increase.",
+    "Streaming doesn't change per-token pricing, and models don't switch transport on their own.",
+    "Caches are per model, so the first requests after a switch are uncached, but caching resumes on its own. It doesn't explain a sustained 25% increase."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/overview"
+  },
+  {
+   "id": "AI6-004",
+   "subskill": "AI.6",
+   "difficulty": 2,
+   "stem": "Offline evals show a new prompt plus model combination is slightly better. The service handles 2 million requests a day for paying customers. What is the BEST way to put the change into production?",
+   "select": 1,
+   "options": [
+    "Deploy to everyone at the lowest-traffic hour, and roll back if support tickets rise.",
+    "Canary it behind a flag to a small share of traffic, compare metrics with the control, then expand or roll back.",
+    "Ship it, since the offline eval already proved it's better.",
+    "Run the new version in a shadow environment for a full month, comparing outputs offline, before any user ever sees it."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A big-bang release exposes every user at once, and support tickets are a slow, lagging signal.",
+    "Correct. A staged rollout limits the impact and gives real-traffic evidence with a fast rollback.",
+    "Offline sets never cover all production inputs. Production validation is still needed.",
+    "Shadowing is useful, but a month with no user exposure stalls the rollout. A canary with clear gates is the better primary step."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI6-005",
+   "subskill": "AI.6",
+   "difficulty": 1,
+   "stem": "Which per-request log record BEST supports debugging, cost attribution and change tracking for a Claude-backed service?",
+   "select": 1,
+   "options": [
+    "Request ID, model, prompt version, input/output/cache token counts, latency, `stop_reason` and error status.",
+    "The full prompt and response text only, so any issue can be reproduced.",
+    "The HTTP status code and the timestamp of each call.",
+    "A daily total of requests and spend from the billing page."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. These fields support support tickets (request ID), cost attribution (usage), regression tracing (versions) and output health (`stop_reason`).",
+    "Without IDs, token counts, version or latency you can't attribute cost or trace changes, and full text raises privacy risk.",
+    "This catches outages but misses cost, truncation and which configuration produced an output.",
+    "Aggregates help with budgets but can't explain individual failures or regressions."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "AI6-006",
+   "subskill": "AI.6",
+   "difficulty": 2,
+   "stem": "A platform team wants token and cost metrics from every engineer's Claude Code sessions sent to the company's OpenTelemetry collector, and engineers must not be able to redirect the data elsewhere. What is the BEST way to configure this?",
+   "select": 1,
+   "options": [
+    "Set `CLAUDE_CODE_ENABLE_TELEMETRY` and the `OTEL_*` exporter and endpoint variables in the managed settings `env` block that IT deploys.",
+    "Write a cron job that parses each machine's `~/.claude` session files and uploads token counts.",
+    "Commit the `OTEL_*` variables in each repository's `.claude/settings.json` so every session in the repo exports them.",
+    "Ask engineers to export the variables in their shell profiles and audit compliance quarterly."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Managed settings apply to every user, and a managed OTLP endpoint takes precedence over endpoints developers set.",
+    "Brittle and unsupported, and it duplicates the built-in OpenTelemetry export.",
+    "Claude Code ignores telemetry exporter variables in project and local settings. A repo can only turn a signal off.",
+    "Engineers can change or remove these, so nothing enforces the configuration."
+   ],
+   "ref": "https://code.claude.com/docs/en/monitoring-usage"
+  },
+  {
+   "id": "AI6-007",
+   "subskill": "AI.6",
+   "difficulty": 2,
+   "stem": "A security reviewer asks whether turning on Claude Code's OpenTelemetry export will send developers' prompt text to the observability vendor. What is the accurate answer?",
+   "select": 1,
+   "options": [
+    "No. Only aggregate session counts are exported, never per-request token or cost data.",
+    "Yes. Prompt text is always included in exported events so sessions can be reconstructed.",
+    "Prompt text is exported only for sessions running in headless `-p` mode.",
+    "Not by default: prompts are redacted unless `OTEL_LOG_USER_PROMPTS=1` is set."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Token and cost metrics and per-request events are exported. Only the content is redacted by default.",
+    "Prompt content isn't exported by default.",
+    "Content logging doesn't depend on interactive versus headless mode.",
+    "Correct. Content logging is opt-in, so metrics and events can flow without prompt text."
+   ],
+   "ref": "https://code.claude.com/docs/en/monitoring-usage"
+  },
+  {
+   "id": "AI6-008",
+   "subskill": "AI.6",
+   "difficulty": 2,
+   "stem": "After a prompt update, a Q&A service's HTTP error rate and latency look normal, but users report shorter, less useful answers. The current dashboards didn't catch it. Which TWO monitoring additions would MOST directly catch this kind of regression? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Raise the client's `max_retries` so transient errors don't affect answers.",
+    "Extend log retention from 30 to 365 days.",
+    "Sample production requests into an automated rubric or LLM-judge evaluation, tracked by prompt version.",
+    "Add alerts on 5xx and 529 error rates with tighter thresholds.",
+    "Track the distribution of `stop_reason` (for example, the share of `max_tokens`) and output-token counts per prompt version."
+   ],
+   "answer": [
+    2,
+    4
+   ],
+   "explanations": [
+    "Retries address transient failures, not degraded content.",
+    "Longer retention helps investigations but doesn't detect anything.",
+    "Correct. Online quality scoring catches regressions that still return HTTP 200.",
+    "Availability alerts can't see a quality regression that returns 200.",
+    "Correct. Shifts in truncation or output length are cheap, early signals of behavior change."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "AI6-009",
+   "subskill": "AI.6",
+   "difficulty": 1,
+   "stem": "Right after a deploy, many API responses in a report generator end mid-sentence. Logs show `stop_reason: \"max_tokens\"` on those responses. What is the MOST likely cause?",
+   "select": 1,
+   "options": [
+    "The API is overloaded and is cutting responses short to shed load, so the client should retry those requests with backoff.",
+    "The output budget is too small for the new responses; raise `max_tokens` or request more concise output.",
+    "A safety classifier stopped the output. Rephrase the prompt.",
+    "A stop sequence in the prompt is matching. Remove the stop sequences."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Overload returns 529 errors, not successful responses with `max_tokens`.",
+    "Correct. `max_tokens` as the stop reason means generation hit the configured cap.",
+    "That would show as a refusal stop reason, not `max_tokens`.",
+    "A stop-sequence match reports `stop_sequence`, not `max_tokens`."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/messages/create"
+  },
+  {
+   "id": "AI6-010",
+   "subskill": "AI.6",
+   "difficulty": 1,
+   "stem": "A small number of production requests fail with intermittent 500 errors, and the team wants Anthropic support to investigate. What is the MOST useful information to include in the ticket?",
+   "select": 1,
+   "options": [
+    "The full application source code that builds the requests.",
+    "The organization's API key, so support can replay the failing requests.",
+    "The `request_id` values of the failing calls, with timestamps and the error responses.",
+    "A screenshot of the team's dashboard showing the error-rate spike."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Usually unnecessary and not the fastest way to locate a server-side failure.",
+    "Never share API keys. Support doesn't need them to investigate.",
+    "Correct. The request ID (in the `request-id` header and error bodies) lets support find the exact requests.",
+    "Helpful context, but support can't find specific requests from it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "AI6-011",
+   "subskill": "AI.6",
+   "difficulty": 3,
+   "stem": "After migrating to a newer model, regression evals show better reasoning, but the assistant now over-applies certain rules, refusing harmless edge cases and adding unrequested warnings. The prompt, written for an older model, contains many lines like 'CRITICAL: you MUST ALWAYS...'. What should the team do?",
+   "select": 1,
+   "options": [
+    "Roll back permanently. The newer model is less reliable for this use case.",
+    "Add more emphatic instructions, also in capitals, explicitly telling the model not to over-apply the rules in edge cases.",
+    "Re-baseline the prompt: remove the shouted legacy workarounds, state rules plainly, and re-run the evals.",
+    "Switch to a lower-capability tier, which is less sensitive to emphatic prompts."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The evals show gains elsewhere. Adjust the prompt before giving up on the migration.",
+    "Piling on emphasis tends to make overtriggering worse with models that follow instructions closely.",
+    "Correct. Newer models follow instructions more precisely, so aggressive legacy wording can cause overtriggering. Prompts need maintenance as part of migration.",
+    "This gives up quality instead of fixing the cause in the prompt."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+  }
+ ]
+}
