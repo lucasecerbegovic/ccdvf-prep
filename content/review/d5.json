@@ -1,0 +1,23 @@
+{
+ "reviewed": 47,
+ "findings": [
+  {
+   "id": "D5-3-008",
+   "file": "content/new/d5.json",
+   "class": "weak",
+   "problem": "Keyed option told the agent the refund 'was not issued' and 'a retry is safe' after a processor timeout, where the outcome is actually unknown; this contradicts the stem's own option C explanation about duplicate refunds if an earlier call went through.",
+   "evidence_url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+   "evidence": "Tool failures should be returned as tool_result with is_error: true describing the error; a timeout leaves the remote state unknown, so the result must report 'not confirmed' rather than 'not issued'.",
+   "fix": "Reworded option B to 'could not be confirmed because the processor timed out, and whether a retry is safe (e.g. same idempotency key)'; explanation updated to 'failure or unknown'."
+  },
+  {
+   "id": "D5-6-001",
+   "file": "content/new/d5.json",
+   "class": "bad_fact",
+   "problem": "Explanation claimed provenance rebuilt after synthesis 'produces misattributions' in general, but the cited Anthropic research system itself adds citations post-hoc with a CitationAgent.",
+   "evidence_url": "https://www.anthropic.com/engineering/multi-agent-research-system",
+   "evidence": "The system 'passes all findings to a CitationAgent' which identifies citation locations after the report is written.",
+   "fix": "Softened explanation: misattributions here come from matching sentences back to sources after the subagents' prose summaries paraphrased them; key unchanged."
+  }
+ ]
+}

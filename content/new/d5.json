@@ -825,7 +825,7 @@
       "select": 1,
       "options": [
         "Add a line to the system prompt telling the agent never to confirm a refund to the customer until a later lookup shows the refund on the account.",
-        "Have the wrapper return an `is_error` result stating the refund was not issued, the failure is transient, and a retry is safe.",
+        "Have the wrapper return an `is_error` result saying the refund could not be confirmed because the processor timed out, and whether a retry is safe (for example, with the same idempotency key).",
         "Retry the processor call indefinitely inside the wrapper until it finally succeeds.",
         "Have a nightly job reconcile refunds against the processor and email any affected customers."
       ],
@@ -834,7 +834,7 @@
       ],
       "explanations": [
         "The agent can't check something its tool misreports. The false success comes from the wrapper.",
-        "Correct. A structured error with the true state lets the agent retry within limits, tell the customer the truth, or escalate. Never return success on failure.",
+        "Correct. A structured error with the true state stops the false confirmation and lets the agent retry safely within limits, tell the customer the truth, or escalate. Never return success when the outcome is a failure or unknown.",
         "Unbounded retries can hang the conversation and risk duplicate refunds if an earlier call actually went through.",
         "Reconciliation is a useful backstop but leaves customers misinformed for hours. Fix the reporting at the source."
       ],
@@ -1226,7 +1226,7 @@
         0
       ],
       "explanations": [
-        "Correct. Provenance kept from the moment of extraction is reliable. Provenance rebuilt after the sources have been paraphrased away produces misattributions.",
+        "Correct. Provenance captured at the moment of extraction travels with each claim. Matching sentences back to sources after the subagents' prose summaries have paraphrased them is where these misattributions come from.",
         "A verification pass may catch some bad citations, but it treats the symptom and drops claims that were true but lost their link.",
         "Confidence filtering doesn't restore the claim-to-source link that the prose summaries destroyed.",
         "A bibliography says what was read, not which source supports which claim."

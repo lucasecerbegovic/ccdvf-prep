@@ -74,6 +74,7 @@ for path in SOURCES:
         if l.get("subskill") in TW: lessons[l["subskill"]] = l
         else: warnings.append(f"{name}: lesson for unknown task {l.get('subskill')}")
     for q in d.get("questions", []):
+        if q.get("retired"): continue
         qid = q.get("id"); p = f"{name}:{qid}"; ok = True
         if q.get("subskill") not in TW: errors.append(f"{p} bad task code {q.get('subskill')}"); ok = False
         if q.get("scenario") not in SC: errors.append(f"{p} bad scenario {q.get('scenario')}"); ok = False

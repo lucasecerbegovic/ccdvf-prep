@@ -569,22 +569,22 @@
    "id": "AW3-006",
    "subskill": "D1.2",
    "difficulty": 1,
-   "stem": "A publisher translates literary essays. Editors have a clear rubric (fidelity, tone, idiom), and in tests, a critique-then-revise cycle consistently improves the translation over one pass. Which pattern is MOST appropriate?",
+   "stem": "In the research system, a `brief-writer` subagent turns each finished report into a two-page executive brief. Editors grade briefs against a written rubric (faithful to the report, neutral tone, plain language). In a pilot, briefs that got specific rubric-based critique and one or two rewrites scored clearly higher than first drafts. Which pattern should the architect build into this step?",
    "select": 1,
    "options": [
-    "Parallelization (voting) across several translators, picking the longest output",
-    "Routing between a fast and a slow translation model",
-    "Evaluator-optimizer, with a capped number of critique-and-revise iterations",
-    "An autonomous agent with web search to look up idioms"
+    "Parallelization (sectioning): have separate subagents write each section of the brief, then concatenate them",
+    "Routing: send short reports to a fast model and long reports to a more capable one",
+    "Evaluator-optimizer: an evaluator critiques each draft against the rubric, with capped revisions",
+    "An autonomous agent with web search that gathers extra sources to strengthen each brief"
    ],
    "answer": [
     2
    ],
    "explanations": [
-    "Voting selects among attempts but gives no feedback to improve one, and length is a poor proxy for quality.",
-    "Routing does not provide iterative critique and revision.",
-    "Correct. Clear criteria plus demonstrated gains from feedback are the conditions where evaluator-optimizer works; literary translation is Anthropic's own example.",
-    "Open-ended autonomy adds cost and unpredictability; the task has a clear iterative structure."
+    "Sectioning speeds up independent parts but gives no feedback loop, and separately written sections tend to read unevenly.",
+    "Routing picks a handler per input; it provides no critique-and-revise cycle, which is what the pilot showed adds value.",
+    "Correct. Anthropic names the conditions for evaluator-optimizer: clear evaluation criteria and iterative refinement that provides measurable value. Both hold here; capping revisions keeps cost bounded.",
+    "The brief must be faithful to the finished report; new outside sources add cost and risk content the report doesn't support."
    ],
    "ref": "https://www.anthropic.com/engineering/building-effective-agents",
    "scenario": "S3"

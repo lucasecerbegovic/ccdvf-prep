@@ -1,0 +1,32 @@
+{
+ "reviewed": 49,
+ "findings": [
+  {
+   "id": "D4-2-008",
+   "file": "content/new/d4.json",
+   "class": "bad_fact",
+   "problem": "Stem shows `--json-schema review.json`, but the flag takes the schema as an inline JSON string, not a file path.",
+   "evidence_url": "https://code.claude.com/docs/en/cli-reference",
+   "evidence": "--json-schema row: example `claude -p --json-schema '{\"type\":\"object\",\"properties\":{...}}' \"query\"` (takes an inline JSON Schema string, not a file path)",
+   "fix": "Stem now uses `--json-schema \"$(cat review.json)\"`."
+  },
+  {
+   "id": "D4-4-008",
+   "file": "content/new/d4.json",
+   "class": "bad_fact",
+   "problem": "Stem shows `--json-schema fix-plan.json`; the flag takes inline JSON, not a file path.",
+   "evidence_url": "https://code.claude.com/docs/en/cli-reference",
+   "evidence": "--json-schema row: example `claude -p --json-schema '{\"type\":\"object\",\"properties\":{...}}' \"query\"` (takes an inline JSON Schema string, not a file path)",
+   "fix": "Stem now uses `--json-schema \"$(cat fix-plan.json)\"`."
+  },
+  {
+   "id": "D4-4-007",
+   "file": "content/new/d4.json",
+   "class": "weak",
+   "problem": "Options C and D were near-duplicates (both 'remove source_ids and let readers check the bibliography'), and C's explanation talked about same-context self-review, which the option did not describe.",
+   "evidence_url": "https://code.claude.com/docs/en/best-practices",
+   "evidence": "A fresh reviewer helps 'because it hasn't seen your reasoning'; /code-review runs 'in a fresh subagent that never saw your conversation'. This supports the existing explanation that same-context self-review is weak.",
+   "fix": "Option C was rewritten as a same-context self-check of its own citations, so it matches the existing explanation. The key (A) is unchanged."
+  }
+ ]
+}

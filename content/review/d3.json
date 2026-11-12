@@ -1,0 +1,14 @@
+{
+  "reviewed": 53,
+  "findings": [
+    {
+      "id": "D3-4-002",
+      "file": "content/new/d3.json",
+      "class": "bad_fact",
+      "problem": "Explanation for option B claimed 'in default mode nothing structurally blocks edits'; default (manual) mode prompts before every file edit. Key (plan mode) is still correct.",
+      "evidence_url": "https://code.claude.com/docs/en/permission-modes",
+      "evidence": "Mode table: `default` \u2014 What runs without asking: 'Reads only'; plan mode: 'Claude Code blocks edits until you approve a plan'.",
+      "fix": "Rewrote option B's explanation: default mode does prompt per edit, but 'wait for my OK' is only a request and leads to approving edits one by one rather than reviewing one agreed approach; plan mode blocks edits until a plan is approved."
+    }
+  ]
+}

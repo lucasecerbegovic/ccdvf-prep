@@ -1,0 +1,23 @@
+{
+  "reviewed": 46,
+  "findings": [
+    {
+      "id": "D2-2-002",
+      "file": "content/new/d2.json",
+      "class": "bad_fact",
+      "problem": "Explanation for option D (JSON-RPC -32602) claimed protocol errors 'caused the blind retries', but the stem's tool already returned isError:true; the real point is that the MCP spec puts out-of-range/business errors in tool execution errors.",
+      "evidence_url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
+      "evidence": "Tool Execution Errors (isError: true) cover 'Input validation errors (e.g., ... value out of range)' and 'Business logic errors'; 'Clients MAY provide protocol errors to language models'.",
+      "fix": "Rewrote explanation[3] to state the spec's split between protocol and tool execution errors."
+    },
+    {
+      "id": "D2-5-003",
+      "file": "content/new/d2.json",
+      "class": "bad_fact",
+      "problem": "Stem said Grep with `interface{}` 'returns no matches'; ripgrep rejects that pattern and current Claude Code returns an error with ripgrep's diagnostic (only pre-v2.1.208 reported 'No files found').",
+      "evidence_url": "https://code.claude.com/docs/en/tools-reference",
+      "evidence": "'A pattern ... that ripgrep rejects returns an error that includes ripgrep's diagnostic ... Before v2.1.208, Claude Code reported a rejected input as No files found'. Local rg test: 'repetition quantifier expects a valid decimal'.",
+      "fix": "Stem now says the call 'does not return those files'; correct-option explanation notes ripgrep rejects the unescaped pattern."
+    }
+  ]
+}

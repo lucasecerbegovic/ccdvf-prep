@@ -894,7 +894,7 @@
       ],
       "explanations": [
         "Fast, but it commits to an undecided design across dozens of files before anyone has reviewed the approach.",
-        "A prompt request isn't a guarantee: in default mode nothing structurally blocks edits. Plan mode does.",
+        "Default mode does prompt before each edit, but 'wait for my OK' is only a request: the developer ends up approving or rejecting edits one by one instead of reviewing one agreed approach. Plan mode blocks edits until a plan is approved.",
         "Correct. Large, ambiguous, multi-file changes are what plan mode is for: Claude explores and proposes, and edits stay blocked until the plan is approved.",
         "Settling the core design piecemeal is how inconsistent implementations and rework happen in cross-cutting changes."
       ],

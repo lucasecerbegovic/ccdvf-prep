@@ -1,0 +1,14 @@
+{
+  "reviewed": 56,
+  "findings": [
+    {
+      "id": "AW3-006",
+      "file": "content/retag/part4_aw.json",
+      "class": "weak",
+      "problem": "Tagged S3 (Multi-Agent Research System) but the stem was about a publisher translating literary essays, so it didn't fit the scenario. The stem also restated the textbook evaluator-optimizer conditions almost word for word, using Anthropic's own literary-translation example. The 'picking the longest output' distractor was not a plausible choice.",
+      "evidence_url": "https://www.anthropic.com/engineering/building-effective-agents",
+      "evidence": "Evaluator-optimizer 'is particularly effective when we have clear evaluation criteria, and when iterative refinement provides measurable value.' Parallelization variants: sectioning (independent subtasks in parallel) and voting.",
+      "fix": "Rewrote the stem inside S3: a brief-writer subagent, an editor rubric and a pilot showing critique-and-revise gains. Replaced the voting distractor with sectioning and the web-search distractor with a gather-more-sources agent, and rewrote the explanations. The key is still index 2. The correct option is no longer the longest."
+    }
+  ]
+}

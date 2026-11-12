@@ -351,7 +351,7 @@
         "A bare `refunded: false` success carries no reason, so the agent still cannot explain the outcome or choose the escalation path.",
         "Silently changing the business outcome without the customer's or a human's agreement is a policy violation dressed up as success.",
         "Correct. A business-rule error marked non-retryable, with the limit and the escalation path, stops the retries and tells the agent exactly what to do.",
-        "Protocol errors are for malformed requests and unknown tools; clients typically surface them generically, which is what caused the blind retries."
+        "The MCP spec reports out-of-range values and business-rule failures as tool execution errors (`isError: true`); protocol errors are for unknown tools and malformed requests, and clients may not pass them to the model at all."
       ],
       "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
     },
@@ -1046,7 +1046,7 @@
       "subskill": "D2.5",
       "scenario": "S2",
       "difficulty": 2,
-      "stem": "In a Go service, a developer asks Claude Code to find every function that takes an empty-interface parameter. Claude's Grep call with pattern `interface{}` returns no matches, but the developer knows several committed, non-ignored files contain that text. What is the MOST likely reason?",
+      "stem": "In a Go service, a developer asks Claude Code to find every function that takes an empty-interface parameter. Claude's Grep call with pattern `interface{}` does not return those files, although the developer knows several committed, non-ignored files contain that text. What is the MOST likely reason?",
       "select": 1,
       "options": [
         "Grep skips files with a `.go` extension unless a `type` filter is set explicitly",
@@ -1061,7 +1061,7 @@
         "Grep searches all non-ignored files by default; `type` and `glob` are optional filters.",
         "This reverses the tools: Grep searches contents and Glob matches paths.",
         "Grep does skip gitignored files, but the stem says the files are committed and not ignored.",
-        "Correct. Grep is built on ripgrep, so regex metacharacters in the pattern must be escaped."
+        "Correct. Grep is built on ripgrep, so regex metacharacters in the pattern must be escaped; unescaped, ripgrep rejects `interface{}` as an invalid repetition instead of matching the literal text."
       ],
       "ref": "https://code.claude.com/docs/en/tools-reference"
     },

@@ -668,7 +668,7 @@
    "subskill": "D4.2",
    "scenario": "S5",
    "difficulty": 3,
-   "stem": "The CI review job already runs `claude -p --json-schema review.json`, so every result is valid JSON with `file`, `line`, `severity` and `body` fields. The problem is the `body` text: some comments state the problem and a concrete fix, others are vague (\"consider improving this\"), and some restate the code. Reviewers want every comment to say what breaks, when, and what to change. What is the BEST fix?",
+   "stem": "The CI review job already runs `claude -p --json-schema \"$(cat review.json)\"`, so every result is valid JSON with `file`, `line`, `severity` and `body` fields. The problem is the `body` text: some comments state the problem and a concrete fix, others are vague (\"consider improving this\"), and some restate the code. Reviewers want every comment to say what breaks, when, and what to change. What is the BEST fix?",
    "select": 1,
    "options": [
     "Add 3–4 example findings whose `body` shows the problem → trigger → fix pattern, across different issue types",
@@ -916,7 +916,7 @@
    "options": [
     "In the coordinator's code, check each cited ID against the findings set; on failure re-prompt with the invalid and valid IDs, then drop or flag claims still unsupported",
     "Add \"Only cite source IDs that appear in the findings you were given\" to the synthesis prompt",
-    "Remove `source_ids` from the structured output entirely and instead let readers check each claim against the bibliography at the end of the published report",
+    "Before returning, have the synthesis subagent re-check its own citations in the same conversation and correct any IDs it judges to be wrong",
     "Remove `source_ids` from the output and let readers check the claims against the bibliography"
    ],
    "answer": [
@@ -935,7 +935,7 @@
    "subskill": "D4.4",
    "scenario": "S5",
    "difficulty": 2,
-   "stem": "A CI job runs `claude -p --json-schema fix-plan.json` to produce a plan of file edits for a failing build, and a later step applies the plan. The JSON always matches the schema, but sometimes the plan lists a file path that does not exist in the repo, and the apply step crashes. What should the pipeline do?",
+   "stem": "A CI job runs `claude -p --json-schema \"$(cat fix-plan.json)\"` to produce a plan of file edits for a failing build, and a later step applies the plan. The JSON always matches the schema, but sometimes the plan lists a file path that does not exist in the repo, and the apply step crashes. What should the pipeline do?",
    "select": 1,
    "options": [
     "Increase `--max-turns` so Claude has more turns to explore the repository with Read, Grep and Glob before it writes out the final plan of file edits",
