@@ -1,0 +1,1418 @@
+{
+  "lessons": [
+    {
+      "subskill": "D5.1",
+      "title": "Context across long conversations",
+      "summary": "Long conversations and long agent runs lose information in predictable ways: summaries paraphrase away exact numbers and dates, verbose tool output crowds out what matters, and details buried in the middle of a long context get less attention. The exam tests whether you keep critical facts in a durable, structured place instead of trusting the transcript to carry them.",
+      "keyPoints": [
+        "Context is a **finite attention budget**. Recall of any one detail degrades as total tokens grow (**context rot**), even well below the window limit. A bigger window is not a fix.",
+        "**Progressive summarisation is lossy.** Compaction keeps the gist but turns `$46.80 refund for order #A-1182, promised by Friday` into 'a partial refund was discussed'. Exact amounts, IDs, dates and commitments are what gets lost first.",
+        "Keep a **persistent case-facts block**: a structured record (customer ID, verified identity, order IDs, amounts, dates, promises made, decisions taken) that your code updates from tool results and injects on every turn, **outside** the history that gets summarised.",
+        "**Trim tool output at the source.** Tools should return the fields the agent needs, keyed by ID, with parameters for more detail. Raw payloads cost tokens on every later turn and bury the relevant values.",
+        "**Position matters in long inputs.** Put long documents at the top and the question and instructions at the end; wrap documents in tags with source metadata. Information in the middle of a very long context is the most likely to be missed, so split very long inputs into sections and process each one.",
+        "In Claude Code and the Agent SDK, **auto-compaction** may drop instructions from early in the conversation. Put persistent rules in **CLAUDE.md** (re-injected on every request), not in the first prompt.",
+        "Steer what compaction keeps with a summary-instructions section in CLAUDE.md or `/compact <focus>`. A `PreCompact` hook can archive the full transcript before it is summarised.",
+        "Subagents return only their final message, so delegating noisy work keeps the parent's history short. Ask them for **condensed, structured** results.",
+        "For work that spans days, persist state externally (a store or notes file) and start a fresh session that loads it, rather than dragging one huge, stale transcript forward."
+      ],
+      "traps": [
+        "Treating a larger context window as the cure. It delays the problem and makes the middle of the context easier to miss.",
+        "Telling the summariser to 'be accurate' instead of moving exact facts into a structured block that is never summarised.",
+        "Putting a durable rule in the opening prompt of a long session and expecting it to survive compaction.",
+        "Asking the model to ignore irrelevant fields in a huge tool result. The tokens are still in context; filter in the tool.",
+        "Letting the model maintain the facts block by free-text rewriting. Update it in code from tool results so values are copied, not paraphrased."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "case_facts = {\n    \"customer_id\": \"C-20931\", \"identity_verified\": True,\n    \"orders\": {\"A-1182\": {\"total\": \"46.80\", \"status\": \"delivered_damaged\"}},\n    \"commitments\": [\"Refund 46.80 to original card for A-1182\"],\n}\n# Rebuilt by code after every tool call, injected each turn,\n# never passed through the summariser.\nsystem = BASE_PROMPT + \"\\n<case_facts>\\n\" + json.dumps(case_facts) + \"\\n</case_facts>\""
+      },
+      "docs": [
+        {
+          "title": "Effective context engineering for AI agents",
+          "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+        },
+        {
+          "title": "How the agent loop works (context window, compaction)",
+          "url": "https://code.claude.com/docs/en/agent-sdk/agent-loop"
+        },
+        {
+          "title": "How Claude Code works: the context window",
+          "url": "https://code.claude.com/docs/en/how-claude-code-works"
+        },
+        {
+          "title": "Prompting best practices: long context",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+        }
+      ],
+      "drill": "Take a 30-turn support transcript that includes three order IDs, two amounts and a promised date. Summarise turns 1 to 20 with a plain 'summarise this conversation' prompt and list which exact values survived. Then add a case-facts dict that your code updates from tool results and injects each turn, rerun, and check that every value reaches turn 30 unchanged."
+    },
+    {
+      "subskill": "D5.2",
+      "title": "Escalation and ambiguity",
+      "summary": "A reliable agent knows when to stop acting on its own. The exam tests the escalation triggers that hold up in production (an explicit request for a human, a policy gap, or no progress) against tempting ones that don't (sentiment, self-reported confidence), and whether the agent asks a clarifying question instead of guessing when the input is ambiguous.",
+      "keyPoints": [
+        "**Escalate when:** the customer explicitly asks for a human; the request falls in a **policy gap** or needs an exception the agent isn't authorised to make; or the agent **cannot make progress** (repeated tool failures, required information unavailable after asking).",
+        "**Honour an explicit request for a human immediately.** Don't try one more fix first or argue the customer out of it. Hand off with a summary.",
+        "**Sentiment is not a trigger by itself.** An angry customer with a solvable, in-policy issue should get the issue solved, with a human offered if they ask. Escalating on tone sends easy tickets to humans and keeps hard, calm ones.",
+        "**Self-reported confidence is poorly calibrated.** 'Escalate if confidence < 0.7' rests on a number the model makes up. Use explicit, observable criteria and check them against labelled transcripts.",
+        "**Ambiguity means ask, don't guess.** When a lookup returns several matching customers, or a request could refer to several targets, ask for a distinguishing identifier. Acting on the wrong account is worse than one extra question.",
+        "Write escalation criteria into the prompt **with examples of borderline cases** (few-shot), and enforce hard limits such as refund caps in code or hooks so they can't be talked past.",
+        "**Escalation handoff = structured summary**: customer and verified identity, the issue, what was tried, facts established, why it is being escalated, and a recommended next step. The human usually doesn't read the transcript.",
+        "In a non-interactive run (CI, batch) there is nobody to ask. Make 'needs a human decision' a **first-class output** (a status field, a label, a comment) instead of letting the agent pick an interpretation.",
+        "For a coordinator, a cheap clarifying question about scope **before** fanning out to subagents saves the cost of researching the wrong question."
+      ],
+      "traps": [
+        "Auto-escalating on negative sentiment or caps-lock while calm customers with real policy gaps stay with the bot.",
+        "Thresholding on the model's own confidence score as the escalation trigger.",
+        "Picking the 'most likely' customer record (most recent, most active) when several match.",
+        "Trying to resolve the issue one more time after the customer has asked for a person.",
+        "Escalating with 'customer needs help, see transcript' instead of a structured handoff."
+      ],
+      "code": {
+        "lang": "markdown",
+        "src": "## When to hand off (call escalate_to_human)\n- The customer asks for a person, in any wording. Do it now.\n- The request needs something policy does not cover\n  (e.g. price matching, refunds on final-sale items).\n- Two tool attempts have failed, or you still lack required\n  information after asking once.\nDo NOT escalate only because the customer is upset.\nIf a lookup returns more than one customer, ask for the\norder number or account email before doing anything else."
+      },
+      "docs": [
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        },
+        {
+          "title": "Prompting best practices",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+        },
+        {
+          "title": "Run Claude Code programmatically",
+          "url": "https://code.claude.com/docs/en/headless"
+        }
+      ],
+      "drill": "Write ten short support openers: two explicit human requests, two angry-but-in-policy, two policy gaps, two ambiguous customer lookups, two routine. Write an escalation section for a support system prompt, run all ten, and count how many land on the correct action (resolve, ask, or escalate). Rewrite until sentiment alone never triggers a handoff."
+    },
+    {
+      "subskill": "D5.3",
+      "title": "Error propagation",
+      "summary": "In multi-step and multi-agent systems, how a failure is reported decides whether the final answer is honest. The exam tests whether subagents and tools return structured error context the coordinator can act on, whether the design tells 'could not check' apart from 'checked and found nothing', and whether one failure leads to a partial, clearly labelled result rather than a silent gap or a total abort.",
+      "keyPoints": [
+        "A subagent's result should carry a **status** (complete / partial / failed), **what was attempted** (queries, sources, tools), the **error category** (transient, permission/access, not found, invalid input), **partial results**, and **suggested alternatives**. The coordinator then chooses to retry, reroute, or proceed with the gap marked.",
+        "**'Access failed' is not 'no results'.** A timed-out search returned as an empty list becomes 'no evidence exists' in the final report. Make the two cases different in the schema.",
+        "**Never swallow errors into an empty success.** `[]`, `null` or 'nothing found' on failure silently turns into false negatives downstream.",
+        "**Don't abort everything on one failure.** Continue with the remaining work and report coverage: what was done, what failed, what is unknown.",
+        "**Recover locally first.** The component closest to the error retries transient failures with a bound and backs off. It passes up only what it can't resolve, with context.",
+        "MCP: **tool execution errors** (API failures, invalid data, business-rule errors) go in the tool result with `isError: true` so the model sees them and can adapt; **protocol errors** (unknown tool, bad arguments) are JSON-RPC errors. In the Messages API the equivalent is `is_error: true` on the `tool_result`.",
+        "Agent SDK / `claude -p`: check the result **`subtype`** (`success`, `error_max_turns`, `error_max_budget_usd`, `error_during_execution`, ...) before reading `result`. `claude -p` exits non-zero on failure, and `structured_output` is absent when no valid output was produced, so check that it is present.",
+        "Long-running multi-agent systems should **resume from a checkpoint** where the error happened rather than restart, and tell the agent when a tool is failing so it can adapt (Anthropic's research-system write-up).",
+        "In extraction pipelines, keep a per-document **processing status** separate from field values: `null` should mean 'not in the document', never 'couldn't read the document'."
+      ],
+      "traps": [
+        "Returning 'No relevant sources found' when the search tool timed out.",
+        "Aborting a 20-subagent research run because one source was paywalled.",
+        "Dumping a raw stack trace or full transcript to the coordinator instead of a structured, actionable summary.",
+        "Writing `jq '.structured_output.findings // []'`, which turns a failed run into 'no findings'.",
+        "Putting all retry logic in the coordinator so a transient blip reruns an entire subagent."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"subquestion\": \"2024 EU grid-storage deployments\",\n  \"status\": \"partial\",\n  \"results\": [{\"claim\": \"...\", \"source_id\": \"S3\"}],\n  \"errors\": [{\n    \"source\": \"iea.org statistics API\",\n    \"category\": \"access_failed\",\n    \"retryable\": true,\n    \"attempted\": \"3 tries over 40s, HTTP 503\"\n  }],\n  \"not_covered\": [\"Q4 2024 figures\"],\n  \"alternatives\": [\"ENTSO-E transparency platform\"]\n}"
+      },
+      "docs": [
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        },
+        {
+          "title": "MCP specification: Tools (error handling)",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+        },
+        {
+          "title": "How the agent loop works (handle the result)",
+          "url": "https://code.claude.com/docs/en/agent-sdk/agent-loop"
+        },
+        {
+          "title": "Run Claude Code programmatically",
+          "url": "https://code.claude.com/docs/en/headless"
+        }
+      ],
+      "drill": "Build a two-subagent research script where one subagent's search tool randomly times out. Version 1 returns an empty list on timeout; version 2 returns the structured status above. Run each ten times and compare the final reports: count how often version 1 claims something 'does not exist' and confirm that version 2 always lists the gap."
+    },
+    {
+      "subskill": "D5.4",
+      "title": "Large codebase context",
+      "summary": "On a large repository you can't load everything, so the exam tests how you pull in the right slice: search first and then read only the targeted files, isolate exploration in subagents, carry state across context boundaries in files, and use `/clear` and `/compact` at the right moments.",
+      "keyPoints": [
+        "**Just-in-time retrieval**: CLAUDE.md loads up front, and Claude finds the rest with **Grep** (content search) and **Glob** (path patterns), then **Read**s only the files that matched. Paths are cheap references; file contents are expensive.",
+        "Delegate broad discovery to a **subagent** (for example the built-in Explore agent). Its searches and reads stay in its own context, and the main session receives a summary.",
+        "**`/clear`** between unrelated tasks. **`/compact <focus>`** to continue the same task with less history. A summary-instructions section in CLAUDE.md steers auto-compaction.",
+        "For work that spans sessions or people, keep a **notes or progress file** (checklist of migrated files, decisions, open questions) that Claude updates as it goes and reads at the start of each session.",
+        "**Summarise before changing phase**: when investigation ends, have Claude write findings (files involved, constraints, decisions) to a file, then start the implementation in a fresh context that references it.",
+        "Don't pull huge artifacts into context. Use `grep`, `head` or `tail` on a large log, or delegate the analysis. If one output is so big that context refills after every summary, Claude Code stops auto-compacting and reports an error instead of looping.",
+        "Run **`/context`** to see what is using the window. MCP tool definitions are deferred by default via tool search, and skills load their full content only when used.",
+        "Sessions start fresh. Durable conventions belong in CLAUDE.md; one-off investigation output does not."
+      ],
+      "traps": [
+        "'Read every file under src/ first so Claude has the full picture.'",
+        "Keeping one session running for days so Claude 'remembers everything', instead of a notes file and fresh sessions.",
+        "Using `/compact` between unrelated tasks (keeps irrelevant history) or `/clear` mid-task (throws away decisions you need).",
+        "Pasting or catting a multi-megabyte log into the conversation.",
+        "Putting investigation logs into CLAUDE.md, which then loads into every future session."
+      ],
+      "code": {
+        "lang": "markdown",
+        "src": "# MIGRATION.md  (Claude updates this; read it first each session)\n## Decisions\n- New client: `httpx.AsyncClient`, one per service, in `core/http.py`\n- Timeouts come from `settings.HTTP_TIMEOUT_S`, never hard-coded\n## Progress (142 / 410 files)\n- [x] services/billing/**\n- [ ] services/search/**  (blocked: custom retry wrapper, ask Priya)\n## Next\n- services/notifications/*.py"
+      },
+      "docs": [
+        {
+          "title": "How Claude Code works: the context window",
+          "url": "https://code.claude.com/docs/en/how-claude-code-works"
+        },
+        {
+          "title": "Best practices for Claude Code",
+          "url": "https://code.claude.com/docs/en/best-practices"
+        },
+        {
+          "title": "Subagents",
+          "url": "https://code.claude.com/docs/en/sub-agents"
+        },
+        {
+          "title": "Effective context engineering for AI agents",
+          "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+        }
+      ],
+      "drill": "In a repo you don't know well, ask Claude Code to find every caller of one function and explain the call graph, first directly and then delegated to a subagent. Compare `/context` after each. Then ask it to write the findings to NOTES.md, run `/clear`, and check that a fresh prompt can continue from the notes alone."
+    },
+    {
+      "subskill": "D5.5",
+      "title": "Human review and confidence",
+      "summary": "Production extraction and classification systems decide which outputs a person checks. The exam tests calibrating confidence against labelled data rather than trusting raw model scores, routing at field level, breaking accuracy down by segment, and sampling the auto-accepted 'confident' outputs so silent errors are caught.",
+      "keyPoints": [
+        "**Raw model confidence is not calibrated.** Whether a score is self-reported or from a classifier, measure what accuracy each score band actually delivers on a **labelled validation set**, then set thresholds from that.",
+        "**Field-level, not document-level.** One invoice can have a certain vendor name and an uncertain total. Route the uncertain **fields** to review, with stricter thresholds for high-impact fields (amounts, dates, legal terms).",
+        "**Aggregate accuracy hides segment failures.** 97% overall can be 99% on typed invoices and 70% on handwritten forms. Report accuracy per document type, source, layout and field before deciding how much review to remove.",
+        "**Stratified random sampling** of auto-accepted, high-confidence outputs, across document types, vendors and fields, measures the error rate you can't otherwise see and catches drift.",
+        "**Deterministic signals route too.** Schema or validation failures, stated vs computed total mismatches, and missing required fields should send an item to review whatever its confidence.",
+        "Prioritise the human queue by **risk and impact** (amount, customer tier, legal exposure), not just arrival order.",
+        "**Close the loop**: reviewer corrections become labelled data for recalibrating thresholds, building few-shot examples and spotting new failure segments.",
+        "Reduce review **gradually and per segment** as evidence builds; keep a sampling floor even for segments that look good.",
+        "For agent outputs (code fixes, research claims), observable evidence such as tests passing, independent corroborating sources and historical acceptance rates beats the agent's own 'I'm confident'."
+      ],
+      "traps": [
+        "Setting 'auto-accept if confidence ≥ 0.8' without checking what 0.8 means on labelled data.",
+        "Dropping human review because overall accuracy is high, without a per-segment breakdown.",
+        "Reviewing only low-confidence items, so confidently wrong outputs are never seen.",
+        "Routing on a document-level average confidence that a single bad field barely moves.",
+        "Asking the model to re-rate its own confidence as the 'calibration' step."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "# thresholds learned from 1,200 labelled invoices, per field\nTHRESH = {\"vendor_name\": 0.70, \"invoice_date\": 0.85, \"total\": 0.95}\n\ndef route(doc):\n    if doc.validation_errors or doc.stated_total != sum(doc.lines):\n        return \"review\", \"validation\"\n    low = [f for f, c in doc.confidence.items() if c < THRESH[f]]\n    if low:\n        return \"review\", low          # only these fields shown to reviewer\n    if sampler.pick(stratum=(doc.doc_type, doc.vendor_tier), rate=0.03):\n        return \"review\", \"audit_sample\"\n    return \"accept\", None"
+      },
+      "docs": [
+        {
+          "title": "Define success criteria and build evaluations",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+        },
+        {
+          "title": "Reduce hallucinations",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+        },
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        }
+      ],
+      "drill": "Label 50 extracted documents by hand across at least three document types. Bucket the model's field confidences (0.5-0.7, 0.7-0.9, 0.9+) and compute the real accuracy per bucket and per document type. Write down the threshold you would pick for each field, and how many items a 5% stratified audit sample would send to review each day at your volume."
+    },
+    {
+      "subskill": "D5.6",
+      "title": "Information provenance",
+      "summary": "When information passes through several agents and summaries, the link between a claim and its source breaks easily. The exam tests carrying claim-to-source mappings as structured data through every step, keeping dates and publication details so conflicts can be explained, and surfacing conflicting sources instead of quietly choosing one.",
+      "keyPoints": [
+        "Represent findings as **structured claims**: claim text, source ID or URL, a locator (page, section, quote), publication date and source type. Every handoff (subagent → coordinator → synthesis) passes this structure, not free prose.",
+        "**Prose summaries strip provenance.** Re-attaching citations after synthesis by searching for supporting text produces misattributions. Preserve the mapping instead of rebuilding it.",
+        "**Conflicts are information.** When sources disagree, report both values with their source, date and method, and explain the likely cause (different years, definitions, samples). If you apply a rule such as 'prefer the most recent primary source', say so.",
+        "**Dates matter**: a 2021 figure and a 2025 figure may both be right. Without publication dates the synthesis can't tell an update from a contradiction.",
+        "**Ground answers in quotes**: extract verbatim supporting quotes first, then answer only from them, and retract claims that have no supporting quote.",
+        "The **Citations API** (`\"citations\": {\"enabled\": true}` on document blocks) returns text blocks carrying `citations` with `cited_text`, `document_index`, `document_title` and a location. Your app must keep and render them. Citations can't be combined with `output_config.format` (400 error).",
+        "Anthropic's research system has subagents **write outputs to storage and pass lightweight references** to limit the 'game of telephone', and uses a dedicated citation step that matches claims in the report to locations in the source documents.",
+        "Carry **source quality** metadata too (primary study, official statistics, vendor blog, content farm) so synthesis can weigh sources openly.",
+        "Treat **uncited claims as unverified** and mark them as such rather than presenting them with the same confidence."
+      ],
+      "traps": [
+        "Having the coordinator 'clean up' subagent findings into fluent paragraphs before synthesis, which drops sources and dates.",
+        "Silently picking the larger, newer or more convenient number when sources conflict.",
+        "Dropping publication dates to save tokens.",
+        "Enabling citations but only concatenating `text` fields in the UI, so the citations are thrown away.",
+        "Asking the synthesis model to 'add citations at the end' from memory."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"claim\": \"Global grid-scale battery capacity grew ~2x in 2024\",\n  \"source_id\": \"S7\",\n  \"source\": {\"title\": \"Energy Storage Outlook\", \"publisher\": \"IEA\",\n             \"published\": \"2025-03\", \"type\": \"official_statistics\"},\n  \"locator\": \"p. 14, Table 2.1\",\n  \"quote\": \"installed capacity roughly doubled over 2024\",\n  \"conflicts_with\": [\"S11\"]\n}"
+      },
+      "docs": [
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        },
+        {
+          "title": "Citations",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/citations"
+        },
+        {
+          "title": "Reduce hallucinations",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+        }
+      ],
+      "drill": "Give Claude two short documents that disagree on one number and differ in publication year. Ask once for 'a summary' and once with the structured-claim schema above plus the instruction to report conflicts with dates. Compare: does the first version silently pick one value? Then enable citations on the documents and render each cited_text beside its sentence."
+    }
+  ],
+  "questions": [
+    {
+      "id": "D5-1-001",
+      "subskill": "D5.1",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "The support resolution agent handles a long ticket about three damaged orders. Around turn 35 the Agent SDK compacts the history. Afterwards the agent tells the customer their refund 'of about $40' is on the way, when $46.80 was agreed for order A-1182. It also asks again for an order number the customer gave earlier. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Move to a model tier with a larger context window and raise the compaction threshold, so long tickets rarely reach compaction and the full history stays verbatim for the whole conversation.",
+        "Add an instruction to the compaction summary prompt to 'preserve all numbers and identifiers accurately'.",
+        "Keep a structured case-facts record (order IDs, amounts, dates, commitments), updated by code from tool results and injected every turn outside the summarised history.",
+        "Turn off compaction and drop the oldest turns once the context passes a fixed size."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A bigger window only postpones compaction, and recall still degrades as context grows. The exact values remain at risk on long tickets.",
+        "Summary instructions help but remain probabilistic; summaries are lossy by design. Critical values need a place that is never summarised.",
+        "Correct. Exact facts kept in a structured block maintained by code survive any amount of summarisation, because they are copied rather than paraphrased.",
+        "Dropping old turns loses the same facts outright, and with no summary at all."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "D5-1-002",
+      "subskill": "D5.1",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "The architect is designing the persistent case-facts block that the support agent receives on every turn, separate from the conversation history that may be compacted. The block has to stay small, and it has to carry what the agent cannot afford to get wrong late in a ticket. Which TWO items BEST belong in it? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "A verbatim copy of the customer's opening message, so the agent can always re-read the original complaint in full.",
+        "Whether identity verification has passed, and which method was used.",
+        "The agent's step-by-step reasoning from each earlier turn.",
+        "Refund amounts already offered or issued, with order IDs and the date promised.",
+        "The full JSON returned by every customer and order lookup so far."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "The gist of the complaint survives summarisation fine. Copying long free text into the block makes it grow with no gain in precision.",
+        "Correct. Verification status gates refunds and must not be lost or reinvented after compaction.",
+        "Old reasoning is bulky and stale. The block should hold established facts, not the thinking that produced them.",
+        "Correct. Exact amounts, IDs and dates are what summaries most often paraphrase away, and errors in them have real cost.",
+        "Raw lookups are exactly the bloat the block exists to avoid. Store the extracted values, keyed by ID."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "D5-1-003",
+      "subskill": "D5.1",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A team's Claude Code sessions on a long feature often auto-compact. After compaction Claude keeps forgetting which test files were failing and the agreed API shape, and developers re-explain them every time. They want auto-compaction itself to keep this information, for everyone on the team, without anyone remembering to run a command. What should they do?",
+      "select": 1,
+      "options": [
+        "Ask each developer to run `/compact` with a focus such as 'keep failing tests and API decisions' every time the context indicator shows the window is getting full.",
+        "Add a section to the project CLAUDE.md telling the summariser to always preserve failing test names, API decisions and modified file paths.",
+        "Run `/clear` whenever the context gets large and paste the API shape back in.",
+        "Write the failing test output into CLAUDE.md after each run."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Manual `/compact` with a focus works, but it relies on each developer remembering. The requirement is that auto-compaction does it for everyone.",
+        "Correct. The compactor reads CLAUDE.md like other context, so a committed section on what to preserve steers every auto-compaction for the whole team.",
+        "Clearing throws away the decisions they want to keep and makes re-explaining routine.",
+        "Pasting volatile test output into CLAUDE.md loads stale logs into every future session."
+      ],
+      "ref": "https://code.claude.com/docs/en/how-claude-code-works"
+    },
+    {
+      "id": "D5-1-004",
+      "subskill": "D5.1",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "In the multi-agent research system, the coordinator runs 30 search subagents. Each returns a 4,000-token narrative, and all of them are appended in order before the coordinator writes the outline for synthesis. Reviewers notice the outline reliably covers the first and last few subagents' findings but often misses important findings from those in the middle. Context usage is well under the model's limit. Which change BEST addresses the cause?",
+      "select": 1,
+      "options": [
+        "Switch the coordinator to the largest-context model tier so all 30 narratives fit with plenty of headroom.",
+        "Repeat the synthesis instructions both before and after the 30 subagent outputs, and add 'consider every subagent's findings equally' so no part of the input is overlooked.",
+        "Have subagents return short structured findings keyed by sub-question, with full notes saved to storage by reference, and build the outline from that compact index.",
+        "Ask subagents to put their most important finding in the first sentence of their narrative."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The context already fits. The problem is attention spread over a long middle section, and more headroom does not change that.",
+        "The instructions are not being missed; the findings in the middle are. Repeating instructions adds tokens without surfacing them.",
+        "Correct. Condensed, structured results cut the context the coordinator must attend to and make every sub-question equally visible. The full detail stays retrievable by reference.",
+        "This helps a little within each narrative, but 30 long narratives still bury the middle ones."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-1-005",
+      "subskill": "D5.1",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "The internal platform runs an incident assistant on the Agent SDK that engineers chat with over several days of an investigation. The team resumes the same session each morning. By day three, responses are slow and costly, the assistant mixes up which mitigation was rolled back, and it cites a deploy number from a different service. Which TWO changes BEST improve reliability? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Keep a structured incident record outside the session (timeline, deploy IDs, mitigations and their state, open questions), updated as facts are confirmed.",
+        "Raise `max_turns` so the session never stops partway through a long investigation day.",
+        "Resume the same session each day but tell the assistant to 'focus on recent messages'.",
+        "Start each day in a fresh session that loads the incident record, instead of resuming the multi-day transcript.",
+        "Paste the full Slack channel export into the first message each morning so nothing is missed."
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Confirmed facts held as structured state don't depend on the transcript or on lossy summaries, and they are keyed so similar IDs don't get confused.",
+        "The turn limit isn't the problem. The accumulated context is.",
+        "An instruction can't undo three days of accumulated, partly summarised context, and the old details are still competing for attention.",
+        "Correct. A fresh context plus the curated record avoids stale, noisy history while keeping every fact that matters.",
+        "Dumping raw chat history adds a lot of low-signal tokens and makes the confusion worse."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "D5-1-006",
+      "subskill": "D5.1",
+      "scenario": "S6",
+      "difficulty": 3,
+      "stem": "The extraction pipeline pulls 40 fields from commercial leases of 80 to 150 pages, sending each lease in one request with the document first and the instructions and schema last. Field accuracy is high for clauses near the start and end of the lease but noticeably lower for clauses in the middle pages (assignment, insurance, indemnity). Every lease fits comfortably in the context window. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Move the instructions and schema in front of the lease so Claude reads with the fields in mind.",
+        "Split each lease into sections, run extraction for the fields expected in each section with page references, then merge and reconcile in code.",
+        "Raise `max_tokens` so the model has more room to reason about long leases.",
+        "Send the whole lease twice in the same request, the second copy in reverse section order, so the middle sections also appear near the start or end of the context."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "For long documents the guidance is the reverse: document first, query last. The current layout is already right.",
+        "Correct. Shorter, focused passes avoid attention dilution over the middle of a very long input. Page references keep each value traceable through the merge.",
+        "`max_tokens` limits output length. It does nothing for how well the model attends to the input.",
+        "Duplicating the input doubles cost and context length and makes the attention problem worse."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "D5-2-001",
+      "subskill": "D5.2",
+      "scenario": "S1",
+      "difficulty": 1,
+      "stem": "Halfway through a ticket, the support agent has verified the customer and found the late order. It is one tool call away from issuing an in-policy shipping refund. The customer writes: 'Honestly, can I just talk to a real person?' What should the agent do?",
+      "select": 1,
+      "options": [
+        "Issue the refund first, since it is in policy and nearly done, then offer a human if the customer is still unhappy.",
+        "Explain that it can resolve the issue faster than a human and ask whether the customer would still like to wait for one.",
+        "Keep working on the ticket but lower its tone and offer a goodwill credit to rebuild trust.",
+        "Hand off to a human now, with a structured summary of the verified identity, the order and the pending refund."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Acting after the customer asked for a person overrides an explicit request. Honour it first.",
+        "Trying to talk the customer out of it delays an explicit request and erodes trust.",
+        "This ignores the request entirely and adds an unrequested concession.",
+        "Correct. An explicit request for a human is a hard escalation trigger. The summary means the human can finish the refund without starting over."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "D5-2-002",
+      "subskill": "D5.2",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "A customer writes in capitals, with profanity, that a parcel is nine days late. The order qualifies for a standard late-delivery credit under the current policy, and the agent has every tool it needs. A product manager proposes adding a sentiment classifier that escalates any message scoring below -0.6 to the human queue. What is the BEST design for cases like this?",
+      "select": 1,
+      "options": [
+        "Acknowledge the frustration, resolve the in-policy credit, and hand off only if the customer asks for a person or the issue goes beyond policy.",
+        "Adopt the classifier, because angry customers are the most likely to churn, and a fast human response to strongly negative messages protects the relationship.",
+        "Have the agent ask the customer to calm down before it continues processing the ticket.",
+        "Escalate whenever the model's own confidence in resolving the ticket drops, which tends to happen with angry customers."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Escalation should follow explicit requests, policy gaps or inability to progress. A solvable, in-policy problem should simply be solved, with empathy.",
+        "Sentiment says how the customer feels, not whether the agent can solve the problem. This floods humans with solvable tickets while calm policy-gap tickets stay automated.",
+        "Telling an upset customer to calm down makes things worse and does nothing to resolve the issue.",
+        "Self-reported confidence is poorly calibrated and makes a weak escalation trigger, whatever the customer's mood."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "D5-2-003",
+      "subskill": "D5.2",
+      "scenario": "S1",
+      "difficulty": 3,
+      "stem": "The support agent ends each turn by reporting a confidence score from 0 to 1, and anything below 0.7 goes to a human. An audit finds that the agent reported 0.9 or higher on many tickets it handled wrongly, including refunds on final-sale items, while routine address changes often came in under 0.7. What should the architect change?",
+      "select": 1,
+      "options": [
+        "Raise the threshold to 0.85 so more uncertain tickets are caught before any action is taken.",
+        "Add few-shot examples that teach the agent to report lower confidence on refunds involving any final-sale items.",
+        "Replace the score with explicit escalation criteria (human requested, policy gap such as final-sale refunds, no progress after retries), enforce refund rules in code, and test against labelled tickets.",
+        "Ask the agent to explain its reasoning before giving the score so the number is better grounded."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The audit shows the score doesn't separate right from wrong. Moving the threshold reshuffles the same errors.",
+        "This patches one category by teaching the model to emit a different number, but the signal stays self-reported and uncalibrated for every other case.",
+        "Correct. Observable criteria and deterministic policy checks catch final-sale refunds whatever the model believes, and labelled tickets show whether the triggers work.",
+        "Reasoning first may shift the number, but it is still a self-assessment the audit has shown to be unreliable."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "D5-2-004",
+      "subskill": "D5.2",
+      "scenario": "S1",
+      "difficulty": 1,
+      "stem": "A chat customer says they are 'Jordan Lee' and wants to cancel their subscription. The `lookup_customer` MCP tool returns three active accounts named Jordan Lee in different cities. What should the support agent do NEXT?",
+      "select": 1,
+      "options": [
+        "Ask for a distinguishing detail such as the account email or a recent order number before taking any action.",
+        "Cancel the account with the most recent login, as that is most likely the person chatting.",
+        "Escalate to a human, as any ambiguity in customer identity has to be handled by staff.",
+        "Show the customer the three matching accounts' cities and email addresses and ask them to confirm which one is theirs."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. When a lookup returns several matches, ask for an identifier that settles it. Acting on the wrong account is far costlier than one question.",
+        "A heuristic guess risks cancelling a stranger's subscription.",
+        "One clarifying question normally resolves this. Escalation is for policy gaps or when the agent can't progress.",
+        "Listing other customers' cities and emails discloses personal data to an unverified person."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "D5-2-005",
+      "subskill": "D5.2",
+      "scenario": "S1",
+      "difficulty": 3,
+      "stem": "A customer asks the support agent to match a competitor's lower price on a laptop bought last week. The refund policy covers damage, late delivery and returns within 30 days but says nothing about price matching. Logs show the agent sometimes grants a partial refund 'as a goodwill gesture' and sometimes refuses flatly. Which TWO changes BEST handle this class of request? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Allow the agent to grant up to 10% back on price-match requests so customers get a consistent answer.",
+        "Treat requests the policy doesn't cover as escalations, handing off with a structured summary of the request, the order and the relevant policy sections.",
+        "Tell the agent to refuse anything not explicitly covered by policy and close the ticket.",
+        "Ask the agent to use its judgment about what the policy most likely intends in cases like this one.",
+        "Add explicit policy-gap criteria to the system prompt, with worked examples such as price matching and final-sale exceptions, and test them on labelled tickets."
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "This invents policy that nobody approved. Consistency matters, but the business has to decide the rule first.",
+        "Correct. A policy gap is a core escalation trigger, and a structured handoff lets a human decide without redoing the investigation.",
+        "Refusing to engage hides the gap from the business and treats a legitimate request as invalid.",
+        "Judgment about unwritten policy is exactly what produced the inconsistent outcomes.",
+        "Correct. Explicit criteria with borderline examples make the agent recognise gaps reliably, and labelled tickets confirm it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "D5-2-006",
+      "subskill": "D5.2",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A developer asks Claude Code to 'make formatDate use ISO 8601'. Claude's search finds three different `formatDate` functions in `web/`, `api/` and `reports/`, with different callers and tests. What should Claude do?",
+      "select": 1,
+      "options": [
+        "Change all three, since the request names the function and consistency across the codebase is generally better.",
+        "Change the one in the package with the most callers, as that is most likely what was meant.",
+        "List the three matches with their locations and callers, and ask which ones the developer means.",
+        "Change the first match, run the tests, and mention the other two in its summary."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Changing every match may break report formats or API contracts the developer never meant to touch.",
+        "A popularity guess can still be wrong, and the developer finds out only after the change.",
+        "Correct. When a request maps to several targets, a short clarifying question with the options laid out is cheaper than undoing a wrong change.",
+        "The first search hit is an arbitrary choice. Passing tests don't show it was the intended function."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D5-2-007",
+      "subskill": "D5.2",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "A user asks the research system: 'What will the new EU rules mean for our sector?' The user's profile doesn't say which sector they work in, and three EU regulations from this year could plausibly be meant. Each full research run starts 12 subagents and costs several dollars. What should the coordinator do FIRST?",
+      "select": 1,
+      "options": [
+        "Ask one short clarifying question that names the candidate regulations and asks for the sector.",
+        "Research all three regulations across every major sector so the report covers every reading.",
+        "Pick the most-discussed regulation and the most common sector among users, and state the assumption in the report.",
+        "Run a single cheap subagent to guess the user's intent from their past questions, then fan out."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. A cheap question before decomposition avoids an expensive run on the wrong question. Naming the options makes it quick to answer.",
+        "Covering every combination multiplies cost and buries the answer the user needs in irrelevant material.",
+        "Stating the assumption is better than hiding it, but a likely-wrong guess still wastes the whole run.",
+        "Guessing from history adds a step and can still be wrong, when the user can simply be asked."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-2-008",
+      "subskill": "D5.2",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "An internal operations agent with MCP access to the deploy system is asked to roll back a bad release. Its rollback calls fail three times with a permission error for the production namespace. It then starts trying other commands, such as scaling deployments to zero and editing manifests directly, each also failing. What is the BEST design change?",
+      "select": 1,
+      "options": [
+        "Grant the agent's service account rollback rights in the production namespace, so that next time it can finish urgent rollbacks without waiting for a human.",
+        "Raise the turn limit so the agent has more attempts to find a command that works.",
+        "Add a prompt line telling the agent to stop trying more alternative commands whenever permissions fail.",
+        "Bound retries in code; on repeated permission errors, stop and escalate to on-call with what was tried, the exact error and the release state."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Widening production permissions to get past one failure is a security decision, not a reliability fix.",
+        "More turns means more improvised production changes, which is the dangerous part.",
+        "A prompt line helps but is probabilistic. A repeatable stop condition belongs in code.",
+        "Correct. Inability to progress is an escalation trigger, and a code-enforced bound stops improvisation. The handoff gives on-call what they need to act at once."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "D5-2-009",
+      "subskill": "D5.2",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "A CI job runs Claude Code non-interactively to fix failing tests. On one PR, a test expects `parseAmount('1,000')` to return 1000, while the API docs say commas must be rejected. Claude picked one interpretation, changed the code, and the PR author disputed it. Nobody is available to answer questions during the run. Which change BEST handles cases like this?",
+      "code": {
+        "lang": "bash",
+        "src": "claude -p \"$(cat .ci/fix-tests.md)\" \\\n  --output-format json \\\n  --json-schema \"$(cat .ci/fix-result.schema.json)\" \\\n  --allowedTools \"Read,Edit,Bash(npm test *)\"\n# schema: status in [fixed, needs_human, no_change], reason, files_changed"
+      },
+      "select": 1,
+      "options": [
+        "Let Claude keep choosing, but instruct it to always prefer the test's expectation, since the tests are the executable definition of the intended behaviour.",
+        "On ambiguous or contradictory requirements, return `needs_human` with the conflict described and no edits; the job posts it as a PR comment.",
+        "Raise the turn limit so Claude can investigate the conflict until it reaches a confident conclusion.",
+        "Allow Claude to delete or skip tests that contradict the documentation so the pipeline stays green."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A fixed tie-break hides real requirement conflicts. Sometimes the test is the bug.",
+        "Correct. With no one to ask, 'needs a human decision' has to be a first-class output. The schema already supports it, and the PR comment routes the decision to the author.",
+        "More investigation can't settle a conflict in the requirements; only a person can.",
+        "Removing tests to get green hides the problem and weakens the suite."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless"
+    },
+    {
+      "id": "D5-3-001",
+      "subskill": "D5.3",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "A research report states: 'No peer-reviewed studies have measured this effect.' Tracing shows that the search subagent's academic-database tool timed out on every call. The subagent then returned 'No relevant sources found', which the coordinator passed into synthesis. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Tell the synthesis subagent never to claim that something doesn't exist in its final report.",
+        "Increase the academic-database tool's timeout and add a fallback to a general web search, so the subagent nearly always gets some results back.",
+        "Have the coordinator re-run any subagent that reports finding no sources.",
+        "Return a structured status that separates 'search failed' (error, what was tried) from 'searched, no matches', and report gaps as gaps."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This suppresses legitimate negative findings too, and it doesn't tell synthesis why the evidence is missing.",
+        "A longer timeout and a fallback may cut failures, but the next outage will again look like an empty result.",
+        "Re-running blindly wastes work on true empty results and still can't tell failure from absence.",
+        "Correct. 'Access failed' and 'no results' must be different outcomes. Otherwise a tool failure turns into a false factual claim."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-3-002",
+      "subskill": "D5.3",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "The architect is defining what a research subagent sends back to the coordinator when it can't fully complete its sub-question, for example when two of five sources are unreachable. The coordinator must decide whether to retry, reroute or proceed. Which TWO elements MOST help it decide? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "The subagent's complete transcript, including every tool call and response, so the coordinator can see exactly what happened.",
+        "The error category for each failure (transient, access denied, not found) and whether a retry could help.",
+        "A self-assessed 1 to 10 confidence score for the overall answer.",
+        "What was attempted and what partial results were obtained, plus any alternative sources it identified.",
+        "The raw stack traces and HTTP response bodies for each failed call."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "Full transcripts bloat the coordinator's context and bury the decision-relevant facts. Subagents should condense.",
+        "Correct. The category and retryability tell the coordinator whether to retry, reroute or accept the gap.",
+        "An uncalibrated self-score doesn't say what failed or what to do about it.",
+        "Correct. Partial results let the run keep what worked, and alternatives give the coordinator a reroute option.",
+        "Raw diagnostics are for logs and engineers. The coordinator needs a summary it can act on."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-3-003",
+      "subskill": "D5.3",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "A research run splits a market question into six sub-questions. The subagent for 'regional pricing data' fails because the only known source is paywalled; the other five complete. The current coordinator treats any subagent failure as fatal and returns 'Research failed, please try again.' What should the coordinator do instead?",
+      "select": 1,
+      "options": [
+        "Retry the pricing subagent until it succeeds, then synthesise the full report.",
+        "Synthesise from the five completed sub-questions and leave regional pricing out entirely, so the report stays clean, consistent and free of caveats readers might find confusing.",
+        "Try any alternative source the subagent suggested; if that also fails, synthesise with a coverage note saying regional pricing couldn't be obtained and why.",
+        "Return the five raw subagent outputs to the user with the failure message attached."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A paywall isn't transient. Retrying without limit burns budget and never finishes.",
+        "Leaving the gap out silently makes the report look complete when it isn't.",
+        "Correct. Reroute where possible, otherwise continue with partial results and state the gap explicitly. Don't abort, and don't hide it.",
+        "This hands the synthesis work to the user and loses the value of the system."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-3-004",
+      "subskill": "D5.3",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "Search subagents call a web-fetch MCP tool that intermittently returns HTTP 503 for a few seconds at a time. Right now any failed fetch makes the subagent stop and report failure, and the coordinator then re-runs the whole subagent from scratch. Runs take twice as long as expected. Where should the handling for these errors live?",
+      "select": 1,
+      "options": [
+        "In the coordinator: whenever a subagent reports failure, re-run that subagent from scratch with a longer time budget and a note saying its previous attempt failed.",
+        "In the subagent's tool layer: bounded retries with backoff for transient errors, reporting only persistent failures to the coordinator, with context.",
+        "In the synthesis step: tell it to work around any missing sources it notices.",
+        "Nowhere: brief 503s are rare, so accepting a lower success rate is simpler."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Restarting a whole subagent to cover one blip throws away the work it had done and causes the slowdown.",
+        "Correct. Recover locally from transient errors, close to where they happen. The coordinator should only see what the subagent couldn't resolve.",
+        "Synthesis can't recover data that was never fetched. It can only paper over the gap.",
+        "The symptom shows the errors aren't rare enough to ignore. Bounded local retries are cheap."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-3-005",
+      "subskill": "D5.3",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "A long research run with 20 subagents crashes at subagent 14 after a dependency fails. The current design restarts the whole run, which repeats hours of work and gives a slightly different report each time. Which TWO changes BEST improve recovery? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Persist the plan and each completed subagent's results outside the coordinator's context as the run progresses.",
+        "Run all 20 subagents in one sequential chain so a crash can only affect the current step.",
+        "On failure, resume from the last checkpoint and tell the coordinator which tool failed so it can adapt.",
+        "Switch the coordinator to a larger model so it is less likely to crash.",
+        "Lower the subagent count to 10 so there are fewer points at which a run can fail."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Durable state means completed work survives a crash and doesn't need redoing.",
+        "Sequential execution doesn't add recovery. It just makes runs slower.",
+        "Correct. Resuming from where the error occurred, and telling the agent about the failing tool, avoids costly restarts and lets it route around the problem.",
+        "Crashes here come from a failing dependency, not the model's capability.",
+        "Fewer subagents reduces coverage without solving recovery."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-3-006",
+      "subskill": "D5.3",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "A CI step runs the script below and posts each finding as a PR review comment. On some large PRs the run stops at the turn limit, and the PR gets a green 'Claude review: no issues found' comment even though nobody reviewed the code. What is the defect?",
+      "code": {
+        "lang": "bash",
+        "src": "out=$(claude -p \"$(cat .ci/review.md)\" --max-turns 15 \\\n  --output-format json --json-schema \"$(cat .ci/findings.schema.json)\")\nfindings=$(echo \"$out\" | jq '.structured_output.findings // []')\nif [ \"$findings\" = \"[]\" ]; then\n  gh pr comment \"$PR\" --body \"Claude review: no issues found\"\nelse\n  post_findings \"$findings\"\nfi"
+      },
+      "select": 1,
+      "options": [
+        "The `--max-turns 15` value is too low for large PRs and should be removed so every review runs to completion.",
+        "The JSON schema needs `findings` marked as required so it is always present in the output.",
+        "The script should parse `.result` instead of `.structured_output`, which holds the text.",
+        "The script ignores the exit status and the absence of `structured_output`, and `// []` turns a failed run into an empty, successful review."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A higher limit makes it rarer, but any future failure would still be reported as a clean review.",
+        "The schema governs valid output. When the run ends without valid output there is no `structured_output` at all, so a required field doesn't help.",
+        "With `--json-schema`, the validated object is in `structured_output`. Switching fields doesn't detect failure.",
+        "Correct. `claude -p` exits non-zero on failure and omits `structured_output` when no valid output exists. The script must check both and post 'review incomplete' rather than defaulting to empty."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless"
+    },
+    {
+      "id": "D5-3-007",
+      "subskill": "D5.3",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "The CI PR-review run uses an internal MCP server to check that each PR links an approved ticket. During a tracker outage, the server's `get_linked_ticket` tool catches the exception and returns an empty result as a normal success. Claude then flags dozens of PRs as 'missing an approved ticket, policy violation'. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Return a result with `isError: true` saying the tracker is unavailable and the call is retryable, so Claude reports the check as 'could not verify'.",
+        "Make the MCP server raise a JSON-RPC protocol error whenever the tracker is unreachable, so the whole review run fails loudly and someone investigates the outage.",
+        "Tell Claude in the review prompt to treat an empty ticket result as 'unknown' rather than a violation.",
+        "Disable the ticket check in CI and have reviewers check ticket links by hand on every PR."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Tool execution failures belong in the result with `isError` set, so the model sees what failed and can report the check as unverified instead of failed.",
+        "Protocol errors are for problems such as unknown tools or invalid arguments. Failing the whole review over one dependency also discards the rest of the review.",
+        "This makes every genuinely missing ticket 'unknown' too. The tool has to tell the two cases apart.",
+        "Dropping the check removes the control instead of making its failures visible."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D5-3-008",
+      "subskill": "D5.3",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "The support agent calls `issue_refund`. The payment processor times out, and the tool wrapper logs the exception and returns `{\"status\": \"submitted\"}`. The agent tells the customer the refund is processed, but no refund was ever created. What is the BEST change?",
+      "select": 1,
+      "options": [
+        "Add a line to the system prompt telling the agent never to confirm a refund to the customer until a later lookup shows the refund on the account.",
+        "Have the wrapper return an `is_error` result stating the refund was not issued, the failure is transient, and a retry is safe.",
+        "Retry the processor call indefinitely inside the wrapper until it finally succeeds.",
+        "Have a nightly job reconcile refunds against the processor and email any affected customers."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The agent can't check something its tool misreports. The false success comes from the wrapper.",
+        "Correct. A structured error with the true state lets the agent retry within limits, tell the customer the truth, or escalate. Never return success on failure.",
+        "Unbounded retries can hang the conversation and risk duplicate refunds if an earlier call actually went through.",
+        "Reconciliation is a useful backstop but leaves customers misinformed for hours. Fix the reporting at the source."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "id": "D5-3-009",
+      "subskill": "D5.3",
+      "scenario": "S4",
+      "difficulty": 1,
+      "stem": "A platform agent checks all 200 service repositories for use of a vulnerable library by giving each repository to a subagent. Twelve subagents can't clone their repository because of missing permissions and return empty match lists. The final summary reads: '0 vulnerable usages across 200 repositories.' What should the design do instead?",
+      "select": 1,
+      "options": [
+        "Treat the twelve inaccessible repositories as clean, since most repositories in the scan are clean.",
+        "Fail the entire scan whenever any repository can't be cloned, so the security team never receives a summary that is based on an incomplete set of repositories.",
+        "Have subagents report 'not scanned' with the reason, and the summary report coverage: '188 scanned, 0 vulnerable; 12 not accessible' plus the list.",
+        "Re-run the twelve subagents with a longer timeout before writing the summary."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Assuming unchecked repositories are clean is exactly the false negative a security scan must avoid.",
+        "Aborting throws away 188 valid results over a fixable access problem.",
+        "Correct. 'Could not check' must stay separate from 'checked, found nothing', and the summary must show coverage so the gap gets fixed.",
+        "A permissions failure isn't a timing problem, so the retries would fail the same way."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-3-010",
+      "subskill": "D5.3",
+      "scenario": "S6",
+      "difficulty": 2,
+      "stem": "In the invoice-extraction pipeline, about 2% of PDFs are password-protected or corrupt. For these, the extraction step catches the error and writes a record with every field set to `null`. Finance's dashboard treats a `null` `amount_due` as 'nothing owed', so these invoices are never paid. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Default `amount_due` to 0 instead of `null` for these records so the dashboard handles them consistently.",
+        "Ask Claude to estimate the amount due from the file name and vendor history whenever the document can't be read.",
+        "Change the dashboard so that a `null` in any field always means 'needs review', and have finance work through every record with a null field before each payment run.",
+        "Record a per-document processing status (extracted, or failed with reason) separate from field values, and send failed documents to an exception queue."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Zero is an even more confident false value than `null`.",
+        "Fabricating values for unreadable documents swaps a visible gap for invisible errors.",
+        "`null` legitimately means 'not present in the document' for optional fields. Overloading it mixes absence with failure.",
+        "Correct. Failure to process is a different fact from a missing field. An explicit status and an exception queue mean these invoices get handled instead of silently dropped."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+      "id": "D5-4-001",
+      "subskill": "D5.4",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "A team is using Claude Code to move 410 Python modules from `requests` to an async HTTP client. The work will take about a week of sessions across two developers. Early decisions (one shared client per service, timeouts from settings) keep getting re-litigated, and sessions sometimes redo files that are already migrated. What is the BEST way to carry context across sessions?",
+      "select": 1,
+      "options": [
+        "Keep a single Claude Code session open all week and resume it every day so that every earlier decision stays in its history.",
+        "Paste the original planning conversation into the first prompt of every new session so the decisions are restated.",
+        "Add the full list of migrated files to CLAUDE.md after each session.",
+        "Keep a migration notes file in the repo with decisions, a progress checklist and next steps; Claude reads it at the start of each session and updates it as files are done."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A week-long session collects noise and gets compacted, which loses detail. It also can't be shared between two developers.",
+        "Replaying a whole conversation costs tokens every time and still has no reliable progress record.",
+        "CLAUDE.md loads for every task in the repo. A changing per-file checklist belongs in a task file, not in always-on memory.",
+        "Correct. A structured notes file is durable, shareable and reviewable. It is the standard way to carry state across context boundaries."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "D5-4-002",
+      "subskill": "D5.4",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "While debugging a flaky integration test, a developer asks Claude Code to 'look through `logs/integration-run.log` for the cause'. The file is several hundred megabytes. Claude reads large chunks of it, the session compacts repeatedly, and Claude Code then stops auto-compacting and shows an error. What is the BEST way to continue?",
+      "select": 1,
+      "options": [
+        "Start a fresh session; have Claude `grep` the log for the failing test ID and errors and read only matching sections, or delegate the analysis to a subagent.",
+        "Switch to a model with a larger context window so the whole log fits.",
+        "Run `/compact` manually with a focus on the integration test, so the log content that matters is kept in summarised form while the rest is dropped from the session.",
+        "Split the log into ten files and ask Claude to read each one in turn in the same session."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Search first, then read targeted slices. That keeps only the relevant lines in context, and a subagent keeps even that exploration out of the main session.",
+        "Most of the log is irrelevant. Loading it all wastes tokens and attention even if it fits.",
+        "Compaction can't keep up when each read refills the context, which is why auto-compaction stopped.",
+        "Reading every chunk in one session pulls the same volume into context, just more slowly."
+      ],
+      "ref": "https://code.claude.com/docs/en/how-claude-code-works"
+    },
+    {
+      "id": "D5-4-003",
+      "subskill": "D5.4",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "An engineer spent a long Claude Code session working out how the internal billing service handles proration: dozens of greps, file reads and dead ends. The implementation will start tomorrow, split between this engineer and a colleague working in separate sessions. What should the engineer do before ending today's session?",
+      "select": 1,
+      "options": [
+        "Have Claude write a findings file (relevant files, constraints, decisions, open questions), review it, and start tomorrow's sessions fresh from it.",
+        "Run `/compact` with a focus on proration so the session is ready to resume tomorrow.",
+        "Leave the session open and have the colleague resume the same session ID tomorrow, so both engineers start from the complete investigation history.",
+        "Ask Claude to add the investigation's key findings to the user-level `~/.claude/CLAUDE.md`."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Summarising findings into a reviewable file before a new phase gives both engineers a clean, shared starting point without the exploration noise.",
+        "Compaction tidies one session, but the colleague's separate session never sees it, and the engineer can't easily review or edit the summary.",
+        "Resuming brings back all of the exploration noise, and two people working in one session's history leads to conflicts.",
+        "User-level CLAUDE.md is personal and loads in every project, so the colleague won't get it and other work gets polluted."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D5-5-001",
+      "subskill": "D5.5",
+      "scenario": "S6",
+      "difficulty": 2,
+      "stem": "The invoice-extraction pipeline asks Claude for a 0 to 1 confidence value next to each extracted field. Fields at 0.8 or above are auto-accepted. A month-end audit finds that `due_date` values reported at 0.9 or higher are wrong about 15% of the time, while `vendor_name` values at 0.6 are almost always right. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Raise the global auto-accept threshold to 0.95 for every field.",
+        "Add an instruction asking Claude to be more careful and conservative when it reports confidence on date fields.",
+        "Switch the extraction step to a larger model tier, whose confidence values tend to be better calibrated, and keep the existing 0.8 threshold.",
+        "Measure accuracy by confidence band for each field on a labelled set of invoices, and set per-field thresholds from those results."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A single global threshold ignores that the score means different things for different fields, and it sends many correct vendor names to review.",
+        "Prompting changes the reported numbers, not their link to real accuracy. You can only tell by measuring.",
+        "Calibration has to be measured for the model and data you actually use. Assuming it doesn't tell you what threshold is safe.",
+        "Correct. Confidence is useful only once calibrated against labelled data, and per-field thresholds reflect that each field behaves differently."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "D5-5-002",
+      "subskill": "D5.5",
+      "scenario": "S6",
+      "difficulty": 2,
+      "stem": "After three months, the extraction pipeline shows 97% field-level accuracy on a 10,000-document sample that human reviewers checked. The operations lead wants to stop human review entirely to cut costs. The pipeline handles typed invoices, scanned receipts, handwritten delivery notes and multi-currency contracts. What should the architect do FIRST?",
+      "select": 1,
+      "options": [
+        "Approve removing human review, since 97% is higher than the accuracy the previous manual-only process achieved.",
+        "Break accuracy down by document type and by field, and decide review levels per segment based on those numbers.",
+        "Keep reviewing every document, because extraction errors are never acceptable in any finance workflow.",
+        "Remove human review, and ask customers to report any errors they find in their invoices."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A strong overall number can hide a weak segment, for example handwritten notes at 70% hidden by a large volume of typed invoices.",
+        "Correct. Aggregate accuracy hides per-segment failures. Review can be reduced where the segment data supports it and kept where it doesn't.",
+        "Reviewing everything ignores evidence that many segments may be safe to automate, and it keeps the cost problem.",
+        "Customer complaints are a slow, partial signal, and errors that harm the business may never be reported."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "D5-5-003",
+      "subskill": "D5.5",
+      "scenario": "S6",
+      "difficulty": 3,
+      "stem": "In the extraction pipeline, fields above their calibrated thresholds are auto-accepted, about 85% of all fields, and only low-confidence fields reach human reviewers. The team needs to detect confidently wrong extractions and drift, for example a vendor changing its invoice layout, without reviewing everything. Which TWO practices BEST achieve this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Review a random sample of auto-accepted items each week, stratified by document type, vendor group and field.",
+        "Send only the lowest-confidence 5% of fields to reviewers, which is where the errors are.",
+        "Ask Claude to re-score the confidence of its auto-accepted fields in a second pass.",
+        "Track the sampled error rate per segment over time, and tighten thresholds or add review when a segment degrades.",
+        "Review the 50 most recently processed documents each Friday."
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Stratified sampling of auto-accepted items is the only way to see errors that confidence scores don't flag, and it covers small segments too.",
+        "Low-confidence review is necessary but by design never sees confidently wrong fields.",
+        "A second self-assessment from the same model is not independent evidence of correctness.",
+        "Correct. Per-segment tracking turns the samples into an alarm for drift and a basis for adjusting thresholds.",
+        "Recency sampling is neither random nor stratified, so it over-represents whatever happened to arrive this week."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "D5-5-004",
+      "subskill": "D5.5",
+      "scenario": "S6",
+      "difficulty": 3,
+      "stem": "The extraction pipeline routes a document to human review when the average confidence across its 25 fields falls below 0.85. Audits find wrong `total_amount` values getting through on documents whose other 24 fields are easy, high-confidence header data. Which routing design BEST fixes this?",
+      "select": 1,
+      "options": [
+        "Lower the document-level threshold to 0.75 so that fewer documents are routed to review and reviewers have more time per document.",
+        "Route on the minimum field confidence instead of the average, so the whole document goes to review whenever any one of its 25 fields falls below the current 0.85 threshold.",
+        "Route per field with calibrated thresholds (stricter for amounts), always route documents whose line items don't match the total, and show only flagged fields.",
+        "Weight `total_amount` three times as heavily in the document average."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "This lets even more bad totals through. Reviewer time isn't the problem.",
+        "Minimum-based routing catches the bad field, but sending whole documents overloads reviewers and still relies on uncalibrated scores without deterministic checks.",
+        "Correct. Field-level routing targets the risky value, a sum check catches errors confidence misses, and reviewers spend time only on what needs it.",
+        "Re-weighting an average is still an average, and one bad total can still be outvoted."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+      "id": "D5-5-005",
+      "subskill": "D5.5",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "The research system produces reports of about 60 factual claims each. A two-person fact-checking team can verify roughly 10% of claims before publication. Each claim carries the number of independent sources supporting it and a source-quality tag. How should the claims to verify be chosen?",
+      "select": 1,
+      "options": [
+        "Check the claims in the executive summary, since readers mostly read those.",
+        "Check only single-source or low-quality-source claims, since claims backed by several independent high-quality sources don't need any of the team's scarce human review time.",
+        "Ask the synthesis agent to mark its least certain claims and check those.",
+        "Prioritise high-impact, weakly supported claims, plus a small random sample of well-supported ones to check that the support signal predicts accuracy."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Visibility matters for impact, but this ignores the support signal and never tests whether well-supported claims are actually right.",
+        "This targets risk sensibly but never checks the auto-trusted group, so a broken support signal would go unnoticed.",
+        "Self-reported uncertainty isn't calibrated and may miss confidently wrong claims.",
+        "Correct. Risk-based prioritisation uses the scarce reviewer time well, and a random sample of the 'safe' group checks that the routing signal still holds."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-5-006",
+      "subskill": "D5.5",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "Research subagents label every finding with `confidence: high | medium | low`. After a quarter, 94% of findings are labelled 'high', and errors found by reviewers are spread almost evenly across all three labels. The team wants a routing signal that actually separates findings that need checking. What is the BEST next step?",
+      "select": 1,
+      "options": [
+        "Derive a score from observable evidence (independent corroborating sources, source type, supporting quote) and validate it against reviewer verdicts.",
+        "Ask subagents to use a 1 to 100 scale instead so their confidence is more granular.",
+        "Add few-shot examples showing when findings deserve 'medium' or 'low', so the labels are spread more evenly and reviewers can focus on the lower two groups.",
+        "Route every finding to human review until the labels are trusted."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Observable evidence can be checked and calibrated against reviewer outcomes, unlike a label the model assigns to itself.",
+        "A finer self-reported scale is still self-reported. The audit shows the signal has no relationship to accuracy.",
+        "Changing how labels are distributed doesn't make them predict errors.",
+        "Reviewing everything is a stopgap that doesn't scale and doesn't create a better signal."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-5-007",
+      "subskill": "D5.5",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "The CI auto-fix job opens PRs with Claude-generated fixes for lint errors, flaky-test retries and dependency bumps. The team wants to auto-merge some of these. A proposal is to auto-merge whenever Claude's output includes `\"confidence\": \"high\"`. Which policy is BEST?",
+      "select": 1,
+      "options": [
+        "Adopt the proposal, but require 'high' confidence on two separate runs before merging.",
+        "Never auto-merge Claude-generated changes; every fix must be reviewed by a human.",
+        "Auto-merge only categories whose measured acceptance rate in past human reviews is high, and only when tests pass and the diff stays within scope limits; route everything else to review and audit a sample of merged fixes.",
+        "Auto-merge whenever the full test suite passes, whatever the change category."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Two self-assessments are still self-assessments, and repetition doesn't calibrate them.",
+        "This ignores evidence that some categories, such as lint fixes, are reliably safe, and it keeps the toil the job was meant to remove.",
+        "Correct. Measured per-category history plus deterministic gates decide what is safe to automate, and auditing merged fixes catches drift.",
+        "Passing tests is necessary but not sufficient. A dependency bump can pass tests and still introduce risk the suite doesn't cover."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless"
+    },
+    {
+      "id": "D5-5-008",
+      "subskill": "D5.5",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "After a large refactor, Claude Code ends with: 'I'm confident this refactor preserves behaviour.' The developer must decide how much scrutiny the change needs before opening a PR. What should that decision rest on?",
+      "select": 1,
+      "options": [
+        "Claude's stated confidence, since it has read the code it changed.",
+        "Verifiable evidence: whether tests cover the changed paths and pass, and how risky the touched areas are.",
+        "Asking Claude in the same session to rate its confidence again after re-reading the diff.",
+        "The size of the diff alone: changes under 200 lines need only a skim, while larger ones get a full line-by-line review."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A statement of confidence is not evidence and is not calibrated against outcomes.",
+        "Correct. Test coverage and results are a verifiable feedback loop, and risk tells you where human attention matters most.",
+        "Re-asking the same session gives a correlated self-assessment, not an independent check.",
+        "Size matters somewhat, but a small change to payment logic can be riskier than a large rename."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D5-5-009",
+      "subskill": "D5.5",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "The internal platform uses Claude to route incoming engineering tickets to owning teams. Overall routing accuracy is 92%. Dispatchers fix misroutes in the ticket UI, but the fixes go nowhere, and the data-platform team keeps complaining about tickets landing with them by mistake. What is the BEST improvement?",
+      "select": 1,
+      "options": [
+        "Add a line to the routing prompt telling Claude to be careful with data-platform tickets.",
+        "Move the router to a larger model tier to push overall accuracy above 95%.",
+        "Let each team reject misrouted tickets with one click, after which Claude automatically re-routes the ticket to the next most likely owning team on its list.",
+        "Capture dispatcher corrections as labelled data, measure accuracy per destination team, and use it to set review thresholds and few-shot examples."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A vague caution doesn't say what separates data-platform tickets from their lookalikes, and nobody measures whether it helped.",
+        "Without per-team measurement you can't tell whether a bigger model fixes the segment that is failing.",
+        "Automatic bouncing adds latency and loops without learning anything from the corrections.",
+        "Correct. Human corrections are free labelled data. Per-segment accuracy shows where the router fails, and calibrated thresholds route the uncertain cases to dispatchers."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "D5-5-010",
+      "subskill": "D5.5",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "The platform team will use Claude to extract `owner_team`, `tier` and `oncall_rotation` from 3,000 service READMEs to fill the new service catalog, which paging will depend on. READMEs follow about six different templates, and some are years out of date. Which THREE design choices BEST ensure catalog quality without reviewing every entry by hand? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Calibrate per-field confidence thresholds against about 200 hand-labelled READMEs drawn from all templates.",
+        "Accept everything, since service owners will notice and fix wrong entries over time.",
+        "Audit a random sample of auto-accepted entries stratified by README template.",
+        "Ask Claude to rate each entry 1 to 10 and auto-accept anything rated 8 or above.",
+        "Review the first 100 services alphabetically and extrapolate the error rate to the rest.",
+        "Route an entry to its service owner for confirmation if any field is below threshold or fails validation (for example, `owner_team` not in the org directory)."
+      ],
+      "answer": [
+        0,
+        2,
+        5
+      ],
+      "explanations": [
+        "Correct. Labelled data across templates turns raw confidence into thresholds you know are safe.",
+        "Paging depends on these fields, so waiting for owners to notice means wrong pages during incidents.",
+        "Correct. Stratified audits show whether particular templates fail silently even above threshold.",
+        "An uncalibrated self-rating is not a sound auto-accept gate.",
+        "An alphabetical slice isn't random and may miss whole templates.",
+        "Correct. Routing low-confidence or invalid fields to the people who know the answer fixes exactly the risky entries, and deterministic validation catches errors whatever the confidence."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "D5-6-001",
+      "subskill": "D5.6",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "In the research system, search subagents return prose summaries of what they read. After synthesis, a final step asks the model to 'add citations' by searching the gathered sources for supporting text. Reviewers find about one in eight citations points to a source that doesn't actually support the sentence. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Have subagents return structured claims (claim, source ID, locator or quote, date), and keep each claim's source mapping through synthesis.",
+        "Add a second citation pass that re-reads each cited source, scores how well it supports the sentence, and removes any citation scoring below a set threshold.",
+        "Tell the citation step to cite only sources that it has high confidence in.",
+        "Have subagents attach a full bibliography of everything they read at the end of their summaries."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Provenance kept from the moment of extraction is reliable. Provenance rebuilt after the sources have been paraphrased away produces misattributions.",
+        "A verification pass may catch some bad citations, but it treats the symptom and drops claims that were true but lost their link.",
+        "Confidence filtering doesn't restore the claim-to-source link that the prose summaries destroyed.",
+        "A bibliography says what was read, not which source supports which claim."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-6-002",
+      "subskill": "D5.6",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "Two subagents report the size of the same market differently: $4.2B from an industry association report published in 2023 (covering 2022), and $6.1B from a government statistical release published in 2025 (covering 2024 and using a broader definition). The synthesis step currently reports '$6.1B' with one citation. How should the report handle this?",
+      "select": 1,
+      "options": [
+        "Report only the government figure, because official statistics outrank industry association reports and the release is also the more recent of the two.",
+        "Average the two values and cite both sources, which gives the reader a balanced estimate.",
+        "Report only the more recent figure, as newer data supersedes older data.",
+        "Report both figures with source, year and definition, explain that the gap reflects period and scope, and state which one the conclusions use."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Source authority matters, but dropping the other figure silently hides a difference in definition the reader needs to know about.",
+        "Averaging values with different scopes and years gives a number neither source supports.",
+        "Recency is relevant, but the definitions also differ, so the newer figure doesn't simply supersede the older one.",
+        "Correct. Conflicting sources should be annotated rather than resolved silently. Dates and scope explain the conflict, and an explicit choice keeps the conclusions transparent."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-6-003",
+      "subskill": "D5.6",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "The architect is redesigning the handoffs between search subagents, the coordinator and the synthesis subagent so that every statement in the final report can be traced to its source. Which TWO design choices BEST preserve provenance? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Have the coordinator rewrite all findings into one fluent narrative before passing them to synthesis.",
+        "Strip publication dates from findings to save tokens, because synthesis rarely needs them.",
+        "Have subagents save full findings to shared storage and pass the coordinator lightweight references plus condensed summaries.",
+        "Deduplicate overlapping claims by keeping one wording and discarding the other copies with their sources.",
+        "Use a structured finding schema where each claim carries a source ID, locator and publication date across every handoff."
+      ],
+      "answer": [
+        2,
+        4
+      ],
+      "explanations": [
+        "Rewriting into narrative is the step where claim-to-source links get lost.",
+        "Dates are what let synthesis tell an update from a contradiction.",
+        "Correct. Writing outputs to storage and passing references avoids a 'game of telephone' in which detail and attribution erode at each hop.",
+        "Merging duplicates is fine, but the merged claim should keep all its supporting sources, since corroboration is useful evidence.",
+        "Correct. A structured claim record carries provenance through every hop by construction."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D5-6-004",
+      "subskill": "D5.6",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A developer asks Claude Code to draft an architecture decision record comparing two queue libraries, using benchmark results in `bench/`, two GitHub issue threads saved in `docs/research/`, and the current code. Reviewers can't tell which statements come from measurements, which from the issue threads and which are Claude's own inferences. What is the BEST instruction to add?",
+      "select": 1,
+      "options": [
+        "Ask Claude to keep the ADR shorter, so each claim is easier to check by hand.",
+        "Ask Claude to cite the file path and section for every factual claim, and to label unsourced statements as its own inference.",
+        "Ask Claude to add a 'References' section at the end of the ADR that lists every benchmark file and issue thread it read while drafting.",
+        "Ask Claude to write more formally and avoid informal language throughout the document."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Shorter text is still untraceable if claims carry no sources.",
+        "Correct. Inline claim-level sources and explicit inference labels let reviewers check each statement against its evidence.",
+        "A list of files read doesn't map individual claims to the evidence behind them.",
+        "Tone has nothing to do with provenance."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+    },
+    {
+      "id": "D5-6-005",
+      "subskill": "D5.6",
+      "scenario": "S2",
+      "difficulty": 3,
+      "stem": "Claude Code is writing upgrade notes for bumping an HTTP library from v3 to v5. The v4 changelog says the default timeout changed to 30s; a 2024 blog post from the maintainers says v5 removed the default timeout entirely. Claude's draft says only 'Default timeout is 30s.' The library source for v5 is installed in the project's dependencies. What should Claude do?",
+      "select": 1,
+      "options": [
+        "Keep the changelog value, since an official changelog is more authoritative than a blog post.",
+        "Use the blog post's statement, since it is the more recent of the two sources.",
+        "Check the installed v5 source for the actual default, cite the file, and note that the v4 changelog and the blog disagree and why.",
+        "Leave the default timeout out of the upgrade notes entirely, since the two sources conflict and neither can be fully trusted, and tell readers to check themselves."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The changelog describes v4. Treating it as authoritative for v5 ignores the version difference.",
+        "Recency is a hint, not proof. Blog posts can be inaccurate or describe a pre-release.",
+        "Correct. When primary evidence is at hand, verify against it and cite it, and keep the conflict and its explanation visible.",
+        "Leaving out a behaviour change that can break production is worse than reporting a resolved conflict."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D5-6-006",
+      "subskill": "D5.6",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "The internal docs assistant answers engineers' questions from the wiki, runbooks and ADRs. A post-incident review found it told an on-call engineer to restart a service using a 2021 wiki procedure that a 2025 runbook had replaced; both documents were retrieved. Which THREE changes BEST prevent this? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Return document metadata (source type, owner, last-updated date) with each retrieved passage, and include it in the context.",
+        "Retrieve fewer documents per question so that conflicting procedures appear less often.",
+        "Require the answer to cite the specific document and date behind each instruction it gives.",
+        "Tell the assistant to prefer whichever source sounds most authoritative and confident.",
+        "When retrieved sources disagree, show both with their dates and flag the older one as possibly superseded, instead of merging them silently.",
+        "Move to a model tier with a larger context so it can read every version of every doc."
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ],
+      "explanations": [
+        "Correct. Without dates and source types, the model can't tell a superseded procedure from the current one.",
+        "Fewer documents hides conflicts rather than resolving them, and may drop the current runbook.",
+        "Correct. Claim-level citations with dates let the engineer check what an instruction is based on.",
+        "Tone isn't a reliable signal of which document is current.",
+        "Correct. Surfacing the conflict explicitly is safer than blending two procedures into one answer.",
+        "More context gives more conflicting material, not a way to resolve it."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "D5-6-007",
+      "subskill": "D5.6",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "An internal HR-policy Q&A tool sends policy PDFs as document blocks with citations enabled. Users complain the UI shows answers without any sources, although the API calls succeed. The rendering code is below. What is the MOST likely problem?",
+      "code": {
+        "lang": "python",
+        "src": "resp = client.messages.create(\n    model=MODEL, max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": [\n        {\"type\": \"document\", \"source\": pdf_source,\n         \"title\": \"Leave policy 2025\", \"citations\": {\"enabled\": True}},\n        {\"type\": \"text\", \"text\": question}]}])\n\nanswer = \"\".join(b.text for b in resp.content if b.type == \"text\")\nrender(answer)"
+      },
+      "select": 1,
+      "options": [
+        "Citations require the `output_config.format` parameter to be set before they are returned.",
+        "The code joins only each block's `text`, discarding the `citations` attached to text blocks (`cited_text`, document title, page location), so it needs to render them.",
+        "Citations aren't supported for PDF documents, only for plain-text sources.",
+        "The model ignores the document unless the question comes before it in the content array."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The reverse is true. Citations and `output_config.format` can't be combined; doing so returns a 400.",
+        "Correct. With citations enabled, the answer arrives as text blocks, some carrying a `citations` list. Joining only `.text` throws the provenance away.",
+        "PDF documents support citations; their locations are given as page numbers.",
+        "Order affects quality for long inputs, but it doesn't stop citations being returned."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/citations"
+    },
+    {
+      "id": "D5-6-008",
+      "subskill": "D5.6",
+      "scenario": "S5",
+      "difficulty": 1,
+      "stem": "The CI review job posts findings like 'This violates our security guidelines' on PRs. Developers dismiss most of them because they can't tell which guideline is meant or which line is at fault. The guidelines live in `docs/security-standards.md` with numbered rules. Which change to the job's output schema BEST fixes this?",
+      "select": 1,
+      "options": [
+        "Add a `severity` field with defined levels so developers can triage the most important findings first and ignore low-severity ones.",
+        "Add an overall `summary` paragraph at the top of each review comment.",
+        "Require each finding to include `file`, `line`, the violated `rule_id` from the standards doc, and the offending snippet.",
+        "Limit the job to at most five findings per PR to reduce review noise for developers."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Severity helps prioritise but doesn't say which rule or which line.",
+        "A summary adds prose without linking any finding to its evidence.",
+        "Correct. Linking each finding to its exact location and the specific rule makes it verifiable and actionable.",
+        "Fewer findings reduces noise, but the remaining ones are still untraceable."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless"
+    }
+  ]
+}

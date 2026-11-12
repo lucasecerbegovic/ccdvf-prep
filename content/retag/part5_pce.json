@@ -1,0 +1,674 @@
+{
+ "questions": [
+  {
+   "id": "PCE1-002",
+   "subskill": "D4.2",
+   "difficulty": 2,
+   "stem": "The support-resolution agent's ticket summariser has five few-shot examples. All five are billing tickets, each summary is exactly three bullet points, and each starts with \"Customer reports\". In production, summaries of outage and security tickets come out as three billing-flavoured bullets starting with \"Customer reports\", even when that framing is wrong. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Add an instruction: \"Do not copy the examples literally; adapt them to the ticket.\"",
+    "Remove the examples entirely and rely on a detailed description of the format.",
+    "Use 3–5 examples that span ticket types, lengths and phrasings, each in <example> tags within <examples>.",
+    "Add ten more billing-ticket examples, so the model has a larger and more representative sample of the expected format to generalise from."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A negative instruction fights the strongest signal in the prompt, the examples themselves, and usually loses.",
+    "Examples are one of the most reliable steering tools. The problem is their lack of diversity, not their presence.",
+    "Correct. The docs recommend examples that are relevant and diverse enough that Claude does not pick up unintended patterns, wrapped in tags so they are clearly separated from instructions.",
+    "More copies of the same narrow pattern strengthen the unwanted imitation."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S1"
+  },
+  {
+   "id": "PCE1-003",
+   "subskill": "D5.1",
+   "difficulty": 1,
+   "stem": "A contract-extraction pipeline sends Claude an 80,000-token master services agreement and asks one question about termination rights. Which prompt layout BEST follows Anthropic's long-context guidance?",
+   "select": 1,
+   "options": [
+    "Question first, then the contract, so Claude knows what to look for while reading.",
+    "Put the contract in the system prompt and the question in the user turn, so the contract is treated as trusted, authoritative background.",
+    "Question at the top and repeated at the bottom, with the contract in the middle, untagged.",
+    "Contract first, wrapped in <document> tags with <source> metadata, then instructions and the question at the end."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "The docs recommend the reverse for long inputs: data at the top, query at the end. They report up to about 30% better quality in tests.",
+    "Placing a document in the system prompt does not make it more accurate, and it mixes data with operator instructions.",
+    "Repeating the question is unnecessary. Leaving the document untagged gives up the structure that helps Claude separate content from instructions.",
+    "Correct. Put long-form data at the top, use <document>/<source>/<document_content> tags, and end with the query."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE1-011",
+   "subskill": "D4.1",
+   "difficulty": 3,
+   "stem": "A team moves its support-resolution agent to a newer, more instruction-following Claude model. The old system prompt says \"CRITICAL: You MUST ALWAYS call search_kb before answering ANY question.\" Now the agent calls search_kb even for \"thanks!\" and simple arithmetic, which adds latency and cost. What is the BEST first change?",
+   "select": 1,
+   "options": [
+    "Add a second CRITICAL rule: \"NEVER call search_kb for trivial messages.\"",
+    "Remove search_kb from the tools list entirely and inject the top knowledge-base results into every prompt so no tool call is ever needed.",
+    "Use tool_choice to force a different tool for short messages.",
+    "Soften it to normal phrasing and say when the tool helps: \"Use search_kb when the answer depends on product or policy details.\""
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Stacking contradictory absolute rules makes behaviour less predictable, and the root cause, emphasis that over-triggers, remains.",
+    "Pre-stuffing every prompt costs more context and loses the agent's ability to decide when retrieval is needed.",
+    "Forcing a specific tool on short messages is a brittle workaround. Forced tool choice is also unavailable on some current models.",
+    "Correct. Migration guidance says to dial back aggressive \"CRITICAL/MUST\" language because newer models follow the system prompt closely, and to explain when the tool applies."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S1"
+  },
+  {
+   "id": "PCE1-013",
+   "subskill": "D4.1",
+   "difficulty": 1,
+   "stem": "In the internal developer-tooling platform, an engineer's prompt reads \"Improve this release note.\" Results vary wildly: sometimes shorter, sometimes longer, sometimes more marketing-heavy. Which revision BEST applies the \"be clear and direct\" principle?",
+   "select": 1,
+   "options": [
+    "\"Improve this release note. Be really careful, take your time, and do your absolute best work, because this matters a lot to our team.\"",
+    "\"You are the world's best technical writer with 20 years of experience at top companies. Improve this release note.\"",
+    "\"Improve this release note. Think step by step.\"",
+    "\"Rewrite this for developers upgrading our SDK: under 150 words, breaking changes first, neutral tone, exact version numbers.\""
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Exhortation adds no information about audience, length or goals.",
+    "A grandiose role does not define what \"improve\" means for this task.",
+    "Reasoning does not fix an underspecified goal. Claude still does not know what \"better\" means here.",
+    "Correct. Explicit audience, constraints, priorities and tone leave nothing to guess. That is the \"colleague with minimal context\" test in practice."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S4"
+  },
+  {
+   "id": "PCE1-014",
+   "subskill": "D5.6",
+   "difficulty": 2,
+   "stem": "A research subagent in the multi-agent report system answers questions over a 60-page clinical study (about 40k tokens). Reviewers find answers that blend in plausible facts not in the study. Which prompt change BEST grounds the answers in the document?",
+   "select": 1,
+   "options": [
+    "Tell Claude to answer only from the document, but put the question before the document so it reads with purpose.",
+    "First extract word-for-word relevant quotes into <quotes> tags, then answer only from those quotes, or say none were found.",
+    "Lower max_tokens so there is less room for invented content.",
+    "Split the study into 60 one-page requests, ask the question against each page separately, and concatenate the answers into one response."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Restricting Claude to the document helps, but placing the query first goes against long-context guidance, and nothing anchors the answer to specific text.",
+    "Correct. Quote extraction first is a documented technique for long-document tasks that grounds the response in the actual text and reduces hallucination.",
+    "A shorter output can still be wrong, and it may cut off legitimate content.",
+    "Page-by-page answers lose cross-page context and can contradict each other. That adds complexity without grounding."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations",
+   "scenario": "S3"
+  },
+  {
+   "id": "PCE1-015",
+   "subskill": "D4.2",
+   "difficulty": 1,
+   "stem": "For a document-extraction prompt, which few-shot setup BEST matches Anthropic's prompting guidance?",
+   "select": 1,
+   "options": [
+    "One long example covering every rule in the instructions.",
+    "Twenty or more examples pasted inline between the instructions without delimiters, so the model sees as many patterns as possible.",
+    "A handful (about 3–5) of relevant, varied examples, each in <example> tags inside an <examples> block.",
+    "Examples only in the assistant prefill, so Claude continues the pattern."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A single example invites literal copying and shows little of the range of valid outputs.",
+    "Untagged inline examples are easy to confuse with instructions, and volume without diversity adds tokens more than signal.",
+    "Correct. The docs recommend relevant, diverse, structured examples and suggest 3–5.",
+    "Trailing prefills are rejected on current models. Put examples in the prompt instead."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE2-001",
+   "subskill": "D5.1",
+   "difficulty": 1,
+   "stem": "A Claude Code session on a large codebase holds about 600k tokens of accumulated logs and file dumps, well within the model's window. Its answers about details introduced early in the session have become less accurate. What is the MOST likely explanation?",
+   "select": 1,
+   "options": [
+    "Context rot: recall of any given detail degrades as total tokens grow, even below the limit.",
+    "The prompt cache for the early turns has expired, so that content is no longer visible to the model on later requests.",
+    "The model silently truncates any context beyond 500k tokens.",
+    "max_tokens is too low for the model to reason over a large input."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Anthropic describes context as a finite attention budget. Recall degrades as context grows, even under the hard limit.",
+    "Caching affects cost and latency only. Cached or not, the model sees the same prompt.",
+    "Nothing silently truncates within the documented window. A request that does not fit fails or is managed explicitly.",
+    "max_tokens limits output length. It does not affect how well the model attends to its input."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+   "scenario": "S2"
+  },
+  {
+   "id": "PCE2-005",
+   "subskill": "D1.3",
+   "difficulty": 2,
+   "stem": "A research coordinator must review 200 vendor contracts and produce a risk summary. Run in one loop, the orchestrator's context fills with contract text by contract 40 and quality drops. Which architecture BEST addresses this?",
+   "select": 1,
+   "options": [
+    "Switch to a model with a larger context window and keep the single loop, so all 200 contracts fit at once without any architecture change.",
+    "Give the orchestrator a tool that returns all 200 contracts concatenated, so it reads them in one call.",
+    "Ask the orchestrator to remember less detail about each contract.",
+    "Delegate batches to subagents that work in clean contexts and return condensed findings summaries."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A bigger window delays the problem. Context rot still erodes quality as tokens accumulate.",
+    "Concatenating everything is maximal context stuffing, the worst option here.",
+    "A vague instruction does not stop raw tool results from piling up in the transcript.",
+    "Correct. Subagents isolate heavy exploration and hand back a short summary (the engineering post cites roughly 1,000–2,000 tokens), which keeps the lead agent's context clean."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+   "scenario": "S3"
+  },
+  {
+   "id": "PCE2-006",
+   "subskill": "D5.4",
+   "difficulty": 2,
+   "stem": "The internal platform's codebase Q&A assistant currently pastes the entire 1.5M-token repository into the first request (in chunks). Which TWO changes BEST apply just-in-time context engineering? Select TWO.",
+   "select": 2,
+   "options": [
+    "Load a small, always-relevant briefing up front (architecture notes, conventions), like Claude Code's CLAUDE.md.",
+    "Give the agent search and read tools (glob, grep, read_file) so it pulls specific files when it needs them, using paths as lightweight references.",
+    "Pre-compute embeddings of the whole repo and inject the top 200 chunks into every request, whatever the question.",
+    "Move the full repository into the system prompt so it is cached.",
+    "Summarise every file into one line and preload all summaries for every question."
+   ],
+   "answer": [
+    0,
+    1
+   ],
+   "explanations": [
+    "Correct. The hybrid approach loads a small amount of high-value context up front.",
+    "Correct. Just-in-time retrieval keeps identifiers in context and loads the data through tools at runtime.",
+    "Injecting a large fixed retrieval set on every request is still stuffing, and much of it will be irrelevant.",
+    "Caching reduces cost but not context rot. The window is still full of mostly irrelevant tokens.",
+    "Preloading thousands of summaries is a lossy form of stuffing that scales poorly."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "PCE2-007",
+   "subskill": "D1.7",
+   "difficulty": 1,
+   "stem": "A support-resolution agent must remember each user's goals and progress across sessions, including after server restarts. Which mechanism BEST fits?",
+   "select": 1,
+   "options": [
+    "Server-side compaction.",
+    "Context editing with a high keep value.",
+    "A persistent memory store, such as the memory tool's /memories files backed by per-user storage you control.",
+    "A longer system prompt that includes every past session's full transcript for that user, so nothing is ever forgotten."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Compaction summarises within one conversation and does not persist state across sessions.",
+    "Context editing prunes the current transcript. It is not cross-session persistence.",
+    "Correct. The memory tool is client-side storage that persists between sessions. Implement per-user directories and access control.",
+    "Replaying all past transcripts is unbounded context growth, which context rot makes worse over time."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool",
+   "scenario": "S1"
+  },
+  {
+   "id": "PCE2-010",
+   "subskill": "D5.1",
+   "difficulty": 1,
+   "stem": "The support agent's get_customer MCP tool returns the CRM's full raw JSON, about 40k tokens per call including audit history and internal metadata. The agent only needs name, plan, status and the last five tickets. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Let the agent read the whole payload as it is, and rely on context editing to clear the large results from the transcript a few turns later.",
+    "Raise max_tokens so the agent has room to reason about the large payload.",
+    "Move the CRM payload into the system prompt so it is cached.",
+    "Change the tool to return only the needed fields, with optional parameters for more detail or pagination."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Clearing later still pays for, and is distracted by, the bloat on the turns before it is cleared. Fix the source.",
+    "max_tokens limits output and does nothing about input bloat.",
+    "Caching makes the waste cheaper but keeps irrelevant tokens in the window.",
+    "Correct. Token-efficient, focused tool results are the first line of context engineering."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+   "scenario": "S1"
+  },
+  {
+   "id": "PCE2-013",
+   "subskill": "D5.4",
+   "difficulty": 2,
+   "stem": "An internal incident-investigation agent runs for hours. Which THREE techniques BEST keep its context focused and within budget? Select THREE.",
+   "select": 3,
+   "options": [
+    "Context editing to clear stale tool results from early investigation steps.",
+    "Delegating log-heavy searches to subagents that return short summaries.",
+    "Keeping lightweight references (log query IDs, file paths) and refetching details only when needed.",
+    "Preloading every runbook into the system prompt in case one is relevant.",
+    "Raising max_tokens to give the model more room to think about the large context.",
+    "Repeating the full system prompt in every user turn to keep instructions fresh."
+   ],
+   "answer": [
+    0,
+    1,
+    2
+   ],
+   "explanations": [
+    "Correct. Clearing tool results is the lightest-touch way to free space.",
+    "Correct. Subagent isolation keeps the heavy exploration out of the lead context.",
+    "Correct. This is just-in-time retrieval: references stay small and details load on demand.",
+    "Preloading everything just in case is stuffing. Load runbooks on demand instead, for example as skills or by retrieval.",
+    "max_tokens affects output length, not input focus.",
+    "Duplicating instructions adds tokens every turn and does not improve focus."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "PCE3-001",
+   "subskill": "D4.3",
+   "difficulty": 1,
+   "stem": "The extraction pipeline asks Claude to \"respond ONLY with valid JSON\". About 2% of responses fail json.loads because of stray prose or a missing field. On a model that supports it, what is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Add \"IMPORTANT: invalid JSON will break production\" to the prompt.",
+    "Wrap json.loads in a loop that resends the same request up to five times whenever parsing fails, and log each failure for review.",
+    "Use structured outputs (output_config.format with a JSON schema, or messages.parse()).",
+    "Extract the substring between the first \"{\" and the last \"}\" before parsing."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Emphasis lowers the failure rate at best and guarantees nothing.",
+    "Retrying spends tokens and latency on a problem that constrained decoding removes entirely.",
+    "Correct. Constrained decoding makes responses conform to the schema, and the SDK helpers also validate them.",
+    "Substring hacks fail on nested or missing braces and do nothing about missing fields."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE3-002",
+   "subskill": "D4.4",
+   "difficulty": 2,
+   "stem": "The document pipeline's batch job summarises long reports into JSON. It works on most reports but throws JSON.parse errors on the longest ones. Retries fail the same way. What is the MOST likely cause and fix?",
+   "code": {
+    "lang": "typescript",
+    "src": "const resp = await client.messages.create({\n  model: MODEL,\n  max_tokens: 1024,\n  messages: [{ role: \"user\", content: prompt(report) }],\n});\nconst block = resp.content.find((b) => b.type === \"text\");\nconst summary = JSON.parse(block!.text); // throws on long reports"
+   },
+   "select": 1,
+   "options": [
+    "The response hit max_tokens, so the JSON is truncated. Check stop_reason and raise max_tokens, or reduce the requested output.",
+    "Long inputs make the model forget the JSON instruction. Repeat it at the end of the prompt.",
+    "The SDK enforces a maximum response size for non-streaming calls. Switch to streaming to bypass the limit and receive the whole JSON.",
+    "Long reports contain unicode that breaks JSON.parse. Sanitise non-ASCII characters first."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Output that fails consistently on the longest inputs points to max_tokens truncation. stop_reason would say \"max_tokens\".",
+    "Repeating the instruction does not help if generation is cut off.",
+    "Streaming matters for HTTP timeouts at very large max_tokens, but the same max_tokens limit still truncates the output.",
+    "Valid unicode is legal JSON. Stripping it corrupts data and leaves the truncation in place."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE3-003",
+   "subskill": "D4.3",
+   "difficulty": 2,
+   "stem": "The extraction pipeline uses output_config.format with a schema. Occasionally the response body cannot be parsed into the schema even though the HTTP status is 200. What should the code check FIRST?",
+   "select": 1,
+   "options": [
+    "Whether the schema compiled correctly, by resending the same request and comparing the two responses to see if the failure repeats.",
+    "Whether stop_reason is \"refusal\" or \"max_tokens\", because then the output may not match the schema.",
+    "Whether the API version header is outdated.",
+    "Whether the content block is of type \"thinking\" and needs decrypting."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A schema that failed to compile returns a 400, not a 200 with a non-conforming body.",
+    "Correct. The structured-outputs docs list refusal and max_tokens as the cases where output may not follow the schema. Branch on stop_reason first.",
+    "An outdated version header changes how a request is accepted. It does not intermittently produce non-conforming 200 responses.",
+    "You locate the text block by type. Thinking blocks are not your schema output."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE3-004",
+   "subskill": "D4.4",
+   "difficulty": 2,
+   "stem": "The invoice-extraction pipeline extracts invoices with structured outputs. Every response validates against the schema, yet finance finds invoices where the line items do not add up to total_due. What is the BEST response?",
+   "select": 1,
+   "options": [
+    "Nothing more is needed. Schema validation already guarantees correctness.",
+    "Add a numeric minimum to the schema so totals cannot be negative.",
+    "Add business-rule checks in code (lines sum to total) and send failures to retry or human review.",
+    "Drop structured outputs and switch to a free-text prompt that asks Claude to double-check its arithmetic before returning the JSON."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Structured outputs guarantee format, not factual or arithmetic accuracy.",
+    "Numeric constraints such as minimum are not supported in structured-output schemas, and non-negativity would not catch a mismatch anyway.",
+    "Correct. Semantic checks belong in your code. A schema-valid response can still be wrong.",
+    "Self-checking may help, but it is not a guarantee, and dropping structured outputs brings back format failures."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE3-005",
+   "subskill": "D4.3",
+   "difficulty": 1,
+   "stem": "The support agent's create_ticket tool sometimes receives priority as the string \"high\" instead of the integer 1–4 the schema requires, and the downstream API rejects it. What is the MOST direct fix?",
+   "select": 1,
+   "options": [
+    "Set strict: true on the tool definition so tool inputs are guaranteed to match its input_schema.",
+    "Add a sentence to the system prompt stating that priority must always be an integer from 1 to 4, never a word like \"high\".",
+    "Coerce any string priority to 2 in the tool handler.",
+    "Remove the priority field and let the downstream API pick a default."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Strict tool use constrains tool names and inputs to the schema, which removes type mismatches.",
+    "A prompt reminder lowers the rate but does not guarantee anything.",
+    "Silent coercion hides the problem and can mis-prioritise tickets.",
+    "Removing a needed field loses functionality to dodge a validation problem."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use",
+   "scenario": "S1"
+  },
+  {
+   "id": "PCE3-007",
+   "subskill": "D4.4",
+   "difficulty": 2,
+   "stem": "The extraction team must parse JSON from a model deployment where structured outputs are not available, so it relies on prompting. Which TWO practices make parsing robust? Select TWO.",
+   "select": 2,
+   "options": [
+    "Parse strictly, then validate the object against a schema (Pydantic or Zod). Treat any failure as an error, not a partial success.",
+    "On a validation failure, retry once with the validation error included as feedback, then route to a fallback or human review.",
+    "Use eval() on the response so Python-style dicts parse too.",
+    "Extract the first {...} with a regex and use whatever fields are present.",
+    "Skip schema validation whenever stop_reason is \"end_turn\", since output that finished naturally is guaranteed complete and correct."
+   ],
+   "answer": [
+    0,
+    1
+   ],
+   "explanations": [
+    "Correct. Strict parsing plus schema validation catches malformed and incomplete output.",
+    "Correct. Bounded retries with error feedback, then a fallback, give recovery without infinite loops.",
+    "eval() on model output is a code-execution vulnerability.",
+    "Regex extraction silently accepts partial or wrong objects.",
+    "end_turn means generation finished naturally. It says nothing about the output matching your schema."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE3-008",
+   "subskill": "D5.6",
+   "difficulty": 2,
+   "stem": "A research assistant in the multi-agent system answers questions from uploaded source documents. Users report confident answers that cite \"Section 7.4\", which does not exist. Which approach BEST makes the answers verifiable?",
+   "select": 1,
+   "options": [
+    "Instruct Claude to sound less confident when it is unsure.",
+    "Enable citations on the document blocks so each claim carries its supporting passage; treat uncited claims as unverified.",
+    "Add a second Claude call that reads the first answer and rates its confidence from 1 to 10, then suppress answers that score below 7.",
+    "Increase effort so the model reasons more before answering."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Changing the tone does not make claims checkable. Calibrated wording can still be wrong.",
+    "Correct. Citations tie claims to source text, so they can be audited and unsupported claims caught. This is a documented hallucination-reduction technique.",
+    "A confidence score from another model is not grounding evidence.",
+    "More reasoning can help, but it does not tie output to sources or make it auditable."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/citations",
+   "scenario": "S3"
+  },
+  {
+   "id": "PCE3-010",
+   "subskill": "D4.3",
+   "difficulty": 2,
+   "stem": "Before the extraction pipeline acts on a Claude response, which THREE checks should it perform? Select THREE.",
+   "select": 3,
+   "options": [
+    "Confirm stop_reason is the expected value (for example end_turn, or tool_use in a loop) and not max_tokens.",
+    "Handle stop_reason \"refusal\" as its own path instead of parsing the body as normal output.",
+    "Locate content blocks by type, rather than assuming content[0] is the text block.",
+    "Reject any response with fewer than 100 output tokens as probably low quality.",
+    "Treat any HTTP 200 as proof the content is complete and schema-valid.",
+    "Retry the identical request until the output differs, to rule out hallucination."
+   ],
+   "answer": [
+    0,
+    1,
+    2
+   ],
+   "explanations": [
+    "Correct. max_tokens means the output was truncated and may be incomplete or invalid.",
+    "Correct. A refusal returns 200 but may not follow your schema or task. Branch on it.",
+    "Correct. With thinking or tools enabled, the first block may not be text.",
+    "Output length is not a validity signal. Short answers are often correct.",
+    "Refusals and truncations both come back as 200.",
+    "Retrying until the output differs neither detects nor fixes hallucination. Compare multiple samples deliberately, as in best-of-N, and verify against sources."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons",
+   "scenario": "S6"
+  },
+  {
+   "id": "PCE3-011",
+   "subskill": "D1.1",
+   "difficulty": 3,
+   "stem": "In a manual agentic loop for a code-generation agent, a response arrives with a tool_use block for write_file whose input parses cleanly. The code is below. What is the problem, and what should the loop do?",
+   "code": {
+    "lang": "python",
+    "src": "resp = client.messages.create(model=MODEL, max_tokens=800,\n                              tools=tools, messages=msgs)\nprint(resp.stop_reason)   # -> \"max_tokens\"\nfor block in resp.content:\n    if block.type == \"tool_use\":\n        run_tool(block.name, block.input)  # executes write_file"
+   },
+   "select": 1,
+   "options": [
+    "Nothing is wrong. The input parsed, so it is safe to execute.",
+    "Run the tool as requested, then send Claude a follow-up message asking it to read the file back and verify the contents are complete.",
+    "The tool_use id must be regenerated before the tool is executed.",
+    "It hit max_tokens, so the input may be a truncated partial object. Don't execute it; retry with a higher max_tokens."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A cut-off input often still parses, for example with a shortened content string. Parsing is not proof of completeness.",
+    "Writing a truncated file first can cause damage that verification only finds afterwards.",
+    "tool_use ids come from the API and must be echoed back unchanged in the tool_result.",
+    "Correct. The tool-use guidance is to check for max_tokens when a tool_use block is present and retry rather than run the tool. Likewise, never execute tools from a refusal turn."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls",
+   "scenario": "S2"
+  }
+ ],
+ "archived": [
+  {
+   "id": "PCE1-001",
+   "reason": "prompt-craft (explain the why); not a CCAR-F task"
+  },
+  {
+   "id": "PCE1-004",
+   "reason": "assistant-prefill removal is model-version trivia"
+  },
+  {
+   "id": "PCE1-005",
+   "reason": "assistant-prefill removal is model-version trivia"
+  },
+  {
+   "id": "PCE1-006",
+   "reason": "role-in-system-prompt is basic prompt trivia, not on CCAR-F"
+  },
+  {
+   "id": "PCE1-007",
+   "reason": "XML delimiters for data/instruction separation; only loosely D4.1"
+  },
+  {
+   "id": "PCE1-008",
+   "reason": "prompt-injection defence; not a CCAR-F task"
+  },
+  {
+   "id": "PCE1-009",
+   "reason": "general eval methodology; not a CCAR-F task"
+  },
+  {
+   "id": "PCE1-010",
+   "reason": "markdown/format-control prompt style; not on CCAR-F"
+  },
+  {
+   "id": "PCE1-012",
+   "reason": "assistant-prefill removal is model-version trivia"
+  },
+  {
+   "id": "PCE1-016",
+   "reason": "system vs user placement, caching and injection; not squarely a task statement"
+  },
+  {
+   "id": "PCE1-017",
+   "reason": "general eval methodology; not a CCAR-F task"
+  },
+  {
+   "id": "PCE1-018",
+   "reason": "prompt-injection defence; not a CCAR-F task"
+  },
+  {
+   "id": "PCE2-002",
+   "reason": "context-editing beta API specifics; not a task statement"
+  },
+  {
+   "id": "PCE2-003",
+   "reason": "server-side compaction beta API specifics; not a task statement"
+  },
+  {
+   "id": "PCE2-004",
+   "reason": "compaction beta API/code specifics; not a task statement"
+  },
+  {
+   "id": "PCE2-008",
+   "reason": "context-editing config syntax recall"
+  },
+  {
+   "id": "PCE2-009",
+   "reason": "context-editing cache/cost tuning; API trivia"
+  },
+  {
+   "id": "PCE2-011",
+   "reason": "context-editing API behaviour trivia"
+  },
+  {
+   "id": "PCE2-012",
+   "reason": "token counting endpoint; not on CCAR-F"
+  },
+  {
+   "id": "PCE2-014",
+   "reason": "memory tool + context editing API specifics; not a task statement"
+  },
+  {
+   "id": "PCE2-015",
+   "reason": "writing a custom compaction prompt; not a task statement"
+  },
+  {
+   "id": "PCE3-006",
+   "reason": "unsupported-schema-constraint trivia; SDK behaviour uncertain, key doubtful"
+  },
+  {
+   "id": "PCE3-009",
+   "reason": "citations vs output_config.format incompatibility; API trivia and vague 'documented pattern' option"
+  }
+ ],
+ "lessonNotes": [
+  {
+   "task": "D1.3",
+   "note": "PCE.2 keyPoint on subagents (clean window, return condensed summary) and trap on full transcripts to orchestrator"
+  },
+  {
+   "task": "D1.7",
+   "note": "PCE.2 memory tool / NOTES.md keyPoint: persisting state outside the context window across sessions; trap that compaction/editing are not cross-session memory"
+  },
+  {
+   "task": "D4.1",
+   "note": "PCE.1 keyPoints on clear/direct instructions and giving the why; 'old CRITICAL/MUST emphasis causes over-triggering' on newer models"
+  },
+  {
+   "task": "D4.2",
+   "note": "PCE.1 few-shot keyPoint (3-5 diverse examples in <example> tags) and trap on near-identical examples"
+  },
+  {
+   "task": "D4.3",
+   "note": "PCE.3 keyPoints on JSON schema outputs, strict tool use, schema-valid is not correct, check stop_reason first (max_tokens, refusal), content blocks by type"
+  },
+  {
+   "task": "D4.4",
+   "note": "PCE.3 keyPoints on defensive parsing + validate + retry with error; truncation (max_tokens) retries fail identically; business-rule checks in code"
+  },
+  {
+   "task": "D5.1",
+   "note": "PCE.1 long-context layout (documents first, query last); PCE.2 context rot and tool-result pruning at the source"
+  },
+  {
+   "task": "D5.4",
+   "note": "PCE.2 just-in-time retrieval, subagent isolation, notes files, context editing/compaction (compaction/editing details are API trivia, use lightly)"
+  },
+  {
+   "task": "D5.6",
+   "note": "PCE.3 citations keyPoint and PCE.1 quote-grounding technique are reusable for provenance; skip the citations+output_config incompatibility detail"
+  },
+  {
+   "task": "D1.1",
+   "note": "PCE.3 stop_reason keyPoint and max_tokens trap on tool_use turns: do not execute truncated tool calls"
+  },
+  {
+   "task": "none",
+   "note": "PCE.1 prefill-removal, prompt-injection and eval keyPoints, plus PCE.2 token counting: off-blueprint for CCAR-F"
+  }
+ ]
+}

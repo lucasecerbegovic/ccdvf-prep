@@ -1,0 +1,734 @@
+{
+  "questions": [
+    {
+      "id": "AI1-007",
+      "subskill": "D2.4",
+      "difficulty": 2,
+      "stem": "On the internal developer platform, an engineer wrote an MCP server that runs as a local stdio process and reads files from her laptop. Which TWO Claude surfaces can launch and use this server directly on her machine? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "claude.ai in the browser, by adding the server's file path as a custom connector",
+        "Claude Code, configured with the server as a stdio MCP server",
+        "The Messages API MCP connector, pointing at `stdio://localhost`",
+        "The Claude Desktop app, which can start local MCP servers on the machine",
+        "A claude.ai Project, by uploading the server's source code as project knowledge"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "A web page cannot spawn local processes; claude.ai custom connectors reach remote MCP servers over HTTP.",
+        "Correct. Claude Code runs locally and supports stdio MCP servers that it launches as child processes.",
+        "The API's MCP connector calls remote servers reachable over the internet, not local stdio processes.",
+        "Correct. Claude Desktop runs on the user's machine and can start local stdio MCP servers (configured directly or installed as a desktop extension).",
+        "Uploading code as knowledge lets Claude read it, not run it as a tool server."
+      ],
+      "ref": "https://modelcontextprotocol.io/docs/develop/connect-local-servers",
+      "scenario": "S4"
+    },
+    {
+      "id": "AI1-008",
+      "subskill": "D2.4",
+      "difficulty": 2,
+      "stem": "The developer-platform team wants every employee using claude.ai in the browser to look up internal ticket status through Claude. The ticket system has a REST API on the corporate network. What is the BEST approach?",
+      "select": 1,
+      "options": [
+        "Ask each employee to run a stdio MCP server for the ticket API on their laptop and point the browser tab at it",
+        "Paste an export of all tickets into a shared Project once a day",
+        "Give employees an API key so they can call the Messages API with a ticket tool",
+        "Expose the ticket API through an authenticated remote MCP server and add it as a claude.ai connector"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "The browser app cannot launch or reach a local stdio process.",
+        "A daily paste is stale, bloats context, and exposes every ticket to every user.",
+        "That bypasses claude.ai entirely and spreads API keys to employees.",
+        "Correct. claude.ai integrates external systems through connectors to remote MCP servers, which can enforce per-user auth."
+      ],
+      "ref": "https://modelcontextprotocol.io/docs/develop/connect-remote-servers",
+      "scenario": "S4"
+    },
+    {
+      "id": "AI1-009",
+      "subskill": "D5.4",
+      "difficulty": 1,
+      "stem": "In the team's Claude Code feature workflow, a developer just finished and committed a bug fix. Their next task, an unrelated UI feature, is in a different part of the repo. The current session is full of stack traces and test logs from the bug hunt. What should they do FIRST?",
+      "select": 1,
+      "options": [
+        "Run `/clear` to start the new task with a fresh context",
+        "Run `/compact` so the bug-fix history is summarized and kept",
+        "Keep going in the same session; more context always helps Claude",
+        "Add the stack traces to CLAUDE.md so they are not lost"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. For an unrelated task, clearing removes irrelevant tokens that cost money and can distract the model; CLAUDE.md is still loaded.",
+        "Compaction is for continuing the same task with less context; here nothing from the bug hunt is needed.",
+        "Irrelevant context adds cost and can degrade focus; it does not help.",
+        "CLAUDE.md is loaded into every session; one-off logs would pollute every future task."
+      ],
+      "ref": "https://code.claude.com/docs/en/how-claude-code-works",
+      "scenario": "S2"
+    },
+    {
+      "id": "AI1-010",
+      "subskill": "D5.4",
+      "difficulty": 2,
+      "stem": "On the developer platform, halfway through a large refactor of a big codebase in Claude Code, the context window is nearly full. The developer wants to keep working on the same refactor without losing the decisions made so far (naming scheme, files already migrated). What is the BEST action?",
+      "select": 1,
+      "options": [
+        "Run `/clear` and re-explain the refactor from memory",
+        "Run `/compact` with instructions to keep the naming scheme and the list of migrated files",
+        "Start a second terminal and run a parallel session on the same files",
+        "Switch to a model with a larger context window mid-session"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Clearing throws away the decisions the developer explicitly wants to keep.",
+        "Correct. Compaction summarizes the conversation to free space; focus instructions tell it what must survive.",
+        "A parallel session has none of the current decisions and risks conflicting edits.",
+        "This does not address the accumulated noise and may not be available; summarizing is the intended tool."
+      ],
+      "ref": "https://code.claude.com/docs/en/how-claude-code-works",
+      "scenario": "S4"
+    },
+    {
+      "id": "AI1-011",
+      "subskill": "D1.7",
+      "difficulty": 1,
+      "stem": "A developer on the team building features with Claude Code closed their terminal yesterday in the middle of a Claude Code session and wants to pick up exactly where they left off in the same project. Which command should they use?",
+      "select": 1,
+      "options": [
+        "`claude -p \"continue\"`",
+        "`claude --continue` (or `claude --resume` to choose a specific session)",
+        "`/compact` in a new session",
+        "`claude --plugin-dir .` to reload the project"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`-p` runs a one-shot headless prompt in a new session; it does not restore the old conversation.",
+        "Correct. `--continue` reopens the most recent conversation in the directory; `--resume` lets you pick one.",
+        "Compacting a new, empty session has nothing to summarize.",
+        "`--plugin-dir` loads a plugin for one session; it does not restore conversations."
+      ],
+      "ref": "https://code.claude.com/docs/en/cli-reference",
+      "scenario": "S2"
+    },
+    {
+      "id": "AI1-012",
+      "subskill": "D3.5",
+      "difficulty": 3,
+      "stem": "On the team's feature-development workflow, a developer has corrected Claude Code four times on the same failing approach to a migration. Each correction leads to another variation of the same wrong fix, and the transcript now contains all the failed attempts. What is the MOST effective next step?",
+      "select": 1,
+      "options": [
+        "Keep correcting with stronger wording such as \"IMPORTANT: do not do this again\"",
+        "Run `/compact` so the failed attempts become a shorter summary",
+        "Raise the effort level to the maximum and ask Claude to reconsider the approach in the same session",
+        "Run `/clear` and restart with a sharper prompt that states why the approach fails"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Repeated stronger wording in a polluted context rarely breaks the loop; the failed attempts keep anchoring the model.",
+        "A summary still carries the failed approach forward as context.",
+        "More reasoning on top of the same anchored context often reproduces the same pattern.",
+        "Correct. When a session is cluttered with failed attempts, a clean session with a better initial prompt usually beats more corrections."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices",
+      "scenario": "S2"
+    },
+    {
+      "id": "AI1-013",
+      "subskill": "D5.4",
+      "difficulty": 2,
+      "stem": "For engineers using Claude Code on a large internal codebase, which TWO practices reflect good session hygiene? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Keep one long-lived session for the whole week so Claude remembers every decision and file it has seen",
+        "Put durable conventions such as build commands and style rules in CLAUDE.md",
+        "Paste entire log files into the chat so Claude never has to ask for more",
+        "Disable all CLAUDE.md files to save tokens",
+        "Delegate broad codebase searches to a subagent so the file dumps stay out of the main context"
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "Long-lived sessions accumulate irrelevant context and eventually require compaction; scope sessions to tasks.",
+        "Correct. CLAUDE.md is loaded at session start, so stable conventions survive `/clear` and new sessions.",
+        "Large raw pastes consume context; share the relevant excerpt or let Claude read the file with tools.",
+        "A concise CLAUDE.md is worth its tokens; removing it means re-explaining conventions every session.",
+        "Correct. A subagent works in its own context and returns only its conclusion, keeping the main thread lean."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices",
+      "scenario": "S4"
+    },
+    {
+      "id": "AI1-014",
+      "subskill": "D2.1",
+      "difficulty": 2,
+      "stem": "A custom scheduling tool that the platform exposes to Claude receives inputs such as \"next Tuesday afternoon\" and \"3/4\" (ambiguous between March 4 and April 3), which break the backend. The tool schema currently has `\"start\": {\"type\": \"string\"}`. What is the BEST schema change?",
+      "select": 1,
+      "options": [
+        "Rename the field to `start_time_please_use_iso`",
+        "Add a server-side regex post-processor that detects the date format and normalizes it",
+        "Specify `\"format\": \"date-time\"` and a description requiring ISO 8601 with a timezone offset",
+        "Split the field into separate integer fields for day, month, year, and hour so no string parsing is needed"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A field name alone is a weak signal compared with a type, format, and description.",
+        "Guessing after the fact keeps the ambiguity; fix the contract instead.",
+        "Correct. Claude relies on the schema and descriptions; an explicit format and description remove the ambiguity at the source.",
+        "Separate integers still leave the timezone unspecified and give Claude no guidance on resolving relative dates; a precise format and description fix the actual ambiguity."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use",
+      "scenario": "S4"
+    },
+    {
+      "id": "AI1-015",
+      "subskill": "D2.1",
+      "difficulty": 1,
+      "stem": "A support-resolution agent's ticket-triage tool has a `priority` parameter typed as a free string. The backend accepts only `low`, `medium`, `high`, `urgent`, but Claude sometimes sends `P1` or `critical`. What is the simplest effective fix?",
+      "select": 1,
+      "options": [
+        "Constrain `priority` with an `enum` of the four accepted values, each described",
+        "Add a few-shot example in the system prompt that shows one ticket with a valid priority value",
+        "Map unknown values to `medium` silently in the backend",
+        "Change the type to `integer` from 1 to 4"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `enum` is the standard way to constrain a parameter to a fixed set, and descriptions help Claude choose between levels.",
+        "A single example helps a little but does not constrain the value.",
+        "Silent remapping hides errors and mis-prioritizes urgent tickets.",
+        "An unexplained integer scale is more ambiguous than named levels."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use",
+      "scenario": "S1"
+    },
+    {
+      "id": "AI1-016",
+      "subskill": "D4.3",
+      "difficulty": 2,
+      "stem": "The support-agent team adds `strict: true` to the tool below so Claude's inputs always match the schema, but the schema is not accepted for strict use. Which change is REQUIRED?",
+      "code": {
+        "lang": "typescript",
+        "src": "const createShipment = {\n  name: \"create_shipment\", strict: true,\n  description: \"Create a shipment for a paid order.\",\n  input_schema: {\n    type: \"object\",\n    properties: { order_id: { type: \"string\" },\n      address: {\n        type: \"object\",\n        properties: { line1: { type: \"string\" }, country: { type: \"string\" } },\n        required: [\"line1\", \"country\"],\n      },\n    },\n    required: [\"order_id\", \"address\"], additionalProperties: false,\n  },\n};"
+      },
+      "select": 1,
+      "options": [
+        "Add `\"minProperties\": 1` to the `address` object",
+        "Give every property a `default` value",
+        "Set `\"additionalProperties\": true` on the top-level object",
+        "Add `\"additionalProperties\": false` to the nested `address` object as well"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "`minProperties` is not a strict-mode requirement.",
+        "Defaults are not required; required-ness is expressed with `required`.",
+        "Strict mode does not support `additionalProperties` set to anything other than `false`.",
+        "Correct. Strict tool use and structured outputs require `additionalProperties: false` on every object, including nested ones."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+      "scenario": "S1"
+    },
+    {
+      "id": "AI1-017",
+      "subskill": "D4.3",
+      "difficulty": 3,
+      "stem": "An invoice-extraction pipeline uses a JSON schema where `po_number`, `due_date`, and `vat_id` are all required strings. On invoices that lack a PO number, Claude returns plausible-looking but invented PO numbers. Which schema change BEST addresses the root cause?",
+      "select": 1,
+      "options": [
+        "Add \"Never invent values; double-check every field against the invoice\" to the system prompt",
+        "Make the field nullable and describe null as \"not present on the invoice\"",
+        "Raise the effort level so Claude checks more carefully",
+        "Keep the field required but add `\"minLength\": 6` so short placeholder values are rejected"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A generic instruction does not remove the schema pressure to produce a string.",
+        "Correct. If the schema forces a value, the model must output something; giving it a legitimate \"not present\" value removes the incentive to fabricate.",
+        "More reasoning does not help when the contract has no valid way to say \"missing\".",
+        "A length constraint pushes even harder toward producing a fake value, and length constraints are not supported in strict structured outputs anyway."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+      "scenario": "S6"
+    },
+    {
+      "id": "AI1-018",
+      "subskill": "D2.1",
+      "difficulty": 2,
+      "stem": "A support-resolution agent has two tools, `search_customers` (\"Searches customers\") and `find_customer` (\"Finds a customer\"). Logs show Claude picks between them almost at random, and the wrong one returns empty results. What should the developer do FIRST?",
+      "select": 1,
+      "options": [
+        "Add a third tool, `lookup_customer`, that calls both and returns whichever result is non-empty",
+        "Lower the temperature to 0 so the model's tool choice becomes deterministic across requests",
+        "Merge the two tools, or rewrite each description to state what it searches and when to use it",
+        "Force `find_customer` with `tool_choice` on every request"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Adding another overlapping tool increases confusion.",
+        "Sampling settings do not fix ambiguous tool contracts.",
+        "Correct. Claude chooses tools from their names and descriptions; overlapping, vague tools should be consolidated or clearly differentiated.",
+        "Forcing one tool removes the agent's ability to choose and still uses the wrong one for some queries."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents",
+      "scenario": "S1"
+    },
+    {
+      "id": "AI1-019",
+      "subskill": "D4.3",
+      "difficulty": 2,
+      "stem": "A document-extraction backend parses Claude's output with `json.loads()` and fails about 2% of the time because of a leading sentence or a trailing comment. The output must always match a known schema. Which approach is MOST reliable?",
+      "code": {
+        "lang": "python",
+        "src": "resp = client.messages.create(\n    model=MODEL,\n    max_tokens=1024,\n    system=\"Extract the order. Respond only with JSON.\",\n    messages=[{\"role\": \"user\", \"content\": email_body}],\n)\ndata = json.loads(resp.content[0].text)  # fails ~2% of the time"
+      },
+      "select": 1,
+      "options": [
+        "Use structured outputs: `output_config.format` with the JSON schema",
+        "Add \"Respond ONLY with JSON\" in capital letters to the prompt",
+        "Strip everything before the first `{` and after the last `}`",
+        "Wrap `json.loads()` in a retry loop that resends the request until parsing succeeds"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Structured outputs constrain generation to the schema, removing the parsing failures (you should still check `stop_reason` for `refusal` or `max_tokens`).",
+        "Prompting reduces but does not eliminate format drift.",
+        "Brittle string slicing breaks on nested or multiple JSON objects.",
+        "Retries add cost and latency and still give no guarantee."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+      "scenario": "S6"
+    },
+    {
+      "id": "AI1-020",
+      "subskill": "D2.1",
+      "difficulty": 2,
+      "stem": "You are designing the input schema for the support agent's `create_refund` tool. Which THREE practices will MOST improve how reliably Claude fills it in? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Accept a single free-text `details` string and parse it on the server with your own validation rules",
+        "Give every property a description that states units and format (for example \"amount in cents, integer\")",
+        "Name properties with short codes such as `a1`, `r2` to save tokens",
+        "Use `enum` for fields with a fixed set of values such as `reason`",
+        "Nest every field three levels deep to group them logically",
+        "Mark truly required fields in `required` and leave genuinely optional ones out"
+      ],
+      "answer": [
+        1,
+        3,
+        5
+      ],
+      "explanations": [
+        "Free text pushes the parsing problem to the server and loses validation.",
+        "Correct. Descriptions with units and formats are how Claude knows what to put in each field.",
+        "Cryptic names remove meaning Claude uses to fill fields; the token saving is negligible.",
+        "Correct. Enums constrain values the backend can accept.",
+        "Unnecessary nesting makes the schema harder to fill correctly with no benefit.",
+        "Correct. Accurate `required` lists prevent Claude from inventing values for optional fields or skipping needed ones."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use",
+      "scenario": "S1"
+    },
+    {
+      "id": "AI1-032",
+      "subskill": "D3.6",
+      "difficulty": 3,
+      "stem": "A platform team with a Java backend wants to run Claude Code non-interactively in CI for a nightly code-maintenance job, using its agent loop and built-in tools. The Agent SDK libraries are Python and TypeScript. Which approach BEST fits without adding a new runtime language to the service?",
+      "select": 1,
+      "options": [
+        "Port the Agent SDK's TypeScript source to Java by hand and keep it in sync with each upstream release",
+        "Call claude.ai's web endpoints from Java",
+        "Run the Claude Desktop app on a build server and trigger it nightly with an OS-level scheduler",
+        "Run the Claude Code CLI headless (`claude -p --output-format json`) as a subprocess"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Porting the SDK is large, unsupported work.",
+        "Consumer web endpoints are not an integration surface for automation.",
+        "Desktop is interactive and not designed for unattended jobs.",
+        "Correct. The docs point other languages to running the CLI headless as a subprocess, which drives the same agent loop."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless",
+      "scenario": "S5"
+    },
+    {
+      "id": "AI3-002",
+      "subskill": "D1.1",
+      "difficulty": 2,
+      "stem": "In the support agent's manual tool loop, a response comes back with `stop_reason: \"max_tokens\"` and its last content block is a `tool_use` block for `write_file` whose `input.content` looks shorter than expected. What should the loop do?",
+      "select": 1,
+      "options": [
+        "Execute the tool, since the JSON parsed successfully",
+        "Do not run the tool; retry the turn with a higher `max_tokens`",
+        "Send a user message saying \"continue\" and append Claude's next output to the file",
+        "Return a `tool_result` with `is_error: true` saying the file was written"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A truncated input can still parse as a valid but partial object; running it writes a corrupt file.",
+        "Correct. `max_tokens` with a `tool_use` block means the tool input may be cut off, so retry with more output budget rather than execute.",
+        "Stitching continuations into a tool input is fragile and still risks executing a partial call.",
+        "Reporting a fabricated result corrupts the conversation state."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons",
+      "scenario": "S1"
+    },
+    {
+      "id": "AI3-003",
+      "subskill": "D1.1",
+      "difficulty": 1,
+      "stem": "In the support agent's tool loop, a response has `stop_reason: \"tool_use\"` with two `tool_use` blocks. What must the next request contain for the loop to continue correctly?",
+      "select": 1,
+      "options": [
+        "Only a user message with the two results as plain text",
+        "The full assistant `content` as-is, then one user message with a `tool_result` per `tool_use_id`",
+        "The assistant message with its `tool_use` blocks removed to save tokens, followed by both results",
+        "Two separate user messages, one per tool result, each referencing its `tool_use_id`"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Results must be `tool_result` blocks tied to their `tool_use_id`, following the assistant turn that requested them.",
+        "Correct. Append the whole assistant turn (including any thinking and both `tool_use` blocks), then return all results in a single user turn.",
+        "Every `tool_result` must match a `tool_use` in the preceding assistant turn; removing them produces an invalid request.",
+        "All results for one assistant turn belong in one user message; consecutive user messages for parallel results are incorrect."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use",
+      "scenario": "S1"
+    },
+    {
+      "id": "AI3-021",
+      "subskill": "D4.5",
+      "difficulty": 1,
+      "stem": "A document-processing platform must process 60,000 new records through the extraction pipeline every night. Results are needed by 9 a.m.; nobody waits on individual items, and cost is the main concern. Which approach BEST fits?",
+      "select": 1,
+      "options": [
+        "Fan out 60,000 streaming requests in parallel from a worker pool sized to the rate limit",
+        "Submit the work through the Message Batches API",
+        "Use the most capable model with fast mode",
+        "Send all products in a single request with a very large `max_tokens`"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Real-time calls cost full price and fight rate limits for work nobody is waiting on.",
+        "Correct. Non-urgent bulk work is the Batches API's use case: 50% of standard prices, most batches finish within an hour, and the maximum is 24 hours.",
+        "Fast mode targets latency at premium pricing, the opposite of this requirement.",
+        "One request cannot produce 60,000 descriptions reliably within output limits."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+      "scenario": "S6"
+    },
+    {
+      "id": "AI3-022",
+      "subskill": "D4.5",
+      "difficulty": 2,
+      "stem": "In the extraction pipeline, a batch job writes results back to a database by iterating results and assigning them to `requests[i]` in the order they were submitted. QA finds descriptions attached to the wrong products. What is the fix?",
+      "code": {
+        "lang": "python",
+        "src": "for i, result in enumerate(client.messages.batches.results(batch_id)):\n    if result.result.type == \"succeeded\":\n        text = result.result.message.content[0].text\n        db.save(product_id=products[i].id, description=text)"
+      },
+      "select": 1,
+      "options": [
+        "Submit smaller batches so ordering is preserved",
+        "Sort the results by `created_at` before assigning",
+        "Use streaming instead of batches",
+        "Match each result to its request using `custom_id`, since result order is not guaranteed"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Ordering is not guaranteed at any batch size.",
+        "Results do not carry a per-request ordering you can rely on.",
+        "This abandons the cost benefit instead of fixing the matching.",
+        "Correct. Batch results may come back in any order; each request's `custom_id` is how you match them."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+      "scenario": "S6"
+    },
+    {
+      "id": "AI3-023",
+      "subskill": "D4.5",
+      "difficulty": 2,
+      "stem": "An extraction-pipeline batch has ended. `request_counts` shows 59,200 succeeded, 500 errored, and 300 expired. The errored results include a mix of `invalid_request` errors and server errors. Which TWO actions are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Resubmit the entire batch so all results come from one run",
+        "Resubmit the expired and server-error requests in a new batch; requests that did not succeed are not billed",
+        "Wait; expired requests are retried automatically and will finish within another 24-hour window",
+        "Switch the failed requests to `stream: true` inside the next batch",
+        "Fix the `invalid_request` requests before resubmitting them, since resending unchanged will fail again"
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "Re-running succeeded requests doubles cost for no benefit.",
+        "Correct. Expired and errored requests were never completed and are not billed; retrying them is safe.",
+        "Expired requests are final; they must be resubmitted.",
+        "Streaming is not supported inside batch requests.",
+        "Correct. Validation errors are deterministic; the request itself must be corrected."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+      "scenario": "S6"
+    },
+    {
+      "id": "AI3-024",
+      "subskill": "D4.5",
+      "difficulty": 2,
+      "stem": "For the extraction platform, which TWO workloads are good fits for the Message Batches API rather than real-time Messages calls? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "A customer-support chat where the user is waiting for each reply",
+        "Running a 5,000-case evaluation suite after each prompt change",
+        "An IDE autocomplete feature",
+        "Re-classifying last year's support tickets with a new taxonomy",
+        "A multi-step agent that must call tools and react to results within a single session"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "A waiting user needs low latency; batches can take up to 24 hours.",
+        "Correct. Evals are bulk, latency-insensitive work that benefits from half-price processing.",
+        "Autocomplete is latency-critical.",
+        "Correct. Backfills over historical data are classic batch work.",
+        "Each batch request is single-shot; an interactive tool loop needs real-time calls."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+      "scenario": "S6"
+    }
+  ],
+  "archived": [
+    {
+      "id": "AI1-001",
+      "reason": "claude.ai Projects product choice, not on CCAR-F"
+    },
+    {
+      "id": "AI1-002",
+      "reason": "choice of surface (Agent SDK vs other); not squarely a task statement"
+    },
+    {
+      "id": "AI1-003",
+      "reason": "SDK auth/licensing policy, not architecture"
+    },
+    {
+      "id": "AI1-004",
+      "reason": "basic Messages API statelessness, general API mechanics"
+    },
+    {
+      "id": "AI1-005",
+      "reason": "general stateless backend/session storage, not CCAR-F"
+    },
+    {
+      "id": "AI1-006",
+      "reason": "claude.ai Projects to API migration, not on CCAR-F"
+    },
+    {
+      "id": "AI1-021",
+      "reason": "prompt injection/content boundaries; not a listed task statement"
+    },
+    {
+      "id": "AI1-022",
+      "reason": "Usage Policy trivia"
+    },
+    {
+      "id": "AI1-023",
+      "reason": "system-prompt scope/product guardrails, not a task statement"
+    },
+    {
+      "id": "AI1-024",
+      "reason": "refusal stop_reason handling, API mechanics"
+    },
+    {
+      "id": "AI1-025",
+      "reason": "Claude Code plugins not covered by CCAR-F task statements"
+    },
+    {
+      "id": "AI1-026",
+      "reason": "plugins not on CCAR-F"
+    },
+    {
+      "id": "AI1-027",
+      "reason": "plugins not on CCAR-F"
+    },
+    {
+      "id": "AI1-028",
+      "reason": "plugins not on CCAR-F"
+    },
+    {
+      "id": "AI1-029",
+      "reason": "plugins not on CCAR-F"
+    },
+    {
+      "id": "AI1-030",
+      "reason": "plugins/settings scopes, not on CCAR-F"
+    },
+    {
+      "id": "AI1-031",
+      "reason": "plugins not on CCAR-F"
+    },
+    {
+      "id": "AI1-033",
+      "reason": "doubtful key: in S1 the Agent SDK with hooks is the expected architecture; Messages API vs SDK choice is arguable; not a task statement"
+    },
+    {
+      "id": "AI3-001",
+      "reason": "basic Messages API syntax"
+    },
+    {
+      "id": "AI3-004",
+      "reason": "pause_turn/server-tool API mechanics"
+    },
+    {
+      "id": "AI3-005",
+      "reason": "depends on pause_turn nuance; API mechanics"
+    },
+    {
+      "id": "AI3-006",
+      "reason": "SSE streaming events, transport"
+    },
+    {
+      "id": "AI3-007",
+      "reason": "streaming input_json_delta parsing, transport"
+    },
+    {
+      "id": "AI3-008",
+      "reason": "streaming/timeouts, transport"
+    },
+    {
+      "id": "AI3-009",
+      "reason": "image format validation, API trivia"
+    },
+    {
+      "id": "AI3-010",
+      "reason": "PDF vision input, not a task statement"
+    },
+    {
+      "id": "AI3-011",
+      "reason": "Files API upload overhead, not on CCAR-F"
+    },
+    {
+      "id": "AI3-012",
+      "reason": "cloud platform feature availability, not on CCAR-F"
+    },
+    {
+      "id": "AI3-013",
+      "reason": "extended/adaptive thinking config, model/version trivia"
+    },
+    {
+      "id": "AI3-014",
+      "reason": "thinking blocks in tool loops, API trivia"
+    },
+    {
+      "id": "AI3-015",
+      "reason": "prompt caching, not on CCAR-F"
+    },
+    {
+      "id": "AI3-016",
+      "reason": "prompt caching, not on CCAR-F"
+    },
+    {
+      "id": "AI3-017",
+      "reason": "prompt caching, not on CCAR-F"
+    },
+    {
+      "id": "AI3-018",
+      "reason": "prompt caching/cost arithmetic, not on CCAR-F"
+    },
+    {
+      "id": "AI3-019",
+      "reason": "prompt caching, not on CCAR-F"
+    },
+    {
+      "id": "AI3-020",
+      "reason": "prompt caching usage accounting, not on CCAR-F"
+    },
+    {
+      "id": "AI3-025",
+      "reason": "cloud platform migration, not on CCAR-F"
+    },
+    {
+      "id": "AI3-026",
+      "reason": "cloud platform feature availability, not on CCAR-F"
+    }
+  ],
+  "lessonNotes": [
+    {
+      "task": "D1.1",
+      "note": "AI.3 keyPoints on stop_reason (tool_use loop, never execute tool_use from a max_tokens turn, one tool_result per tool_use_id) are accurate source for the agentic loop."
+    },
+    {
+      "task": "D1.7",
+      "note": "AI.1 keyPoint on --continue/--resume and starting fresh after repeated failed corrections is usable."
+    },
+    {
+      "task": "D2.1",
+      "note": "AI.1 keyPoints/traps on tool naming overlap, schema property descriptions and enums are reusable."
+    },
+    {
+      "task": "D2.4",
+      "note": "AI.1 keyPoint on local stdio vs remote MCP (claude.ai/API reach only remote servers) is reusable."
+    },
+    {
+      "task": "D3.5",
+      "note": "AI.1 trap on repeated corrections polluting context; /clear with a sharper prompt."
+    },
+    {
+      "task": "D3.6",
+      "note": "Running the Claude Code CLI headless (claude -p --output-format json) as a subprocess from other languages."
+    },
+    {
+      "task": "D4.3",
+      "note": "AI.1 keyPoint on schema design (nullable fields when data may be absent, enums, required only when truly required) and trap on forced-required fields are accurate; structured outputs via output_config.format."
+    },
+    {
+      "task": "D4.5",
+      "note": "AI.3 Message Batches keyPoints and trap on custom_id mapping are accurate; resubmit only failed/expired items."
+    },
+    {
+      "task": "D5.4",
+      "note": "AI.1 keyPoint on /clear vs /compact [focus] and delegating searches to subagents is reusable."
+    },
+    {
+      "task": "(unused)",
+      "note": "Plugins, caching, streaming, vision/PDF/Files API, thinking, cloud platforms and Projects points are off-blueprint."
+    }
+  ]
+}

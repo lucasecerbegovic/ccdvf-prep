@@ -1,0 +1,1478 @@
+{
+  "lessons": [
+    {
+      "subskill": "D3.1",
+      "title": "CLAUDE.md hierarchy",
+      "summary": "The exam tests where an instruction should live so that the right people (and the CI runner) actually get it, how the files load, and what CLAUDE.md can and cannot guarantee. Most items are a diagnosis: a teammate or a pipeline doesn't get an instruction because it sits in the wrong scope or never loads.",
+      "keyPoints": [
+        "**Scopes, broad to specific**: managed policy CLAUDE.md (deployed by IT, all users on the machine) → user `~/.claude/CLAUDE.md` (you, every project) → project `./CLAUDE.md` or `./.claude/CLAUDE.md` (committed, the team) → local `./CLAUDE.local.md` (you, this project; add it to `.gitignore`).",
+        "Files in the working directory **and every ancestor** load at launch and are **concatenated**, not overridden; content closer to the launch directory is read last, and `CLAUDE.local.md` comes after `CLAUDE.md` at each level.",
+        "CLAUDE.md files in **subdirectories load on demand**, the first time Claude reads, writes or edits a file in that subdirectory (a single-file `cat`/`head` counts as a read).",
+        "`@path` imports: relative paths resolve from the importing file, recursion up to four hops, code spans are not imports, and an import outside the project triggers a one-time approval dialog. Imports organize; they **don't reduce context**, because they load with the parent.",
+        "Keep each file short (the docs target **under 200 lines**): build/test commands, conventions, 'always do X' rules written concretely enough to verify. Move procedures to **skills** and area-specific rules to **path-scoped `.claude/rules/`**.",
+        "CLAUDE.md is delivered as context after the system prompt: **guidance, not enforcement**. For 'must never happen', use permission `deny` rules (managed settings for org-wide) or a PreToolUse hook.",
+        "`claudeMdExcludes` (glob on absolute paths, any settings layer, arrays merge) skips irrelevant ancestor or other-team files in a monorepo; it **cannot** exclude the managed CLAUDE.md.",
+        "After `/compact`, the project-root CLAUDE.md is re-read from disk; instructions given only in conversation survive only as whatever the summary kept. Nested CLAUDE.md files and path-scoped rules reload on demand.",
+        "**CI**: only committed files exist on the runner, so `CLAUDE.local.md` and `~/.claude/CLAUDE.md` don't apply there. `claude --bare` skips CLAUDE.md discovery entirely; pass what the run needs with `--append-system-prompt(-file)` or drop `--bare`.",
+        "Debug with `/context all` (Memory files list) and `/memory`; the `InstructionsLoaded` hook logs which instruction files load and why."
+      ],
+      "traps": [
+        "Putting team conventions in `~/.claude/CLAUDE.md` or `CLAUDE.local.md`: teammates and the CI runner never see them.",
+        "Expecting a 'NEVER edit X' line in CLAUDE.md (even the managed one) to block an action. Only permissions and hooks enforce.",
+        "Splitting a long CLAUDE.md into `@imports` 'to save tokens'. Imports load with the parent.",
+        "Assuming every CLAUDE.md in the repo loads at launch. Subdirectory files wait until Claude touches a file there.",
+        "Adding `--bare` to a CI job for speed and then wondering why repo conventions are ignored."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "// .claude/settings.local.json (personal, not committed)\n{\n  \"claudeMdExcludes\": [\n    \"**/monorepo/legacy-team/CLAUDE.md\",\n    \"/home/me/monorepo/other-team/.claude/rules/**\"\n  ]\n}"
+      },
+      "docs": [
+        {
+          "title": "How Claude remembers your project (memory)",
+          "url": "https://code.claude.com/docs/en/memory"
+        },
+        {
+          "title": "Run Claude Code programmatically (--bare)",
+          "url": "https://code.claude.com/docs/en/headless"
+        }
+      ],
+      "drill": "In a scratch repo create `CLAUDE.md`, `CLAUDE.local.md`, `pkg/a/CLAUDE.md` and an `@docs/extra.md` import. Start `claude` at the root, run `/context all`, then ask Claude to read a file in `pkg/a/` and watch the `Loaded` line. Finally run `claude --bare -p \"what are this project's conventions?\"` and compare."
+    },
+    {
+      "subskill": "D3.2",
+      "title": "Slash commands and skills",
+      "summary": "The exam tests when to package knowledge or a procedure as a skill instead of CLAUDE.md, where skills live (shared vs personal vs plugin), and how frontmatter controls who can invoke a skill, what it may use and whether it runs in isolation.",
+      "keyPoints": [
+        "A skill is a folder with `SKILL.md` (YAML frontmatter + instructions) plus optional supporting files and scripts. Custom commands in `.claude/commands/*.md` have been **merged into skills**: both create `/name`; prefer skills for new work.",
+        "**Locations**: project `.claude/skills/<name>/SKILL.md` (commit it to share), personal `~/.claude/skills/`, enterprise (managed), plugin (`/plugin-name:skill-name`). Nested `<subdir>/.claude/skills/` load the first time Claude touches a file in that subdirectory.",
+        "**Name clash**: enterprise beats personal, personal beats project; a skill beats a same-named `.claude/commands/` file; plugin skills don't clash because they are namespaced.",
+        "**Progressive disclosure**: only the description (plus `when_to_use`, truncated at 1,536 characters) sits in context each turn; the body loads on invocation; supporting files load only if Claude reads them; scripts run and only their output enters context.",
+        "The **description drives auto-invocation**: say what the skill does and when to use it, key use case first, in the words users actually type.",
+        "`disable-model-invocation: true` = only the user can run it (description not even in context; good for side-effecting `/deploy`). `user-invocable: false` = only Claude can load it (hidden from the `/` menu).",
+        "`allowed-tools` pre-approves tools for the turn that invokes the skill; `context: fork` (+ `agent`) runs the skill as an isolated subagent whose prompt is the skill body. It needs an actual task; a skill of bare guidelines returns nothing useful when forked.",
+        "`` !`command` `` runs a shell command **before** the skill content reaches Claude and splices in the output (e.g. `` !`gh pr diff` ``); a failing command aborts the invocation.",
+        "In `claude -p`, user-invoked skills and custom commands work: put `/skill-name args` in the prompt. `--bare` skips skill discovery (except skills in an `--add-dir` directory).",
+        "**Which mechanism**: always-true facts → CLAUDE.md; area-specific conventions → path-scoped rules; repeatable procedures or bulky reference → skill; distribution across many repos → plugin; guarantees → hooks/permissions."
+      ],
+      "traps": [
+        "Confusing `disable-model-invocation: true` (user-only) with `user-invocable: false` (Claude-only).",
+        "A vague description ('helper utilities') and then wondering why Claude never auto-loads the skill.",
+        "Putting a team skill in `~/.claude/skills/`: it never reaches teammates or CI.",
+        "Using `context: fork` on a reference-only skill, or expecting a non-forked skill to keep its content out of the main context.",
+        "Believing skills and slash commands can't run in `claude -p`."
+      ],
+      "code": {
+        "lang": "markdown",
+        "src": "---\nname: pr-summary\ndescription: Summarize a pull request's changes and risks. Use when asked to summarize, describe or explain a PR.\ncontext: fork\nagent: Explore\nallowed-tools: Bash(gh *)\n---\n## Pull request context\n- Diff: !`gh pr diff`\n- Comments: !`gh pr view --comments`\n\nSummarize what changed, why, and the riskiest hunks."
+      },
+      "docs": [
+        {
+          "title": "Extend Claude with skills",
+          "url": "https://code.claude.com/docs/en/skills"
+        },
+        {
+          "title": "Run Claude Code programmatically",
+          "url": "https://code.claude.com/docs/en/headless"
+        }
+      ],
+      "drill": "Convert one multi-step procedure from your CLAUDE.md into `.claude/skills/<name>/SKILL.md`. Write two descriptions (vague vs specific) and test whether Claude auto-invokes each from a natural request. Then add `disable-model-invocation: true` and confirm only `/name` runs it, and run it once via `claude -p \"/name arg\"`."
+    },
+    {
+      "subskill": "D3.3",
+      "title": "Path-specific rules",
+      "summary": "The exam tests scoping conventions to the files they govern with `.claude/rules/*.md` and `paths:` frontmatter, so they load only when Claude works on matching files, and diagnosing rules that load too often or never.",
+      "keyPoints": [
+        "Rules live in `.claude/rules/` (discovered **recursively**, one topic per file). Rules **without** `paths` load at launch with the same priority as `.claude/CLAUDE.md`.",
+        "`paths` is the **only** frontmatter field Claude Code reads from a rule (YAML list or comma-separated string). Any other field (`globs`, `description`, ...) is ignored silently, so a rule with only an unrecognized field behaves as unconditional.",
+        "If the frontmatter YAML doesn't parse, it is ignored and the rule loads as if it had no `paths`; `claude --debug` shows the parse error.",
+        "A path-scoped rule loads when Claude uses **Read, Write or Edit** on a matching file (or a Bash single-file read such as `cat`). Content that arrives some other way, such as a diff piped on stdin, triggers nothing.",
+        "Patterns are relative to the rule's **base directory**: the directory containing the rule's `.claude` folder (for `~/.claude/rules/`, the session's primary working directory). Examples: `**/*.test.ts`, `src/api/**/*.ts`, `src/**/*.{ts,tsx}`.",
+        "**Rules vs subdirectory CLAUDE.md**: a nested CLAUDE.md covers one directory tree; a rule's globs can cut across the tree (all test files, all migrations, all `.tf` files) without duplicating files.",
+        "**Rules vs skills**: rules load automatically when matching files are touched; skills load when invoked or when Claude judges them relevant to the prompt. Task procedures belong in skills.",
+        "User-level rules in `~/.claude/rules/` apply to every project and load before project rules; neither overrides the other, so conflicts make behaviour unpredictable.",
+        "Excluding `project` from `--setting-sources` skips project rules. With `--add-dir` (and `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`) the extra directory's unconditional rules load but its `paths` rules do not."
+      ],
+      "traps": [
+        "Writing `globs:` or `applyTo:` (other tools' syntax) instead of `paths:`. The rule silently becomes always-on.",
+        "Writing patterns relative to the repo root for a rule that lives in a nested package's `.claude/rules/`.",
+        "Expecting a path rule to apply in a CI review that only sees a piped diff.",
+        "Solving context bloat with `@imports` instead of path scoping.",
+        "Creating 30 identical subdirectory CLAUDE.md files for a convention one glob could cover."
+      ],
+      "code": {
+        "lang": "markdown",
+        "src": "---\npaths:\n  - \"src/api/**/*.ts\"\n  - \"tests/api/**/*.test.ts\"\n---\n# API rules\n- Validate every request body with the shared zod schemas\n- Return errors via `apiError(code, message)` only"
+      },
+      "docs": [
+        {
+          "title": "Organize rules with .claude/rules/",
+          "url": "https://code.claude.com/docs/en/memory#organize-rules-with-claude/rules/"
+        }
+      ],
+      "drill": "Add `.claude/rules/tests.md` with `paths: [\"**/*.test.ts\"]`. Start a session, run `/context all` (the rule is absent), ask Claude to open a test file, and confirm it now loads. Then rename `paths` to `globs` and observe that it loads at launch."
+    },
+    {
+      "subskill": "D3.4",
+      "title": "Plan mode vs direct execution",
+      "summary": "The exam tests choosing between planning first and just doing it: plan mode for large, ambiguous, multi-file or architectural changes; direct execution for small, well-scoped fixes; and subagents to keep discovery output out of the main context.",
+      "keyPoints": [
+        "**Plan mode** (`Shift+Tab`, a `/plan` prefix, or `--permission-mode plan`): Claude reads files, runs exploratory commands and writes a plan, but **source edits stay blocked until you approve**.",
+        "On approval you pick how to continue (for example auto mode/auto-accept edits, or manually approve edits) or **No, keep planning** with feedback. `Ctrl+G` opens the plan in your editor so you can fix it before any code changes.",
+        "Plan mode keeps its blocks in non-interactive runs: `claude -p --permission-mode plan` is a safe way to have CI produce a proposal without touching code.",
+        "Use plan mode when the approach is uncertain, many files or modules are involved, the code is unfamiliar, or a wrong direction is expensive. Skip it when the fix is small and well located (a one-line bug with a failing test, a rename in one file).",
+        "Correcting a plan is cheap; correcting a half-implemented wrong approach is expensive. Review the plan for the decisions that matter (data model, migration order, API shape) before approving.",
+        "The built-in **Explore** subagent (read-only; Write/Edit denied) does searches in its own context window, and the **Plan** subagent does research during plan mode, so only findings return to the main conversation.",
+        "Explore and Plan start **without CLAUDE.md**; put anything they must respect into the delegation prompt.",
+        "For long efforts, write the approved plan or spec to a file and start the implementation in a fresh session from it, rather than dragging a compacted, noisy exploration context along.",
+        "In automation, separate 'propose' from 'apply': a plan-mode job produces the plan, a human approves, then an edit-capable job implements it."
+      ],
+      "traps": [
+        "Using plan mode for every trivial fix (slow, no benefit) or skipping it for a cross-cutting migration.",
+        "Asking for 'a plan first' in normal mode and assuming nothing will be edited. Only plan mode blocks edits.",
+        "Approving a flawed plan and planning to fix it during implementation.",
+        "Reading hundreds of files into the main conversation instead of delegating exploration.",
+        "Assuming the Explore subagent knows your CLAUDE.md conventions."
+      ],
+      "code": {
+        "lang": "bash",
+        "src": "# CI: propose, don't apply\nclaude -p \"Propose an implementation plan for issue #412\" \\\n  --permission-mode plan --output-format json > plan.json"
+      },
+      "docs": [
+        {
+          "title": "Plan mode",
+          "url": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+        },
+        {
+          "title": "Common workflows: plan before editing, delegate research",
+          "url": "https://code.claude.com/docs/en/common-workflows"
+        },
+        {
+          "title": "Built-in subagents",
+          "url": "https://code.claude.com/docs/en/sub-agents"
+        }
+      ],
+      "drill": "Pick a cross-module change. Run it once in plan mode: edit the plan with `Ctrl+G`, then approve. Run a one-line bug fix directly. Then ask 'use a subagent to investigate how X works' and compare the main context size (`/context`) with reading the files yourself."
+    },
+    {
+      "subskill": "D3.5",
+      "title": "Iterative refinement",
+      "summary": "The exam tests how to get Claude Code to converge on the right result: concrete examples instead of adjectives, a pass/fail check it can run (tests first), interview-style clarification when requirements are fuzzy, and deciding whether to give interacting issues together or one at a time.",
+      "keyPoints": [
+        "**Concrete input/output examples** beat descriptions ('make dates nicer'): show 2-3 exact before → after pairs, including edge cases.",
+        "**Give Claude a check to run**: a test file, build exit code, linter or fixture diff. With pass/fail feedback Claude closes the loop itself; put the exact test command in CLAUDE.md.",
+        "**Test-driven iteration**: write (or have Claude write) tests from the spec, confirm they fail, commit them, then have Claude implement until green **without changing the tests**. A deny rule on the test path makes that deterministic.",
+        "Enforcement ladder for 'done': prompt ('keep going until tests pass') → `/goal` → a **Stop hook** that exits 2 to send Claude back to work. Always ask for evidence (command + output), not 'all tests pass'.",
+        "**Interview first** when requirements are fuzzy: 'interview me until you could write the spec, then write SPEC.md', then build from it in a fresh session.",
+        "Issues that **interact** (they touch the same calculation or code path) go in **one message** so fixes are designed together; independent issues can go one at a time.",
+        "After two failed corrections, `/clear` and write a better prompt that folds in what you learned; `Esc` early when Claude drifts; `/rewind` to try a bolder approach safely.",
+        "Unattended runs can't ask questions: state what done looks like, what it may touch, what stops it (`--max-turns`, `--max-budget-usd`) and who signs off.",
+        "For legacy code without tests, write characterization tests first, then refactor in small steps."
+      ],
+      "traps": [
+        "Adding 'IMPORTANT' or capital letters instead of an example or a test.",
+        "Letting Claude edit the tests it is supposed to satisfy.",
+        "Feeding three interacting bugs one at a time so each fix breaks the previous one.",
+        "Retrying a failed headless run with the identical prompt and no failure details.",
+        "Trusting 'done' without a check whose output you can read."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "Fix formatDuration(). Expected:\n  formatDuration(59)    -> \"59s\"\n  formatDuration(3600)  -> \"1h\"\n  formatDuration(3661)  -> \"1h 1m 1s\"\n  formatDuration(0)     -> \"0s\"\nAdd these as cases in duration.test.ts first, run `pnpm vitest run duration`,\nconfirm they fail, then fix the function until they pass. Don't edit the tests."
+      },
+      "docs": [
+        {
+          "title": "Best practices: give Claude a check to run",
+          "url": "https://code.claude.com/docs/en/best-practices"
+        },
+        {
+          "title": "Common workflows",
+          "url": "https://code.claude.com/docs/en/common-workflows"
+        }
+      ],
+      "drill": "Take a small function with a known bug. Prompt once with a vague description, then with four concrete input/output pairs written as failing tests. Compare the number of correction rounds. Add a project deny rule on the test file and observe Claude fixing the source instead."
+    },
+    {
+      "subskill": "D3.6",
+      "title": "Claude Code in CI/CD",
+      "summary": "The exam tests running Claude Code unattended: `claude -p` with machine-readable output, permissions that neither hang nor over-grant, the committed repo config as CI context, an independent review session, and keeping review cost proportional to what changed.",
+      "keyPoints": [
+        "`claude -p \"...\"` runs non-interactively; exit code is 0 on success. `--output-format json` returns `result`, `session_id`, usage and `total_cost_usd`; `stream-json` streams events.",
+        "`--json-schema '<schema>'` (print mode) adds a validated `structured_output` field. If the run ends without valid structured output the field is absent, so check for it.",
+        "**Permissions**: `--allowedTools` pre-approves (e.g. `\"Read,Edit,Bash(npm test *)\"`; the space before `*` matters); `--tools` restricts which built-ins exist; `--permission-mode dontAsk` denies anything not pre-approved. Never `bypassPermissions` outside an isolated container.",
+        "Permission rules merge across scopes and evaluate **deny → ask → allow**; a local allow can't override a project deny. Bash rules match command text only, so pair them with **sandboxing** for network/file isolation.",
+        "**Caps**: `--max-turns`, `--max-budget-usd` (client-side estimate; leave headroom), plus job `timeout-minutes`/concurrency in GitHub Actions (`claude_args` carries CLI flags).",
+        "Only committed config reaches the runner: project `CLAUDE.md`, `.claude/settings.json`, `.claude/rules/`, `.claude/skills/`, `.mcp.json`. `--bare` skips all of that for reproducibility; pass needs explicitly (`--append-system-prompt-file`, `--settings`, `--mcp-config`).",
+        "Without `--bare`, `-p` runs the repo's hooks and MCP servers with no trust dialog. Be careful with untrusted PRs.",
+        "**Independent review**: review generated code in a separate session that never saw the generator's reasoning, not via `--continue` or a fork of the generating session.",
+        "**Incremental review**: on new pushes review only the commits since the last reviewed SHA and pass prior findings so only new or unresolved issues are reported.",
+        "Sessions: capture `session_id` from JSON and `--resume` it; `--continue` picks the most recent session and is unsafe with parallel jobs."
+      ],
+      "traps": [
+        "`bypassPermissions` 'so the job doesn't hang'. Use narrow `--allowedTools` + `dontAsk` (+ sandbox).",
+        "Asking the generating session to review its own diff.",
+        "Re-reviewing the whole PR on every push and re-posting the same comments.",
+        "Scraping text output instead of `--output-format json` / `--json-schema`.",
+        "Relying on CLAUDE.md lines like 'never push' as a CI control."
+      ],
+      "code": {
+        "lang": "bash",
+        "src": "claude -p \"Review the diff in diff.patch against CLAUDE.md criteria\" \\\n  --allowedTools \"Read,Grep,Glob\" \\\n  --permission-mode dontAsk \\\n  --max-turns 15 \\\n  --output-format json \\\n  --json-schema \"$(cat review.schema.json)\" | jq '.structured_output'"
+      },
+      "docs": [
+        {
+          "title": "Run Claude Code programmatically",
+          "url": "https://code.claude.com/docs/en/headless"
+        },
+        {
+          "title": "CLI reference",
+          "url": "https://code.claude.com/docs/en/cli-reference"
+        },
+        {
+          "title": "Permission modes",
+          "url": "https://code.claude.com/docs/en/permission-modes"
+        },
+        {
+          "title": "Claude Code GitHub Actions",
+          "url": "https://code.claude.com/docs/en/github-actions"
+        }
+      ],
+      "drill": "Write a script that runs `claude -p` on a diff with `--output-format json --json-schema` for `{findings:[{file,line,severity,message}]}`, `--allowedTools \"Read,Grep,Glob\"` and `--permission-mode dontAsk`. Make it exit non-zero when `structured_output` is missing or contains a `high` finding."
+    }
+  ],
+  "questions": [
+    {
+      "id": "D3-1-001",
+      "subskill": "D3.1",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "To make CI runs start faster and behave the same on every runner, the platform team added `--bare` to the pipeline's `claude -p` invocation. Since then, Claude's automated fixes ignore the conventions in the repository's committed root `CLAUDE.md` (pnpm only, named exports), although the same prompt run locally without the flag follows them. What is the BEST fix?",
+      "code": {
+        "lang": "bash",
+        "src": "claude --bare -p \"Fix the failing lint errors in src/\" \\\n  --allowedTools \"Read,Edit,Bash(pnpm lint *)\" \\\n  --permission-mode dontAsk"
+      },
+      "select": 1,
+      "options": [
+        "Move the file to `.claude/CLAUDE.md`, which is the location Claude Code reads in non-interactive runs.",
+        "Pass the conventions explicitly with `--append-system-prompt-file CLAUDE.md`, or drop `--bare`.",
+        "Duplicate the conventions into `CLAUDE.local.md`, because local instructions are appended last and therefore win.",
+        "Add `--setting-sources project` so the project scope is loaded in addition to the bare defaults."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Both `./CLAUDE.md` and `./.claude/CLAUDE.md` are project locations; neither is read when `--bare` skips CLAUDE.md discovery.",
+        "Correct. `--bare` skips auto-discovery of hooks, skills, MCP servers, auto memory and CLAUDE.md. The documented pattern is to pass what the run needs with flags such as `--append-system-prompt-file`, or not to use bare mode.",
+        "`CLAUDE.local.md` is personal and normally gitignored, so it isn't on the runner, and bare mode would skip it anyway.",
+        "`--setting-sources` selects which settings files load; it doesn't undo bare mode's skipping of CLAUDE.md discovery."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless#start-faster-with-bare-mode"
+    },
+    {
+      "id": "D3-1-002",
+      "subskill": "D3.1",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "A monorepo's CI review job runs `git diff origin/main... | claude -p \"Review this diff\"` from the repository root. Payment-specific review rules live in `services/billing/CLAUDE.md`, and the root `CLAUDE.md` holds general rules. Reviews of billing PRs never apply the billing rules. Jobs for other services must not receive the billing rules. What is the BEST change?",
+      "select": 1,
+      "options": [
+        "Import `@services/billing/CLAUDE.md` from the root `CLAUDE.md` so it always loads.",
+        "Rename the file to `services/billing/CLAUDE.local.md` so it loads with higher priority.",
+        "For billing PRs, run the job with `services/billing/` as the working directory so that file is loaded at launch.",
+        "Pass `--add-dir services/billing` so Claude Code loads that directory's CLAUDE.md."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "This would load the billing rules in every job, including other services' reviews, which the requirement forbids.",
+        "`CLAUDE.local.md` is personal and normally gitignored; it is also loaded under the same on-demand rule as a subdirectory CLAUDE.md.",
+        "Correct. CLAUDE.md files in the working directory and its ancestors load at launch, so billing's file and the root file both load. Subdirectory files otherwise load only when Claude reads or edits a file there, and a piped diff isn't a file read.",
+        "`--add-dir` grants file access; CLAUDE.md files from added directories aren't loaded by default."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#how-claude-md-files-load"
+    },
+    {
+      "id": "D3-1-003",
+      "subskill": "D3.1",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "The team's committed `CLAUDE.md` says \"Never modify files under `db/migrations/` - migrations are append-only.\" A nightly `claude -p` auto-fix job nevertheless edited an existing migration to make a failing test pass. The team needs this to be impossible for the CI job and for developers' sessions. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Rewrite the line in capitals under a `## CRITICAL` heading at the very top of `CLAUDE.md`.",
+        "Move the instruction into the organization's managed-policy CLAUDE.md so individual users can't exclude it.",
+        "Repeat the instruction in the CI prompt as well as in CLAUDE.md, so it appears in two places.",
+        "Add a deny rule such as `Edit(/db/migrations/**)` to the committed `.claude/settings.json`."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Emphasis may improve adherence, but CLAUDE.md is context, not enforcement; it can't make the edit impossible.",
+        "A managed CLAUDE.md can't be excluded, but it is still guidance. The docs say to enforce with settings such as `permissions.deny`.",
+        "Repetition is still a prompt-level request. It doesn't block the tool call.",
+        "Correct. Permission deny rules are enforced by the client whatever Claude decides, and the committed project settings apply both on the runner and in teammates' sessions."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#deploy-organization-wide-claude-md"
+    },
+    {
+      "id": "D3-1-004",
+      "subskill": "D3.1",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "The internal developer platform team must roll out two things to every engineer's Claude Code across all repositories: (1) secure-coding guidance (e.g. \"use the shared crypto helpers\") that individual engineers can't switch off with `claudeMdExcludes`, and (2) a hard block on reading `.env` files. Engineers own their repos and home directories. Which TWO mechanisms BEST meet these requirements? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "A managed-policy CLAUDE.md deployed to the OS-level managed location via MDM or similar tooling.",
+        "A `~/.claude/CLAUDE.md` written to each engineer's home directory by an onboarding script.",
+        "A `permissions.deny` rule for `.env` reads in managed settings.",
+        "A template `CLAUDE.md` committed to every repository by a platform bot.",
+        "A `claudeMdExcludes` entry in managed settings that excludes every project CLAUDE.md so only the org guidance loads."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. A managed CLAUDE.md applies to all users on the machine in any repository and can't be excluded with `claudeMdExcludes`.",
+        "Engineers can edit or delete their own user file, so it doesn't meet the 'can't switch off' requirement.",
+        "Correct. Blocking is a settings concern: managed settings rules are enforced by the client and can't be overridden by user or project files.",
+        "Repo owners can change or delete it, it doesn't cover new repos automatically, and it would still be guidance rather than a block.",
+        "This removes legitimate team guidance and still doesn't enforce anything; the org guidance already can't be excluded."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#manage-claude-md-for-large-teams"
+    },
+    {
+      "id": "D3-1-005",
+      "subskill": "D3.1",
+      "scenario": "S4",
+      "difficulty": 1,
+      "stem": "An engineer on the platform team starts Claude Code in `monorepo/tools/cli/`. The ancestor file `monorepo/CLAUDE.md` is owned by another team and full of instructions irrelevant to the CLI, which crowd the engineer's context. The other team still needs that file. What should the engineer do?",
+      "select": 1,
+      "options": [
+        "Add the root file's path to `claudeMdExcludes` in their `.claude/settings.local.json`.",
+        "Delete the root `CLAUDE.md` in a local commit and avoid pushing it.",
+        "Write \"Ignore the instructions in the monorepo root CLAUDE.md\" in `tools/cli/CLAUDE.md`.",
+        "Start Claude Code with `--add-dir ..` so the root is treated as an additional directory instead."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `claudeMdExcludes` skips specific CLAUDE.md files by path or glob, and putting it in local settings keeps the exclusion to this engineer's machine.",
+        "This is fragile and risks the deletion leaking into a push; the file would also reappear on every pull.",
+        "Both files still load; contradictory instructions make Claude pick one arbitrarily rather than reliably ignoring the other.",
+        "Ancestors of the working directory load at launch regardless; `--add-dir` only grants access to extra directories."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#exclude-specific-claude-md-files"
+    },
+    {
+      "id": "D3-1-006",
+      "subskill": "D3.1",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "Early in a long Claude Code session, a developer told Claude \"use the new `Result<T>` error helper, never throw.\" After the session auto-compacted, Claude started throwing exceptions again, while it still follows the rules in the project-root `CLAUDE.md`. What is the MOST likely explanation and fix?",
+      "select": 1,
+      "options": [
+        "Compaction removed every CLAUDE.md file from context; run `/init` after each compaction so the file is regenerated and re-injected into the session.",
+        "The instruction lived only in conversation and didn't survive the summary; add it to `CLAUDE.md` so it is re-read from disk after compaction.",
+        "The session exceeded the model's context window; switch to a model with a larger window so compaction never happens.",
+        "Auto memory overrode the instruction; disable auto memory with `/memory`."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The symptom contradicts this: CLAUDE.md rules are still followed, because the project-root CLAUDE.md is re-read from disk after compaction.",
+        "Correct. Conversation-only instructions survive only as far as the summary keeps them. Durable conventions belong in CLAUDE.md.",
+        "Larger windows postpone compaction but don't fix where the instruction lives; long sessions still compact.",
+        "Nothing indicates auto memory is involved; it is a separate notes system and doesn't override instructions."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#troubleshoot-memory-issues"
+    },
+    {
+      "id": "D3-2-001",
+      "subskill": "D3.2",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "The team has a committed project skill, `.claude/skills/release-notes/SKILL.md`, that developers run as `/release-notes v2.3` interactively. They now want the release pipeline to produce the same notes with `claude -p`. A developer claims slash commands only work in the interactive terminal, so the skill's instructions must be copied into a CI prompt file. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Agree, and keep a copy of the skill body in `ci/release-prompt.txt` that the pipeline passes as the prompt.",
+        "Rewrite the skill as an MCP prompt, since MCP prompts are the only reusable prompts available in print mode.",
+        "Run `claude -p \"/release-notes v2.3\"`; user-invoked skills are expanded in print mode.",
+        "Run the job with `--bare` so the skill directory is loaded without the interactive UI."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Duplicating the skill creates two copies that drift apart, and it isn't necessary.",
+        "MCP prompts are a different mechanism; there's no need to re-host the skill on a server.",
+        "Correct. In `-p` mode, user-invoked skills and custom commands work: include `/skill-name` in the prompt and Claude Code expands it. Only terminal-only built-ins such as `/login` are unavailable.",
+        "The opposite: `--bare` skips skill auto-discovery, so the project skill wouldn't be found."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless#create-a-commit"
+    },
+    {
+      "id": "D3-2-002",
+      "subskill": "D3.2",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "A `pr-summary` skill used by the CI pipeline tells Claude to \"fetch the PR diff and comments with gh, then summarize.\" Logs show Claude spends several turns working out the right `gh` invocations before it starts summarizing, and some runs hit `--max-turns`. The team wants the diff and comments in front of Claude from the start. Which change BEST achieves this?",
+      "code": {
+        "lang": "markdown",
+        "src": "---\nname: pr-summary\ndescription: Summarize a pull request. Use when asked to summarize or describe a PR.\nallowed-tools: Bash(gh *)\n---\nFetch the PR diff and comments with gh, then summarize the changes and risks."
+      },
+      "select": 1,
+      "options": [
+        "Raise `--max-turns` so Claude has enough turns to discover the commands.",
+        "Add a SessionStart hook that runs `gh pr diff` and appends the output to CLAUDE.md before each CI run starts.",
+        "Add a CLAUDE.md section listing the exact `gh` commands to use for pull requests.",
+        "Inject the data with `` !`gh pr diff` `` and `` !`gh pr view --comments` `` lines in the skill body."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This treats the symptom and adds cost; Claude still spends turns fetching data that could be supplied up front.",
+        "Rewriting a committed instruction file with run data is fragile and loads the diff into every session, not just this skill.",
+        "Claude would still have to call the commands itself, turn by turn; it only shortens the discovery.",
+        "Correct. Dynamic context injection runs each `` !`command` `` before the skill content is sent and replaces the placeholder with its output, so Claude starts with the actual data."
+      ],
+      "ref": "https://code.claude.com/docs/en/skills#inject-dynamic-context"
+    },
+    {
+      "id": "D3-2-003",
+      "subskill": "D3.2",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "To keep the CI job's main context small, an engineer adds `context: fork` to the team's `api-conventions` skill. The skill body is a list of guidelines (error envelope, pagination style, naming) with no task. Since the change, when Claude loads the skill during an automated endpoint change, the generated handlers ignore the conventions and the skill's result is empty. What is the MOST likely cause?",
+      "select": 1,
+      "options": [
+        "Forked skills can't run in print mode, so the skill is skipped silently in CI.",
+        "The fork gets the guidelines as its prompt but no task, so it returns little, and the conventions never reach the context writing the code.",
+        "`context: fork` requires an `agent` field; without it the skill fails to load.",
+        "The forked subagent inherits the CI job's `--max-turns` budget and exhausts it before reaching the guidelines, so it returns an empty result."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Forked skills do run in print mode; with `-p`, Claude Code waits for the forked result.",
+        "Correct. With `context: fork`, the skill body becomes a subagent's prompt. The docs warn that a guidelines-only skill gives the subagent no task, so it returns without meaningful output. Reference skills should load inline.",
+        "`agent` is optional; if it is omitted, the general-purpose subagent is used.",
+        "Nothing suggests a turn limit; the problem is that the fork has no task and its output doesn't carry the conventions back."
+      ],
+      "ref": "https://code.claude.com/docs/en/skills#run-skills-in-a-subagent"
+    },
+    {
+      "id": "D3-2-004",
+      "subskill": "D3.2",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "The developer-platform team has built a set of Claude Code skills, two hooks and an MCP server for the internal deploy system. Forty product repositories should use them, teams should be able to pin a version and upgrade deliberately, and the skills must not collide with skills a repo already defines. What is the BEST distribution mechanism?",
+      "select": 1,
+      "options": [
+        "Have a bot copy the files into every repository's `.claude/` directory and open a PR in each repo whenever the platform team changes them.",
+        "Package them as a plugin in an internal marketplace; repos enable it in committed settings, and its skills are namespaced.",
+        "Install everything into each engineer's `~/.claude/` with an onboarding script.",
+        "Publish the skill text in a shared wiki and link it from each repo's CLAUDE.md."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "This works, but it multiplies copies and PR churn, gives no versioned unit, and same-named skills would collide with existing repo skills.",
+        "Correct. Plugins bundle skills, hooks and MCP servers into one versioned, installable unit from a marketplace, and plugin skills are namespaced so they don't clash with project skills.",
+        "Personal installs don't reach CI or new teammates, and they can't be versioned per repository.",
+        "A link isn't a skill. Claude wouldn't get progressive loading, and hooks and the MCP server wouldn't be installed."
+      ],
+      "ref": "https://code.claude.com/docs/en/skills#choose-where-skills-load"
+    },
+    {
+      "id": "D3-2-005",
+      "subskill": "D3.2",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "On the internal platform, an engineer has a personal `~/.claude/skills/review/SKILL.md`. The repository they work in also commits `.claude/skills/review/SKILL.md` and an older `.claude/commands/review.md`, and a platform plugin ships a skill named `review`. Which TWO statements about what happens are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "When the engineer types `/review`, the personal skill is used, because personal skills take precedence over project skills.",
+        "The project skill wins over the personal one, because repository configuration overrides user configuration.",
+        "Between the project skill and `.claude/commands/review.md`, the skill takes precedence.",
+        "The plugin's `review` skill replaces both, because plugins are installed last.",
+        "Claude Code refuses to start until the duplicate names are resolved."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. For skills sharing a name, enterprise beats personal and personal beats project.",
+        "For skills it is the other way round: personal skills beat project skills (unlike settings precedence, where project beats user).",
+        "Correct. When a skill and a `.claude/commands/` file share a name, the skill wins.",
+        "Plugin skills are namespaced as `/plugin-name:review`, so they load alongside rather than replacing anything.",
+        "Name clashes are resolved by precedence; they don't block startup."
+      ],
+      "ref": "https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name"
+    },
+    {
+      "id": "D3-2-006",
+      "subskill": "D3.2",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "The team wrote a project skill that walks Claude through adding a feature flag (config entry, typed accessor, default, cleanup ticket). When developers say \"add a feature flag for the new checkout\", Claude never loads it and improvises instead; typing `/feature-flag` works fine. What should they change FIRST?",
+      "code": {
+        "lang": "markdown",
+        "src": "---\nname: feature-flag\ndescription: Helper utilities for the config package.\n---\n1. Add the flag to config/flags.yaml ..."
+      },
+      "select": 1,
+      "options": [
+        "Rewrite `description` to say what the skill does and when to use it, e.g. \"Add or remove a feature flag. Use when asked to create, add, gate or clean up a feature flag.\"",
+        "Add `user-invocable: true` so Claude is allowed to invoke the skill on its own.",
+        "Move the procedure into the root `CLAUDE.md` so it is always in context.",
+        "Add `context: fork` so the skill runs in a subagent with its own context window."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Claude decides whether to load a skill from its description. A vague description that doesn't mention feature flags gives it nothing to match against.",
+        "`user-invocable` controls whether the user can run it from the `/` menu, and it is `true` by default; it doesn't affect Claude's matching.",
+        "This would load a multi-step procedure into every session; procedures belong in skills.",
+        "Forking changes where the skill runs once invoked; it doesn't help Claude decide to invoke it."
+      ],
+      "ref": "https://code.claude.com/docs/en/skills#frontmatter-reference"
+    },
+    {
+      "id": "D3-2-007",
+      "subskill": "D3.2",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A developer created a `migration-check` skill in `~/.claude/skills/migration-check/SKILL.md` and it works well for them. Teammates on the same repository report that Claude never uses it and `/migration-check` doesn't exist for them. What should the developer do?",
+      "select": 1,
+      "options": [
+        "Ask each teammate to copy the folder into their own `~/.claude/skills/`.",
+        "Reference the skill's path from the root `CLAUDE.md` with an `@` import.",
+        "Add `disable-model-invocation: false` to the skill so it is shared.",
+        "Move the skill to `.claude/skills/migration-check/SKILL.md` in the repository and commit it."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This works but creates unversioned copies that drift and never reach CI.",
+        "Importing loads the skill text into every session as CLAUDE.md content; it doesn't create a skill, and the file isn't on teammates' machines anyway.",
+        "That field only controls whether Claude may auto-load the skill, and `false` is already the default; it has nothing to do with sharing.",
+        "Correct. Personal skills apply only to that user. Project skills in `.claude/skills/` are shared through version control."
+      ],
+      "ref": "https://code.claude.com/docs/en/skills#choose-where-skills-load"
+    },
+    {
+      "id": "D3-3-001",
+      "subskill": "D3.3",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "The team wants its testing conventions (factory helpers, no network in unit tests) to load only when Claude Code works on test files such as `src/cart/cart.test.ts`. They create `.claude/rules/testing.md`. Which frontmatter achieves this?",
+      "select": 1,
+      "options": [
+        "`globs: \"**/*.test.ts\"`",
+        "`paths: [\"**/*.test.ts\"]`",
+        "`applyTo: \"**/*.test.ts\"`",
+        "`when: \"editing test files\"`"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`globs` isn't a field Claude Code reads from rules; it is ignored and the rule loads in every session.",
+        "Correct. `paths` is the only rule frontmatter field Claude Code reads; it accepts glob patterns, and the rule loads when Claude works with a matching file.",
+        "`applyTo` is another tool's convention; Claude Code ignores it.",
+        "Rules aren't triggered by natural-language conditions. Description-based loading is how skills work, not rules."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#path-specific-rules"
+    },
+    {
+      "id": "D3-3-002",
+      "subskill": "D3.3",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "A developer ported the team's frontend conventions from another AI tool into `.claude/rules/react.md`, shown below. `/context all` shows the rule loaded in every session, including backend-only sessions that never touch a `.tsx` file. What is the cause?",
+      "code": {
+        "lang": "markdown",
+        "src": "---\nglobs: \"src/components/**/*.tsx\"\ndescription: React component conventions\n---\n# React rules\n- Function components only\n- Co-locate styles in *.module.css"
+      },
+      "select": 1,
+      "options": [
+        "Rules in `.claude/rules/` always load at launch; for conditional loading the team needs a CLAUDE.md file inside `src/components/` instead.",
+        "The `description` field makes Claude treat the rule as globally relevant to every session.",
+        "Claude Code reads only `paths` from rule frontmatter. The unknown fields are ignored, so the rule has no path scope and loads at launch.",
+        "The glob must be written relative to the `.claude/rules/` directory, so it matched every file."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Rules can be conditional; that is what `paths` frontmatter does.",
+        "`description` is also ignored for rules; it neither scopes nor broadens them.",
+        "Correct. Any field other than `paths` is ignored without an error, and rules without `paths` load at launch with the same priority as `.claude/CLAUDE.md`. Rename `globs` to `paths`.",
+        "Project rule patterns are relative to the directory containing the `.claude` folder, and this pattern was never read anyway."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#rule-frontmatter-reference"
+    },
+    {
+      "id": "D3-3-003",
+      "subskill": "D3.3",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "The team's test conventions apply to `*.spec.ts` files that sit next to the source in about 30 feature directories. Someone proposes adding the same `CLAUDE.md` to each of those 30 directories. What is the BEST alternative?",
+      "select": 1,
+      "options": [
+        "One `.claude/rules/testing.md` with `paths: [\"**/*.spec.ts\"]`.",
+        "One root `CLAUDE.md` section titled \"Testing\", so the rules load once instead of 30 times.",
+        "Keep the 30 files but have each `@import` a single shared `docs/testing.md`, so the text lives in one place.",
+        "A `testing` skill with `disable-model-invocation: true` that developers run before writing tests."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. A single path-scoped rule matches test files anywhere in the tree and loads only when Claude touches one, with no duplicated files.",
+        "This loads the test conventions into every session, including sessions that never touch tests.",
+        "This de-duplicates the text but keeps 30 files to maintain, and each file still loads whenever Claude touches any file in its directory, not only test files.",
+        "This depends on developers remembering to run it, and Claude can never apply it on its own."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#path-specific-rules"
+    },
+    {
+      "id": "D3-3-004",
+      "subskill": "D3.3",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "A developer is checking when the rule `.claude/rules/sql.md` (frontmatter `paths: [\"db/**/*.sql\"]`) enters Claude Code's context during a session. Which TWO events cause it to load? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Claude uses the Read, Write or Edit tool on `db/queries/orders.sql`.",
+        "The session starts in a repository that contains at least one matching `.sql` file.",
+        "Claude runs `cat db/queries/orders.sql` through Bash to view that single file.",
+        "The developer mentions \"the orders SQL\" in a prompt without Claude opening any file.",
+        "The developer opens `/memory` and selects the rule."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. A path-scoped rule loads when Claude uses Read, Write or Edit on a matching file.",
+        "Path-scoped rules don't load at launch just because matching files exist; only rules without `paths` do.",
+        "Correct. A Bash command that counts as a read of a single file, such as `cat` or `head`, also triggers the rule.",
+        "Mentions don't trigger rules; loading follows file access, not prompt wording.",
+        "`/memory` opens the file in an editor; it doesn't inject the rule into the conversation."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#path-specific-rules"
+    },
+    {
+      "id": "D3-3-005",
+      "subskill": "D3.3",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "In the platform monorepo, the web team added `packages/web/.claude/rules/components.md` with the frontmatter below. Engineers start Claude Code at the monorepo root. When Claude edits `packages/web/src/Button.tsx`, the rule never loads. What is the MOST likely reason?",
+      "code": {
+        "lang": "markdown",
+        "src": "---\npaths:\n  - \"packages/web/src/**/*.tsx\"\n---\n# Component rules ..."
+      },
+      "select": 1,
+      "options": [
+        "Rules are only read from the `.claude/rules/` directory at the root where Claude Code was started, never from nested packages.",
+        "Patterns are relative to `packages/web/` (where this rule's `.claude` folder is), so use `src/**/*.tsx`.",
+        "Path-scoped rules don't work with `.tsx` files unless braces like `*.{ts,tsx}` are used.",
+        "Nested rules load only after the engineer runs `/cd packages/web` and restarts the session."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Rules in a subdirectory's `.claude/rules/` are supported and load on demand.",
+        "Correct. For project rules, each pattern is relative to the directory that contains the rule's `.claude` folder. The pattern looks for `packages/web/packages/web/src/...`, which doesn't exist.",
+        "`**/*.tsx` patterns match `.tsx` files directly; brace expansion is optional.",
+        "No restart or directory change is needed for nested rules; the problem is the pattern."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#path-specific-rules"
+    },
+    {
+      "id": "D3-3-006",
+      "subskill": "D3.3",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "An engineer on the developer-platform team keeps `~/.claude/rules/style.md` saying \"indent with tabs\". A service repository commits `.claude/rules/style.md` saying \"indent with 2 spaces\". Neither file has `paths`. What happens in a session in that repository?",
+      "select": 1,
+      "options": [
+        "The project rule replaces the user rule because project scope has higher precedence.",
+        "The user rule wins because it is personal and loads last.",
+        "Claude Code reports a conflict at startup and loads neither rule.",
+        "Both load, user rules first; neither overrides the other, so Claude may follow either."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Rules don't override each other by scope; both are concatenated into context.",
+        "User-level rules load before project rules, not last, and loading order still doesn't make one override the other.",
+        "There is no conflict detection that blocks loading.",
+        "Correct. User-level rules load before project rules, and neither set overrides the other. With conflicting rules Claude may follow either, so they should be kept consistent."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#user-level-rules"
+    },
+    {
+      "id": "D3-3-007",
+      "subskill": "D3.3",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "The CI review job runs `git diff origin/main...HEAD | claude -p \"Review this diff for problems\"` with built-in tools turned off (`--tools \"\"`), since it only needs the piped diff. The repository has `.claude/rules/sql.md` scoped with `paths: [\"**/*.sql\"]` containing the team's SQL review checklist. Reviews of PRs that change `.sql` files never apply the checklist. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Move the checklist into the review prompt or a skill the job invokes; a piped diff never triggers a path-scoped rule.",
+        "Add `--append-system-prompt \"Apply the rules in .claude/rules\"` so Claude knows it should consult the rules directory during review.",
+        "Change the pattern to `**/*` so the rule matches whatever the diff contains.",
+        "Rename the rule to `.claude/rules/sql.local.md` so CI treats it as unconditional."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Path-scoped rules load when Claude reads or edits a matching file. The job only sees a diff on stdin, so nothing ever matches. Put the review criteria where this job always sees them, or let it read the changed files.",
+        "With no file tools the job can't open the rules directory, and the sentence alone doesn't load a path-scoped rule.",
+        "Path rules still need a file access to trigger, and `**/*` would make the checklist load for any file in interactive sessions too.",
+        "There is no `.local.md` convention for rules; the file would still be a path-scoped rule that never triggers."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#path-specific-rules"
+    },
+    {
+      "id": "D3-3-008",
+      "subskill": "D3.3",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "To stop untrusted repository hooks from running in CI, an engineer changed the pipeline to `claude -p ... --setting-sources user`. Afterwards, automated fixes stop following the conventions in `.claude/rules/` (both the unconditional and the path-scoped rules), even when Claude edits matching files. What is the MOST likely cause?",
+      "select": 1,
+      "options": [
+        "Path-scoped rules don't load in `-p` mode, and unconditional rules need an interactive session to be approved.",
+        "Rules are stored in the user scope, so restricting to `user` should have loaded them; the runner's home directory is misconfigured.",
+        "Excluding `project` from `--setting-sources` also skips the project's `.claude/rules/` files.",
+        "`--setting-sources user` switches the run into bare mode, which skips every instruction file."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Rules load in print mode; unconditional rules load at launch and path-scoped rules on matching file access.",
+        "Project rules live in the repository's `.claude/rules/`, which is project scope, not user scope.",
+        "Correct. The docs state project rules are skipped if you exclude `project` from `--setting-sources`. Keep `project` and control hooks another way, for example `--bare` with the needed context passed explicitly.",
+        "`--setting-sources` selects which settings sources load; it doesn't turn on bare mode, and the symptom is limited to project rules."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#organize-rules-with-claude/rules/"
+    },
+    {
+      "id": "D3-3-009",
+      "subskill": "D3.3",
+      "scenario": "S5",
+      "difficulty": 1,
+      "stem": "A CI job sometimes generates database migrations, and developers do the same locally. The team wants its migration conventions (reversible, no data backfills in schema migrations) to apply in both places, but only when Claude works on files under `db/migrations/`. Where should the conventions go?",
+      "select": 1,
+      "options": [
+        "In the CI job's `--append-system-prompt`, and in each developer's `CLAUDE.local.md`.",
+        "In the root `CLAUDE.md`, so every session and every CI run has them.",
+        "In each developer's `~/.claude/rules/migrations.md`.",
+        "In a committed `.claude/rules/migrations.md` with `paths: [\"db/migrations/**\"]`."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This keeps two copies in different places, and local files aren't shared or committed.",
+        "This loads the conventions into every session, not only migration work.",
+        "User-level rules don't reach CI or teammates.",
+        "Correct. A committed path-scoped rule reaches both the runner and teammates, and loads only when Claude works on matching files."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#path-specific-rules"
+    },
+    {
+      "id": "D3-3-010",
+      "subskill": "D3.3",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "Company-wide coding rules live in a separate `shared-standards` repository. The CI job checks it out next to the service and runs `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1 claude -p ... --add-dir ../shared-standards`. The shared repo's unconditional rules apply, but its path-scoped rules (for example `paths: [\"**/*.proto\"]`) never do, even when Claude edits `.proto` files. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Rewrite the shared rules without `paths` frontmatter so that they load unconditionally from the added directory on every run.",
+        "Copy the shared rule files into the service repository's `.claude/rules/` (for example in a CI step) before running Claude.",
+        "Symlink `../shared-standards/.claude/rules` into the service repo's `.claude/rules/`.",
+        "Pass `--add-dir` twice, once for the repo root and once for `.claude/rules/`, so path matching uses the right base."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "This makes them load, but every protobuf, SQL and frontend rule would then sit in context for every run, which defeats path scoping.",
+        "Correct. With the environment variable set, an added directory's rules load except those with `paths`. Rules in the project's own `.claude/rules/` keep their path scoping.",
+        "A symlink pointing outside the working directory is treated like an external import: it needs a one-time approval, and even then only rules without `paths` load.",
+        "`--add-dir` grants file access to directories; adding more doesn't change which rules from them load."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#load-from-additional-directories"
+    },
+    {
+      "id": "D3-3-011",
+      "subskill": "D3.3",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "Before relying on `.claude/rules/` in `claude -p` runs, the CI team writes down how rules behave (no `--bare`, default setting sources). Which THREE statements are correct? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "A rule without `paths` frontmatter loads at launch with the same priority as `.claude/CLAUDE.md`.",
+        "A rule with `paths` loads when Claude reads, writes or edits a file that matches one of its patterns.",
+        "Claude Code reads only the `paths` field from rule frontmatter; other fields are ignored.",
+        "Only files directly in `.claude/rules/` are loaded; subdirectories such as `.claude/rules/backend/` are ignored.",
+        "In print mode all path-scoped rules load at launch, because there is no interactive session to trigger them.",
+        "A path-scoped rule overrides conflicting text in CLAUDE.md for the files it matches."
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanations": [
+        "Correct. Unconditional rules load at launch like `.claude/CLAUDE.md`.",
+        "Correct. Path-scoped rules load on matching file access through Read, Write or Edit.",
+        "Correct. `paths` is the only field read; anything else is ignored without an error.",
+        "`.md` files are discovered recursively, so subfolders like `frontend/` and `backend/` are supported.",
+        "Print mode doesn't change the trigger; path-scoped rules still load on matching file access.",
+        "Instructions are concatenated context, not an override hierarchy; conflicting instructions make Claude pick one arbitrarily."
+      ],
+      "ref": "https://code.claude.com/docs/en/memory#organize-rules-with-claude/rules/"
+    },
+    {
+      "id": "D3-4-001",
+      "subskill": "D3.4",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A developer on the Claude Code team has a failing unit test whose stack trace points at an off-by-one error in `paginate()` in `src/lib/paging.ts`. The fix is likely a single line and the test already reproduces the bug. How should they run Claude Code?",
+      "select": 1,
+      "options": [
+        "Enter plan mode, have Claude survey the codebase, and approve a written plan before any edit.",
+        "Ask Claude directly to fix `paginate()` and rerun the failing test until it passes.",
+        "Delegate the investigation to an Explore subagent first, then decide on an approach.",
+        "Ask Claude to interview them about pagination requirements and write a spec first."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Plan mode adds a review round with no benefit when the location and the fix are already clear.",
+        "Correct. A small, well-located fix with a reproducing test is a direct-execution task; the test is the feedback loop.",
+        "There is nothing to discover; the stack trace already pinpoints the code.",
+        "Requirements aren't in question; the expected behaviour is captured by the failing test."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-4-002",
+      "subskill": "D3.4",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "The team wants Claude Code to move the app from server-side sessions to short-lived JWTs. The change touches middleware, about 40 route handlers, the mobile client and tests, and the team hasn't decided how refresh tokens should work. Nothing should be edited until the approach is agreed. What is the BEST way to start?",
+      "select": 1,
+      "options": [
+        "Start in `acceptEdits` mode and let Claude work through the handlers, relying on git to revert anything wrong.",
+        "Ask Claude in default mode to \"write a plan first and wait for my OK\", then reply \"go\".",
+        "Start in plan mode, review and correct the proposed approach (including refresh tokens), then approve it.",
+        "Have Claude convert one handler at a time directly, settling the refresh-token design as it goes."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Fast, but it commits to an undecided design across dozens of files before anyone has reviewed the approach.",
+        "A prompt request isn't a guarantee: in default mode nothing structurally blocks edits. Plan mode does.",
+        "Correct. Large, ambiguous, multi-file changes are what plan mode is for: Claude explores and proposes, and edits stay blocked until the plan is approved.",
+        "Settling the core design piecemeal is how inconsistent implementations and rework happen in cross-cutting changes."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-4-003",
+      "subskill": "D3.4",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "A tech lead is explaining plan mode to the team before a large refactor. Which TWO statements are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Claude can read files and run shell commands to explore, but it doesn't edit source files until the plan is approved.",
+        "Plan mode commits a `PLAN.md` file to the repository so the plan is versioned.",
+        "Approving the plan exits plan mode and switches to the permission mode of the option chosen, and Claude starts editing.",
+        "Plan mode automatically switches the session to a smaller model to make exploration cheaper.",
+        "Once a plan is approved the session can't return to plan mode; a new session is required."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Plan mode lets Claude research and propose; source edits stay blocked until approval.",
+        "Plan mode presents the plan for approval; it doesn't commit files.",
+        "Correct. Each approve option names the mode the session switches to, for example auto or manually approved edits.",
+        "Plan mode is a permission mode, not a model setting.",
+        "You can cycle back with `Shift+Tab` or prefix the next prompt with `/plan`."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-4-004",
+      "subskill": "D3.4",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "In plan mode, Claude proposes a plan for a caching layer. Step 3 uses a deprecated in-house cache client instead of the new `cachekit` library; everything else looks right. What should the developer do?",
+      "select": 1,
+      "options": [
+        "Approve the plan and correct the client choice once Claude reaches step 3.",
+        "Reject the plan, run `/clear`, and re-describe the whole task from scratch.",
+        "Approve the plan, then add a CLAUDE.md line about `cachekit` for future sessions.",
+        "Choose \"No, keep planning\" and say to use `cachekit`, or edit the plan with `Ctrl+G` before approving."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "By step 3, the earlier steps may already be built around the old client; fixing the plan is cheaper than fixing code.",
+        "Throwing away a mostly good plan and its exploration is wasteful; a targeted correction is enough.",
+        "A CLAUDE.md note may help later sessions, but this plan would still be implemented with the deprecated client.",
+        "Correct. Plan review is the cheap moment to correct course: keep planning with feedback, or open the plan in your editor with `Ctrl+G` and fix it directly."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-4-005",
+      "subskill": "D3.4",
+      "scenario": "S2",
+      "difficulty": 3,
+      "stem": "A developer spent a long Claude Code session exploring a payments module and refining a migration plan with Claude. The session has compacted three times, and Claude has started contradicting decisions agreed early on. The plan is now final, and implementation will take many more hours. What is the BEST next step?",
+      "select": 1,
+      "options": [
+        "Have Claude write the final plan and key decisions to a file, then start implementation in a fresh session from that file.",
+        "Continue in the same session, since all the exploration context it has gathered is valuable for implementation and would be lost.",
+        "Run `/compact` once more with no instructions, then start implementing in this session.",
+        "Switch to a model with a larger context window and continue, so there are no more compactions."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. A written plan is a durable definition of done. A fresh session starts with a clean context instead of a thrice-summarized history that has already lost decisions.",
+        "Continuing is normally fine, but here the context has already degraded: decisions are being lost across compactions.",
+        "Another unfocused compaction loses more detail; the agreed decisions need to be written down.",
+        "A bigger window delays compaction but leaves the noisy, partly summarized history in place."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-4-006",
+      "subskill": "D3.4",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A team lead is triaging this week's Claude Code tasks. Which TWO most clearly warrant starting in plan mode? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Renaming a local variable inside one function.",
+        "Adding a caching layer to the order service when nobody knows yet where invalidation must happen.",
+        "Fixing a typo in a user-facing error message.",
+        "Upgrading the ORM by a major version, which changes query APIs used across many modules.",
+        "Bumping a dev-only dependency's patch version."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "Small and fully specified; direct execution is faster.",
+        "Correct. An unclear design with cross-cutting effects benefits from exploring and agreeing on an approach before edits.",
+        "A trivial, well-located change; planning adds nothing.",
+        "Correct. A multi-module change with migration risk is where reviewing a plan first pays off.",
+        "Routine and low-risk; run it directly and let tests confirm."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-4-007",
+      "subskill": "D3.4",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "An engineer new to a 4,000-file legacy service asks Claude Code to explain how invoice numbers are generated before changing anything. In a previous attempt, Claude read dozens of files into the conversation, and its later answers on the actual change got noticeably worse. What should the engineer do this time?",
+      "select": 1,
+      "options": [
+        "Reference the whole `src/` directory with `@src` so Claude has everything up front.",
+        "Run `/compact` after every few file reads to keep the context small.",
+        "Ask Claude to use a subagent (such as the built-in Explore agent) to investigate and report back a summary.",
+        "Raise the effort level so Claude reads each file more carefully and keeps more of the important details in mind for the change."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A directory reference shows a file listing, not contents, and loading the service wholesale would make the context problem worse.",
+        "Frequent compaction is costly and lossy; it treats the symptom rather than keeping exploration out of the main context.",
+        "Correct. A subagent reads files in its own context window and returns only the findings, so the main conversation stays focused for the change.",
+        "Effort affects how carefully Claude reasons, not how much exploration output piles up in the main context."
+      ],
+      "ref": "https://code.claude.com/docs/en/common-workflows#delegate-research-to-subagents"
+    },
+    {
+      "id": "D3-4-008",
+      "subskill": "D3.4",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "The platform's monorepo `CLAUDE.md` says \"always report file paths relative to the repo root and skip anything under `vendor/`.\" Engineers notice that when Claude delegates codebase searches to the built-in Explore subagent, its findings include `vendor/` files and absolute paths, while the main conversation follows the rule. What is the MOST likely explanation and fix?",
+      "select": 1,
+      "options": [
+        "Explore runs a smaller model that can't follow instructions; set `CLAUDE_CODE_SUBAGENT_MODEL` to a larger model.",
+        "Explore starts without CLAUDE.md; state those constraints in the delegation prompt or use a custom subagent.",
+        "Explore inherits only user-scope CLAUDE.md; move the rule to `~/.claude/CLAUDE.md` for each engineer.",
+        "Subagents can't read the repository root, so they fall back to absolute paths; add the root with `--add-dir`."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Explore uses the main conversation's model by default, and the symptom is missing instructions, not capability.",
+        "Correct. Explore and Plan start without CLAUDE.md files and the git status snapshot to keep research fast. Other built-in and custom subagents load the CLAUDE.md hierarchy.",
+        "Explore doesn't load user-scope CLAUDE.md either, and moving a team rule to personal files would break it for CI and teammates.",
+        "Subagents work in the same working directory; path style comes from instructions, not access."
+      ],
+      "ref": "https://code.claude.com/docs/en/sub-agents"
+    },
+    {
+      "id": "D3-4-009",
+      "subskill": "D3.4",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "The team that maintains the multi-agent research system wants Claude Code to change how the coordinator decomposes questions: subagent prompts, the routing table and the synthesizer's citation merging are all affected, and nobody is sure which tests cover the routing logic. Which approach BEST fits?",
+      "select": 1,
+      "options": [
+        "Start in plan mode so Claude maps the affected modules and tests, then review and approve the plan before edits.",
+        "Use `acceptEdits` so Claude can move quickly, and review the full diff at the end.",
+        "Give Claude file-by-file instructions directly, starting with the coordinator.",
+        "Ask Claude to rewrite the coordinator from scratch in a new module, so the existing code and its untested routing paths stay untouched."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. The change is cross-module with unclear test coverage. Exploring and agreeing on a plan first avoids building on a wrong assumption.",
+        "A large end-of-run diff is the most expensive place to discover that the approach was wrong.",
+        "Directing edits file by file assumes the engineer already knows the blast radius, which they don't.",
+        "A rewrite ignores the existing behaviour and tests and greatly expands the risk."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-4-010",
+      "subskill": "D3.4",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "When an issue is labelled `needs-design`, the CI pipeline should have Claude Code propose an implementation plan and post it as an issue comment. The job must not modify the checked-out code. Which invocation BEST meets this?",
+      "select": 1,
+      "options": [
+        "`claude -p \"Propose a plan; do not edit any files\" --permission-mode acceptEdits`",
+        "`claude -p \"Propose a plan for issue #412\" --permission-mode plan --output-format json`",
+        "`claude -p \"Propose a plan for issue #412\" --max-turns 1`",
+        "`claude -p \"Propose a plan\" --permission-mode bypassPermissions`, followed by `git checkout .`"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`acceptEdits` auto-approves file edits; the prompt asks Claude not to edit but nothing blocks it.",
+        "Correct. Plan mode keeps its blocks in non-interactive runs, so Claude can read and propose but not edit; JSON output gives the script the plan text in `result`.",
+        "One turn may not be enough to explore the code, and a turn limit doesn't block edits.",
+        "This lets anything run, including commands with side effects that `git checkout` can't undo."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-4-011",
+      "subskill": "D3.4",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "The team wants a CI workflow where Claude Code designs and then implements medium-sized features from issues. Past fully automatic runs sometimes built the wrong thing across many files before anyone looked. What is the BEST pipeline design?",
+      "select": 1,
+      "options": [
+        "One `claude -p` job in `acceptEdits` mode that is prompted to write a plan first and then implement it, with the PR as the review point.",
+        "One job in plan mode with a high `--max-turns`, so Claude can plan and then implement within the same run.",
+        "A plan-mode job posts the plan; after a human approves it, a separate job with scoped edit permissions implements it and opens a PR.",
+        "Two parallel jobs, one planning and one implementing, compared at the end."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Planning inside an edit-capable run gives no checkpoint: the wrong design is fully built before anyone reviews it.",
+        "Plan mode blocks edits in `-p` runs, so this job could never implement; more turns don't change that.",
+        "Correct. It separates proposing from applying, puts the cheap human check on the plan before code exists, and keeps the PR review for the result.",
+        "The implementer can't benefit from a plan it never sees; this doubles cost without a checkpoint."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices#let-claude-run-without-you"
+    },
+    {
+      "id": "D3-4-012",
+      "subskill": "D3.4",
+      "scenario": "S5",
+      "difficulty": 1,
+      "stem": "A nightly CI job asks Claude Code to fix the auto-fixable lint errors that accumulated during the day; each fix is small and mechanical, and the lint command verifies the result. An engineer suggests running the job in plan mode \"to be safe\". What is the BEST response?",
+      "select": 1,
+      "options": [
+        "Agree; plan mode in print mode shows the plan and then applies it once the turn ends.",
+        "Agree, but add `--max-turns 50` so the plan has room to be executed.",
+        "Use plan mode, then run a second unattended job in `bypassPermissions` mode that applies whatever plan the first job produced.",
+        "Run it directly with edits and only the lint command allowed; in a `-p` run, plan mode would block every fix."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Plan mode doesn't auto-apply in print mode; its blocks stay in place, so nothing would be fixed.",
+        "Turn limits don't lift plan mode's edit block.",
+        "This adds a pointless stage and the riskiest permission mode for a mechanical task.",
+        "Correct. Small, well-scoped mechanical fixes with a verifying command are direct-execution work. Scope the permissions instead of planning."
+      ],
+      "ref": "https://code.claude.com/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode"
+    },
+    {
+      "id": "D3-5-001",
+      "subskill": "D3.5",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "A developer asked Claude Code to \"make the duration formatting in the dashboard more readable.\" Two attempts produced formats the product team rejected (\"1.02 hours\", \"61 min 1 s\"). What is the MOST effective next prompt?",
+      "select": 1,
+      "options": [
+        "Repeat the request with \"IMPORTANT: make it much more human-readable this time.\"",
+        "Ask Claude to propose ten alternative formats and pick the best one itself.",
+        "Give exact input→output pairs, e.g. `59 → \"59s\"`, `3600 → \"1h\"`, `3661 → \"1h 1m 1s\"`, `0 → \"0s\"`, and ask for them as test cases.",
+        "Switch to a larger model, since formatting taste is a capability problem."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Emphasis doesn't tell Claude what 'readable' means; the ambiguity remains.",
+        "Claude still lacks the product team's criterion, so its choice is another guess.",
+        "Correct. Concrete examples remove the ambiguity, cover edge cases like zero, and turned into tests they give Claude a check it can run.",
+        "The problem is an unspecified target, not model capability."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-5-002",
+      "subskill": "D3.5",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "A product engineer wants Claude Code to add rate limiting to the public API but hasn't settled limits per tier, burst behaviour, headers, or how internal callers are exempted. Previous vague requests produced an implementation that had to be redone. What is the BEST way to start?",
+      "select": 1,
+      "options": [
+        "Ask Claude to implement a reasonable default now and refine it over several follow-up prompts.",
+        "Ask Claude to interview them until it could write the spec, write it to `SPEC.md`, then build from it in a fresh session.",
+        "Write a long prompt that guesses every decision up front so Claude never needs to ask.",
+        "Start in plan mode and approve whatever plan Claude proposes for the unspecified parts, since plan mode exists to settle open questions."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "This repeats the pattern that already caused rework: Claude fills undecided requirements with guesses.",
+        "Correct. An interview surfaces the open decisions. The spec becomes a written definition of done, and a fresh session builds from it with a clean context.",
+        "Guessed decisions written confidently are still guesses; the engineer hasn't actually decided them.",
+        "Plan mode reviews how to implement; it doesn't resolve product decisions nobody has made. Approving guesses just moves them into the plan."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-5-003",
+      "subskill": "D3.5",
+      "scenario": "S2",
+      "difficulty": 3,
+      "stem": "QA reports three checkout bugs: tax is rounded per line instead of per order, a percentage discount and a coupon stack in the wrong order, and currency conversion happens before discounts instead of after. All three affect the same `computeTotal()` path. How should the developer give these to Claude Code?",
+      "select": 1,
+      "options": [
+        "One bug per prompt, verifying each fix before describing the next, so Claude focuses on one thing at a time.",
+        "Three parallel sessions in separate worktrees, one per bug, then merge the three branches once each one's tests pass.",
+        "Only the tax bug first, since the other two may disappear once rounding is fixed.",
+        "All three in one message, with the intended order of operations and a worked example total."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Sequential prompts suit independent issues. Here each fix changes the same calculation, so a fix designed in isolation can break or mask the next.",
+        "Parallel branches would produce three conflicting edits to the same function.",
+        "The bugs are about ordering in a shared path; fixing one won't make the others disappear, and a partial view invites a partial design.",
+        "Correct. Interacting issues should be given together so Claude can design one consistent order of operations, and a worked example gives it a concrete target."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-5-004",
+      "subskill": "D3.5",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "The team wants Claude Code to build a new pricing rules engine test-first. In earlier attempts, when an implementation failed, Claude sometimes \"fixed\" it by loosening assertions. Which TWO practices BEST keep Claude iterating on the implementation rather than the tests? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Write the tests first, confirm they fail, commit them, and tell Claude to make them pass without modifying them.",
+        "Ask Claude to report a confidence score with each change and reject low-confidence ones.",
+        "Add a deny rule such as `Edit(/tests/pricing/**)` to the project settings while the implementation is being written.",
+        "Raise the effort level so Claude is less tempted to take shortcuts.",
+        "Have Claude write tests and implementation together in one step so they stay consistent."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Committed, failing tests become a fixed target, and any change to them shows up in the diff.",
+        "Self-reported confidence isn't a control and doesn't protect the tests.",
+        "Correct. A permission deny rule makes edits to the test files impossible, a deterministic version of 'don't touch the tests'.",
+        "Effort affects reasoning depth; it doesn't stop test edits.",
+        "Writing both together lets the tests be shaped to fit the implementation, which is the failure mode being fixed."
+      ],
+      "ref": "https://code.claude.com/docs/en/permissions"
+    },
+    {
+      "id": "D3-5-005",
+      "subskill": "D3.5",
+      "scenario": "S2",
+      "difficulty": 3,
+      "stem": "In long local Claude Code sessions, Claude sometimes ends its turn with \"all done\" while `pnpm typecheck` still fails. The project CLAUDE.md already says \"Run `pnpm typecheck` and fix all errors before finishing.\" The team wants Claude Code itself to stop Claude from finishing while the typecheck fails. What should they add?",
+      "select": 1,
+      "options": [
+        "A `Stop` hook that runs the typecheck and exits with code 2 when it fails, sending Claude back to work.",
+        "A PostToolUse hook that runs the typecheck after every edit and prints the result.",
+        "A `/goal` condition that a separate model evaluates against the conversation after every turn until it judges the goal met.",
+        "A second, more emphatic CLAUDE.md line at the top of the file."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. A Stop hook runs whenever Claude tries to end its turn; exit code 2 sends Claude back to work. It is enforced by the harness, up to the hook's block limit.",
+        "Feedback after edits helps, but it doesn't stop Claude from ending the turn while errors remain.",
+        "Useful for long runs, but it is a model's judgement of the conversation, not the harness running the check.",
+        "CLAUDE.md is guidance; the existing instruction already shows that guidance isn't enough here."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices#give-claude-a-check-to-run"
+    },
+    {
+      "id": "D3-5-006",
+      "subskill": "D3.5",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "A nightly `claude -p` job is asked to \"fix the failing tests\" and opens a PR when it finishes. Reviewers found that in two PRs Claude had changed expected values in the tests instead of fixing the bug in the source. Which change BEST prevents this from reaching review?",
+      "select": 1,
+      "options": [
+        "Add \"never modify tests\" to the prompt and to CLAUDE.md, and keep the rest of the job unchanged.",
+        "Deny edits to test paths for this job, pass the failing test output in the prompt, and have the pipeline rerun the suite itself before opening the PR.",
+        "Increase `--max-turns` so Claude has time to find the real bug instead of taking a shortcut.",
+        "Have the same session review its diff with `--continue` before the PR is opened."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A prompt instruction helps but is probabilistic; nothing stops the edit or catches it before review.",
+        "Correct. A deny rule makes test edits impossible, the specific failure output points Claude at the real problem, and an independent rerun in the pipeline doesn't depend on Claude's own claim of success.",
+        "More turns don't change which path Claude takes, and they cost more.",
+        "The generating session is primed by its own reasoning and tends to approve its own shortcut."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless"
+    },
+    {
+      "id": "D3-5-007",
+      "subskill": "D3.5",
+      "scenario": "S5",
+      "difficulty": 1,
+      "stem": "A CI job runs `claude -p` on each merged PR to draft a changelog entry. Output varies from run to run: sometimes past tense, sometimes imperative, sometimes with the PR number, sometimes not. What is the MOST effective first change?",
+      "select": 1,
+      "options": [
+        "Add \"be consistent\" to the prompt.",
+        "Switch to the largest available model.",
+        "Run the job three times and keep the most common phrasing.",
+        "Include two or three real PR → changelog-entry examples in the prompt that show the exact format."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "'Consistent' doesn't say which format to be consistent with.",
+        "A bigger model still has to guess the house style.",
+        "Voting over unspecified outputs triples cost and still doesn't define the format.",
+        "Correct. Concrete input/output examples pin down tense, structure and whether to include the PR number."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-5-008",
+      "subskill": "D3.5",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "A CI auto-fix step runs `claude -p \"Fix the build\"` with edit permissions only, and the pipeline then runs the tests. If they fail, a wrapper script reruns the same command, up to five times. Most retries fail the same way. What is the BEST redesign?",
+      "select": 1,
+      "options": [
+        "Increase the retry count to ten, since some runs do eventually pass.",
+        "Run five copies in parallel and keep the first one whose tests pass.",
+        "Allow the test command (e.g. `Bash(pnpm test *)`) so Claude can run it and iterate to green within one run, include the failure output in the prompt, and cap the run with `--max-turns`.",
+        "Switch the retries to a larger model while keeping the same prompt."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Each retry starts blind with the same prompt, so it repeats the same mistake; more retries only add cost.",
+        "Parallel blind attempts multiply cost and still give Claude no feedback to learn from.",
+        "Correct. Claude needs a check it can run: with the test command allowed and the specific failure in hand, it can fix, rerun and adjust inside one run, while the turn cap bounds cost.",
+        "The missing ingredient is feedback, not model size."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices#give-claude-a-check-to-run"
+    },
+    {
+      "id": "D3-5-009",
+      "subskill": "D3.5",
+      "scenario": "S5",
+      "difficulty": 1,
+      "stem": "A scheduled CI job asks Claude Code to \"clean up the feature flags\". Results vary: one run deleted flags still referenced by mobile clients, another changed nothing and asked which flags were meant. No one watches the job. What should the prompt include?",
+      "select": 1,
+      "options": [
+        "Explicit criteria: which flags qualify (e.g. fully rolled out for 30+ days), what to leave untouched, and what to report when unsure.",
+        "An instruction to ask the on-call engineer whenever anything is ambiguous.",
+        "A request to be careful and conservative.",
+        "Nothing more; turning on `bypassPermissions` so Claude is never blocked will make it decisive and avoid runs that change nothing at all."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Unattended runs can't ask clarifying questions, so the prompt must define what done looks like, what is out of bounds, and what to do with ambiguous cases.",
+        "Nobody is watching the job, so questions go unanswered.",
+        "Vague caution doesn't define which flags qualify.",
+        "Removing permission checks makes the destructive outcome more likely and doesn't resolve the ambiguity."
+      ],
+      "ref": "https://code.claude.com/docs/en/common-workflows#run-claude-on-a-schedule"
+    },
+    {
+      "id": "D3-5-010",
+      "subskill": "D3.5",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "Before letting an overnight `claude -p` job refactor a logging module unattended, the team lists what must be in place so the run converges and stays safe. Which THREE belong on the list? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "A test or lint command Claude is allowed to run, with the instruction to make it pass.",
+        "A cap such as `--max-turns` or `--max-budget-usd`.",
+        "The result delivered as a PR that a person approves, not a direct push to main.",
+        "`--permission-mode bypassPermissions` so the job never stalls overnight.",
+        "An instruction to interview the developer before starting.",
+        "A larger context window so the job never needs to compact."
+      ],
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "explanations": [
+        "Correct. A pass/fail check tells Claude when it is actually done.",
+        "Correct. Something must stop a run that isn't converging.",
+        "Correct. A human sign-off covers what you can't take back.",
+        "Bypass removes the limits on what the run can touch; scoped `--allowedTools` with `dontAsk` keeps it from stalling without that risk.",
+        "Nobody is available to answer overnight.",
+        "Context size isn't the convergence problem; done criteria, checks and caps are."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices#let-claude-run-without-you"
+    },
+    {
+      "id": "D3-5-011",
+      "subskill": "D3.5",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "The research system's synthesis agent formats citations with a helper that the team is reworking in Claude Code. After several rounds, Claude's version still mishandles sources with no publication date and sources with more than three authors, and each correction breaks a case that used to work. What should the developer do?",
+      "select": 1,
+      "options": [
+        "Describe the desired style again in more detail, emphasizing the two failing cases.",
+        "Turn concrete source → expected-citation pairs, including the no-date and four-author cases, into tests and iterate to green.",
+        "Ask Claude to review its own output after each change and say whether it looks right.",
+        "Keep correcting in the same session, since by now Claude holds the most context about the problem and the earlier failed attempts."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "More description is how the loop started; regressions show Claude can't check all cases at once.",
+        "Correct. Example pairs pin down the expected output for the edge cases, and as tests they catch regressions on every iteration.",
+        "Self-review without a fixed reference can't detect regressions reliably.",
+        "Repeated corrections pile failed attempts into the context; a runnable check is what's missing."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-6-001",
+      "subskill": "D3.6",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "In the CI pipeline, a `claude -p` job implements a fix and captures its `session_id`. A second step then asks for a security review of the resulting diff. Reviews almost never find problems, yet humans later catch issues in about one PR in five. How should the review step be run?",
+      "code": {
+        "lang": "bash",
+        "src": "sid=$(claude -p \"$TASK\" --output-format json | jq -r .session_id)\n# review step: which form?"
+      },
+      "select": 1,
+      "options": [
+        "`claude -p \"Review your changes for security issues\" --resume \"$sid\"`",
+        "`claude -p \"Review your changes for security issues\" --resume \"$sid\" --fork-session`",
+        "A new, non-resumed `claude -p` session given only the diff and explicit review criteria.",
+        "Resume the same session with a higher effort level so that it scrutinizes its own work harder before the PR is posted."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The resumed session has its own reasoning in context and tends to confirm it.",
+        "`--fork-session` only gives the resumed conversation a new ID; it still carries the generator's full context, so the review isn't independent.",
+        "Correct. A separate session that only sees the diff and the criteria isn't anchored to how the code was written, which is what an independent review needs.",
+        "More effort doesn't remove the bias of reviewing your own reasoning."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "D3-6-002",
+      "subskill": "D3.6",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "The PR review job runs `claude -p` on every push. On long-lived PRs it re-reviews the whole change each time, re-posts comments developers have already addressed, and costs keep growing. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Give the job only the changes since the last reviewed commit (e.g. `git diff $LAST_REVIEWED_SHA..HEAD`) when that commit is still in the branch.",
+        "Add `--max-turns 1` so each review is cheap.",
+        "Pass the previous review's findings into the prompt and ask it to report only new or still-unresolved issues.",
+        "Switch the reviewer to the largest model so it remembers what it said before.",
+        "Remove the repository's CLAUDE.md from the runner to reduce input tokens."
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Reviewing only the new commits avoids paying for, and commenting on, unchanged code again.",
+        "A one-turn cap cripples the review without fixing duplicate comments.",
+        "Correct. Each `-p` run starts fresh; giving it the earlier findings lets it skip what was already raised and fixed.",
+        "Model size doesn't give a fresh run memory of earlier runs.",
+        "CLAUDE.md carries the review criteria; removing it makes reviews worse, not deduplicated."
+      ],
+      "ref": "https://code.claude.com/docs/en/headless"
+    }
+  ]
+}

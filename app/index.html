@@ -1,16 +1,16 @@
 <meta charset="utf-8">
-<title>CCDV-F Prep</title>
+<title>CCAR-F Prep</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: test-centre console — a slim top rail, one working column, the exam blueprint (8 weighted domains) as the recurring visual motif. */
+/* Layout: test-centre console — a slim top rail, one working column, the exam blueprint (5 weighted domains, 6 scenarios) as the recurring visual motif. */
 :root{
   --bg:#f3f5f7; --surface:#ffffff; --sunk:#e8ecf0; --line:#d5dce3; --ink:#14202b; --muted:#5a6876;
   --accent:#1f4fd6; --accent-ink:#ffffff; --accent-soft:#e3eafc;
   --good:#11845b; --good-soft:#dff3ea; --bad:#c2372f; --bad-soft:#fbe5e3; --warn:#a86a00; --warn-soft:#fbefd6;
   --flag:#c77700;
-  --d-AI:#1f4fd6; --d-MSO:#7a3fd1; --d-AW:#0f8a8a; --d-PCE:#c2531f; --d-TM:#2f7d32; --d-SS:#b8325a; --d-CC:#5a6876; --d-ETD:#8a6a12;
+  --d-D1:#1f4fd6; --d-D2:#2f7d32; --d-D3:#7a3fd1; --d-D4:#c2531f; --d-D5:#0f8a8a;
   --f-display:"Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif;
   --f-body:"Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
   --f-mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -20,13 +20,13 @@
   --bg:#0e141a; --surface:#151d25; --sunk:#1b252f; --line:#2a3642; --ink:#e6edf3; --muted:#93a1ae;
   --accent:#7c9dff; --accent-ink:#0b1220; --accent-soft:#1c2a4d;
   --good:#4cc792; --good-soft:#143326; --bad:#ff7b72; --bad-soft:#3a1b1a; --warn:#e3a33b; --warn-soft:#3a2c12; --flag:#f0a23a;
-  --d-AI:#7c9dff; --d-MSO:#b48cff; --d-AW:#4fc4c4; --d-PCE:#f08a5a; --d-TM:#6cc070; --d-SS:#f07a9c; --d-CC:#93a1ae; --d-ETD:#d9b44a;
+  --d-D1:#7c9dff; --d-D2:#6cc070; --d-D3:#b48cff; --d-D4:#f08a5a; --d-D5:#4fc4c4;
   color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#0e141a; --surface:#151d25; --sunk:#1b252f; --line:#2a3642; --ink:#e6edf3; --muted:#93a1ae;
   --accent:#7c9dff; --accent-ink:#0b1220; --accent-soft:#1c2a4d;
   --good:#4cc792; --good-soft:#143326; --bad:#ff7b72; --bad-soft:#3a1b1a; --warn:#e3a33b; --warn-soft:#3a2c12; --flag:#f0a23a;
-  --d-AI:#7c9dff; --d-MSO:#b48cff; --d-AW:#4fc4c4; --d-PCE:#f08a5a; --d-TM:#6cc070; --d-SS:#f07a9c; --d-CC:#93a1ae; --d-ETD:#d9b44a;
+  --d-D1:#7c9dff; --d-D2:#6cc070; --d-D3:#b48cff; --d-D4:#f08a5a; --d-D5:#4fc4c4;
   color-scheme:dark}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--f-body);margin:0}
@@ -140,6 +140,7 @@ select,input[type=date],input[type=number]{background:var(--surface);border:1px 
 .navgrid button.cur{outline:2px solid var(--accent);outline-offset:1px}
 .navgrid button.flag::after{content:"";position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--flag)}
 .navgrid button.ok{background:var(--good-soft);border-color:var(--good)} .navgrid button.no{background:var(--bad-soft);border-color:var(--bad)}
+.scn{border-left:3px solid var(--accent);background:var(--accent-soft);padding:10px 14px;border-radius:0 8px 8px 0;display:flex;flex-direction:column;gap:2px}
 .feedback{padding:12px 14px;border-radius:8px;font-weight:600}
 .feedback.good{background:var(--good-soft);color:var(--good)} .feedback.bad{background:var(--bad-soft);color:var(--bad)}
 /* score dial */
@@ -158,7 +159,7 @@ table.t td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:
 
 <header class="rail">
   <div class="wrap">
-    <div class="brand"><b>CCDV-F</b> Prep</div>
+    <div class="brand"><b>CCAR-F</b> Prep</div>
     <nav class="tabs" id="tabs" aria-label="Sections">
       <a href="#today">Today</a><a href="#plan">Plan</a><a href="#lessons">Lessons</a><a href="#practice">Practice</a><a href="#exams">Exams</a><a href="#review">Review</a><a href="#cram">Cram sheet</a>
     </nav>
@@ -173,19 +174,20 @@ table.t td{padding:8px;border-bottom:1px solid var(--line);font-variant-numeric:
 /* ============ constants ============ */
 const DAY = 864e5;
 const CUT_RAW = 0.70;              // assumed raw % at the 720 cut (Anthropic does not publish it)
-const MOCK_MIN = 120, MOCK_N = 53;
+const MOCK_MIN = 120, MOCK_N = 60, PER_SCN = 15, SCN_PER_MOCK = 4;
 const LEITNER = [1, 3, 7, 14, 30]; // days
-const TEMPLATE = [ // 18-day intensive template; weak areas (MSO, SS, AI.2/5/6, AW frameworks) front-loaded
+const TEMPLATE = [ // 19-step intensive template, heaviest domain first; spread across the days to your exam date
   [{t:"diag"}],
-  [{t:"lesson",s:"MSO.2"},{t:"lesson",s:"MSO.3"},{t:"lesson",s:"MSO.4"},{t:"quiz",d:["MSO"],n:15}],
-  [{t:"lesson",s:"MSO.1"},{t:"lesson",s:"SS.1"},{t:"lesson",s:"SS.2"},{t:"quiz",d:["MSO","SS"],n:15}],
-  [{t:"lesson",s:"SS.3"},{t:"lesson",s:"SS.4"},{t:"lesson",s:"ETD.1"},{t:"lesson",s:"CC.1"},{t:"quiz",d:["SS","CC","ETD"],n:15}],
-  [{t:"lesson",s:"AI.2"},{t:"lesson",s:"AI.5"},{t:"lesson",s:"AI.6"},{t:"quiz",d:["AI"],n:15}],
-  [{t:"lesson",s:"AW.3"},{t:"lesson",s:"AW.1"},{t:"quiz",d:["AW"],n:15}],
-  [{t:"lesson",s:"AW.2"},{t:"lesson",s:"AI.1"},{t:"quiz",d:["AI","AW"],n:20},{t:"review"}],
-  [{t:"lesson",s:"AI.3"},{t:"lesson",s:"AI.4"},{t:"quiz",d:["AI"],n:20}],
-  [{t:"lesson",s:"TM.1"},{t:"lesson",s:"TM.2"},{t:"lesson",s:"TM.3"},{t:"quiz",d:["TM"],n:15}],
-  [{t:"lesson",s:"PCE.1"},{t:"lesson",s:"PCE.2"},{t:"lesson",s:"PCE.3"},{t:"quiz",d:["PCE"],n:15}],
+  [{t:"lesson",s:"D1.1"},{t:"lesson",s:"D1.2"},{t:"lesson",s:"D1.3"},{t:"quiz",d:["D1"],n:15}],
+  [{t:"lesson",s:"D1.4"},{t:"lesson",s:"D1.5"},{t:"lesson",s:"D1.6"},{t:"lesson",s:"D1.7"},{t:"quiz",d:["D1"],n:15}],
+  [{t:"lesson",s:"D3.1"},{t:"lesson",s:"D3.2"},{t:"lesson",s:"D3.3"},{t:"quiz",d:["D3"],n:15}],
+  [{t:"lesson",s:"D3.4"},{t:"lesson",s:"D3.5"},{t:"lesson",s:"D3.6"},{t:"quiz",d:["D3"],n:15}],
+  [{t:"lesson",s:"D4.1"},{t:"lesson",s:"D4.2"},{t:"lesson",s:"D4.3"},{t:"quiz",d:["D4"],n:15}],
+  [{t:"lesson",s:"D4.4"},{t:"lesson",s:"D4.5"},{t:"lesson",s:"D4.6"},{t:"quiz",d:["D4"],n:15},{t:"review"}],
+  [{t:"lesson",s:"D2.1"},{t:"lesson",s:"D2.2"},{t:"lesson",s:"D2.3"},{t:"quiz",d:["D2"],n:15}],
+  [{t:"lesson",s:"D2.4"},{t:"lesson",s:"D2.5"},{t:"quiz",d:["D1","D2"],n:20}],
+  [{t:"lesson",s:"D5.1"},{t:"lesson",s:"D5.2"},{t:"lesson",s:"D5.3"},{t:"quiz",d:["D5"],n:15}],
+  [{t:"lesson",s:"D5.4"},{t:"lesson",s:"D5.5"},{t:"lesson",s:"D5.6"},{t:"quiz",d:["D5"],n:15},{t:"review"}],
   [{t:"mock",m:1}],
   [{t:"review"},{t:"quiz",d:[],n:25,weak:true}],
   [{t:"mock",m:2}],
@@ -219,10 +221,10 @@ let store = { db:null, ref:null, writing:false, pending:false, timer:null, statu
 
 function freshState(){
   const start = day0(Date.now());
-  return { v:1, startDate:start, examDate:start + 18*DAY, qstats:{}, attempts:[], lessonsDone:{}, done:{}, active:null, mocks:{}, updatedAt:0 };
+  return { v:1, startDate:start, examDate:start + 19*DAY, qstats:{}, attempts:[], lessonsDone:{}, done:{}, active:null, mocks:{}, updatedAt:0 };
 }
-function loadLocal(){ try { const s = localStorage.getItem("ccdvf-state"); return s ? JSON.parse(s) : null; } catch { return null; } }
-function saveLocal(){ try { localStorage.setItem("ccdvf-state", JSON.stringify(S)); } catch {} }
+function loadLocal(){ try { const s = localStorage.getItem("ccarf-state"); return s ? JSON.parse(s) : null; } catch { return null; } }
+function saveLocal(){ try { localStorage.setItem("ccarf-state", JSON.stringify(S)); } catch {} }
 function save(){
   S.updatedAt = Date.now(); saveLocal();
   if (!store.ref) return;
@@ -243,7 +245,7 @@ async function connectStore(){
     const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
     if (!db || !user) return;
     const uid = await user.id(); if (!uid) return;
-    const ref = db.doc("data/users/" + uid + "/state");
+    const ref = db.doc("data/users/" + uid + "/ccarf");
     const snap = await Promise.race([ref.get(), new Promise((_, rej) => setTimeout(() => rej({code:"timeout"}), 10000))]);
     store.ref = ref; store.status = "synced";
     if (snap.exists) {
@@ -259,12 +261,13 @@ async function connectStore(){
 const dom = c => B.domains.find(d => d.code === c);
 const sub = c => B.subskills.find(s => s.code === c);
 const domOf = q => q.subskill.split(".")[0];
+const scn = c => B.scenarios.find(x => x.code === c);
 function sealedIndex(m){ return m - 3; } // mocks 3..6 are sealed
 function completedMocks(){ return new Set(S.attempts.filter(a => a.kind === "mock").map(a => a.mock)); }
 function practicePool(){
   const pool = new Set(B.practicePool);
   const done = completedMocks();
-  B.sealedMocks.forEach((ids, i) => { if (done.has(i + 3)) ids.forEach(id => pool.add(id)); });
+  B.sealedMocks.forEach((blocks, i) => { if (done.has(i + 3)) blocks.forEach(b => b.ids.forEach(id => pool.add(id))); });
   return [...pool];
 }
 function ssStats(){
@@ -314,9 +317,9 @@ function taskDone(t){
 }
 function taskLabel(t){
   if (t.t === "lesson") { const s = sub(t.s); return { title:`Lesson · ${s.name}`, meta:`${t.s} · ${s.weight}% of exam · ~10 min` }; }
-  if (t.t === "diag") return { title:"Diagnostic test", meta:`${B.diagnostic.length} questions, one per sub-skill · untimed · sets your focus areas` };
-  if (t.t === "mock") return { title:`Mock exam ${t.m}`, meta:`${MOCK_N} questions · ${MOCK_MIN} min · exam conditions` + (t.m <= 2 ? " · drawn from practice bank" : " · sealed set") };
-  if (t.t === "quiz") return { title: t.weak ? `Targeted quiz · your weakest sub-skills` : `Practice quiz · ${t.d.map(d => dom(d).name).join(", ")}`, meta:`${t.n} questions · instant feedback` };
+  if (t.t === "diag") return { title:"Diagnostic test", meta:`${B.diagnostic.length} questions, one per task statement · untimed · sets your focus areas` };
+  if (t.t === "mock") return { title:`Mock exam ${t.m}`, meta:`${MOCK_N} questions · ${SCN_PER_MOCK} scenarios · ${MOCK_MIN} min` + (t.m <= 2 ? " · drawn from practice bank" : " · sealed set") };
+  if (t.t === "quiz") return { title: t.weak ? `Targeted quiz · your weakest task statements` : `Practice quiz · ${t.d.map(d => dom(d).name).join(", ")}`, meta:`${t.n} questions · instant feedback` };
   if (t.t === "review") return { title:"Spaced review", meta:"Questions due for review and recent misses" };
   if (t.t === "cram") return { title:"Read the cram sheet", meta:"Every exam trap on one page · 30 min" };
 }
@@ -335,8 +338,9 @@ function taskRow(t){
 }
 
 /* ============ selection ============ */
-function pickPractice({domains = [], subskills = [], n = 15, source = "smart", weak = false}){
+function pickPractice({domains = [], subskills = [], scenarios = [], n = 15, source = "smart", weak = false}){
   let pool = practicePool();
+  if (scenarios.length) pool = pool.filter(id => scenarios.includes(QM[id].scenario));
   if (weak) subskills = weakestSubskills(6);
   if (subskills.length) pool = pool.filter(id => subskills.includes(QM[id].subskill));
   else if (domains.length) pool = pool.filter(id => domains.includes(domOf(QM[id])));
@@ -348,14 +352,22 @@ function pickPractice({domains = [], subskills = [], n = 15, source = "smart", w
   return pool.sort((a, b) => score(b) - score(a)).slice(0, n);
 }
 function buildDrawnMock(){
-  const pool = practicePool(); const out = [];
-  for (const d of B.domains) {
-    const cand = shuffle(pool.filter(id => domOf(QM[id]) === d.code)).sort((a, b) => (S.qstats[a] ? 1 : 0) - (S.qstats[b] ? 1 : 0));
-    out.push(...cand.slice(0, d.perMock));
+  const pool = practicePool(); const seen = id => S.qstats[id] ? 1 : 0;
+  const fresh = c => pool.filter(id => QM[id].scenario === c && !seen(id)).length;
+  const scs = shuffle(B.scenarios.map(x => x.code)).sort((a, b) => fresh(b) - fresh(a)).slice(0, SCN_PER_MOCK);
+  const counts = {}; B.domains.forEach(d => counts[d.code] = 0); const blocks = []; let total = 0;
+  for (const c of shuffle(scs)) {
+    let avail = shuffle(pool.filter(id => QM[id].scenario === c)); const out = [];
+    while (out.length < PER_SCN && avail.length) {
+      const n = total + 1, need = id => dom(domOf(QM[id])).weight / 100 * n - counts[domOf(QM[id])] - seen(id) * 2;
+      const best = avail.reduce((x, y) => need(y) > need(x) ? y : x);
+      out.push(best); avail = avail.filter(x => x !== best); counts[domOf(QM[best])]++; total++;
+    }
+    blocks.push(shuffle(out));
   }
-  return out;
+  return blocks.flat();
 }
-function orderForExam(ids){ return shuffle(ids); }
+function orderForExam(blocks){ return shuffle(blocks).flatMap(b => shuffle(b.ids)); }
 
 /* ============ attempts ============ */
 function startAttempt({kind, label, ids, timed = false, feedback = false, mock = null, key = null}){
@@ -453,7 +465,7 @@ function vToday(){
         <h2>Focus</h2>
         ${weak.length ? `<p class="small muted">Lowest accuracy, adjusted for exam weight:</p><div class="stack" style="gap:6px">${weak.map(c => `<div class="row" style="gap:8px;align-items:center"><span class="dot" style="background:var(--d-${c.split(".")[0]})"></span><span style="flex:1">${esc(sub(c).name)} <span class="muted small">${c}</span></span><span class="num small">${pct(r.ssAcc[c])}</span></div>`).join("")}</div>
           <div class="row"><button class="btn primary" data-act="quiz" data-weak="1" data-n="20">Drill weakest (20)</button><a class="btn" href="#lesson-${weak[0].replace(".","-")}">Read: ${esc(sub(weak[0]).name)}</a></div>`
-          : `<p class="muted">Take the diagnostic first. It covers all 25 sub-skills and sets your focus list.</p><div><button class="btn primary" data-act="diag">Start diagnostic</button></div>`}
+          : `<p class="muted">Take the diagnostic first. It covers all ${B.subskills.length} task statements and sets your focus list.</p><div><button class="btn primary" data-act="diag">Start diagnostic</button></div>`}
         <hr style="border:0;border-top:1px solid var(--line);width:100%">
         <div class="row" style="justify-content:space-between;align-items:center"><span><strong class="num">${due}</strong> question${due===1?"":"s"} due for spaced review</span><button class="btn" data-act="review" ${due?"":"disabled"}>Review</button></div>
       </section>
@@ -478,7 +490,7 @@ function vPlan(){
 
 function vLessons(){
   return `<div class="stack">
-    <div class="stack" style="gap:6px"><div class="eyebrow">Condensed lessons</div><h1>All 25 sub-skills</h1><p class="muted">About 10 minutes each: key facts, exam traps, official docs, and one short drill.</p></div>
+    <div class="stack" style="gap:6px"><div class="eyebrow">Condensed lessons</div><h1>All ${B.subskills.length} task statements</h1><p class="muted">About 10 minutes each: key facts, exam traps, official docs, and one short drill.</p></div>
     ${blueprintBar()}
     ${B.domains.map(d => `<section class="stack" style="gap:10px"><h2 class="row" style="gap:10px;align-items:center"><span class="dot" style="background:var(--d-${d.code});width:12px;height:12px"></span>${esc(d.name)} <span class="muted small num">${d.weight}%</span></h2>
       <div class="grid3">${B.subskills.filter(s => s.domain === d.code).map(s => { const has = B.lessons.some(l => l.subskill === s.code); return `<a class="lcard" href="#lesson-${s.code.replace(".","-")}"><span class="row" style="justify-content:space-between;gap:8px"><span class="mono small muted">${s.code}</span>${S.lessonsDone[s.code]?`<span class="chip good">Read</span>`:has?"":`<span class="chip">Missing</span>`}</span><strong>${esc(s.name)}</strong><span class="small muted num">${s.weight}% of exam</span></a>`; }).join("")}</div></section>`).join("")}
@@ -503,23 +515,24 @@ function vLesson(code){
   </article>`;
 }
 
-let PF = { domains:[], subskills:[], n:15, source:"smart", feedback:"instant" };
+let PF = { domains:[], subskills:[], scenarios:[], n:15, source:"smart", feedback:"instant" };
 function vPractice(){
   const pool = practicePool(); const sealedLeft = B.sealedMocks.length - [...completedMocks()].filter(m => m >= 3).length;
-  const matches = pickPractice({domains:PF.domains, subskills:PF.subskills, n:9999, source:PF.source}).length;
+  const matches = pickPractice({domains:PF.domains, subskills:PF.subskills, scenarios:PF.scenarios, n:9999, source:PF.source}).length;
   const seg = (name, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button data-pf="${name}" data-v="${v}" aria-pressed="${PF[name]===v}">${l}</button>`).join("")}</div>`;
   return `<div class="stack">
     <div class="stack" style="gap:6px"><div class="eyebrow">Practice</div><h1>Build a quiz</h1><p class="muted">${pool.length} questions in your practice bank. ${sealedLeft ? `${sealedLeft*MOCK_N} more are sealed inside Mocks 3–6 and unlock here once you've taken each mock.` : "All sealed mock questions are unlocked."}</p></div>
     <section class="panel stack" style="gap:16px">
       <div class="stack" style="gap:8px"><div class="eyebrow">Domains</div><div class="picks">${B.domains.map(d => `<button data-pick="domains" data-v="${d.code}" aria-pressed="${PF.domains.includes(d.code)}"><span class="dot" style="background:var(--d-${d.code})"></span>${esc(d.name)}</button>`).join("")}</div></div>
-      <div class="stack" style="gap:8px"><div class="eyebrow">Or specific sub-skills</div><div class="picks">${B.subskills.filter(s => !PF.domains.length || PF.domains.includes(s.domain)).map(s => `<button data-pick="subskills" data-v="${s.code}" aria-pressed="${PF.subskills.includes(s.code)}">${s.code} ${esc(s.name)}</button>`).join("")}</div></div>
+      <div class="stack" style="gap:8px"><div class="eyebrow">Scenarios</div><div class="picks">${B.scenarios.map(x => `<button data-pick="scenarios" data-v="${x.code}" aria-pressed="${PF.scenarios.includes(x.code)}">${esc(x.name)}</button>`).join("")}</div></div>
+      <div class="stack" style="gap:8px"><div class="eyebrow">Or specific task statements</div><div class="picks">${B.subskills.filter(s => !PF.domains.length || PF.domains.includes(s.domain)).map(s => `<button data-pick="subskills" data-v="${s.code}" aria-pressed="${PF.subskills.includes(s.code)}">${s.code} ${esc(s.name)}</button>`).join("")}</div></div>
       <div class="row" style="gap:20px;align-items:end">
         <div class="stack" style="gap:6px"><div class="eyebrow">Questions</div>${seg("source", [["smart","Smart mix"],["unseen","Unseen"],["missed","Missed"],["all","Any"]])}</div>
         <div class="stack" style="gap:6px"><div class="eyebrow">Feedback</div>${seg("feedback", [["instant","After each question"],["end","At the end"]])}</div>
-        <label class="f">Count<select id="pfn">${[5,10,15,20,30,53].map(n => `<option ${PF.n===n?"selected":""}>${n}</option>`).join("")}</select></label>
+        <label class="f">Count<select id="pfn">${[5,10,15,20,30,60].map(n => `<option ${PF.n===n?"selected":""}>${n}</option>`).join("")}</select></label>
       </div>
       <div class="row" style="align-items:center"><button class="btn primary" data-act="startpractice" ${matches?"":"disabled"}>Start ${Math.min(PF.n, matches)} questions</button><span class="small muted">${matches} match${matches===1?"":"es"} these filters</span>
-        ${PF.domains.length||PF.subskills.length ? `<button class="btn ghost small" data-act="clearpf">Clear filters</button>` : ""}</div>
+        ${PF.domains.length||PF.subskills.length||PF.scenarios.length ? `<button class="btn ghost small" data-act="clearpf">Clear filters</button>` : ""}</div>
     </section>
   </div>`;
 }
@@ -528,13 +541,13 @@ function vExams(){
   const done = completedMocks(); const diag = S.attempts.filter(a => a.kind === "diag").slice(-1)[0];
   const mockCard = m => { const at = S.attempts.filter(a => a.kind === "mock" && a.mock === m); const best = at.length ? Math.max(...at.map(a => a.scaled)) : null;
     return `<div class="panel stack" style="gap:8px"><div class="row" style="justify-content:space-between"><h3>Mock exam ${m}</h3>${best!=null ? (best>=720?`<span class="chip good">${best}</span>`:`<span class="chip bad">${best}</span>`) : `<span class="chip">Not taken</span>`}</div>
-      <p class="small muted">${m <= 2 ? "Drawn at start from the practice bank, favouring questions you haven't seen." : "Sealed set of 53 questions you won't see anywhere else until you take it."}</p>
+      <p class="small muted">${m <= 2 ? `${SCN_PER_MOCK} scenarios drawn at start from the practice bank, favouring questions you haven't seen.` : `Sealed set of ${MOCK_N} questions across ${SCN_PER_MOCK} scenarios that you won't see anywhere else until you take it.`}</p>
       <div class="row">${S.active ? `<button class="btn" disabled>Finish current attempt first</button>` : `<button class="btn ${done.has(m)?"":"primary"}" data-act="mock" data-m="${m}">${done.has(m) ? "Retake" : "Start"}</button>`}${at.length ? `<a class="btn ghost" href="#result-${at[at.length-1].id}">Last result</a>` : ""}</div></div>`; };
   const hist = S.attempts.slice().reverse();
   return `<div class="stack">
     <div class="stack" style="gap:6px"><div class="eyebrow">Exams</div><h1>Diagnostic and mock exams</h1>
-      <p class="muted" style="max-width:72ch">Mocks run under exam conditions: ${MOCK_N} questions in the official domain proportions, a ${MOCK_MIN}-minute timer that keeps running if you leave, flag for review, and no feedback until you submit. Scores use the 100–1000 scale with 720 to pass.</p></div>
-    <div class="panel row" style="justify-content:space-between;align-items:center"><div class="stack" style="gap:4px"><h3>Diagnostic</h3><p class="small muted">${B.diagnostic.length} questions, one per sub-skill. Untimed, no feedback until the end.</p></div>
+      <p class="muted" style="max-width:72ch">Mocks run under exam conditions: ${MOCK_N} questions grouped under ${SCN_PER_MOCK} of the 6 exam scenarios (${PER_SCN} each), close to the official domain weights, a ${MOCK_MIN}-minute timer that keeps running if you leave, flag for review, and no feedback until you submit. Scores use the 100–1000 scale with 720 to pass.</p></div>
+    <div class="panel row" style="justify-content:space-between;align-items:center"><div class="stack" style="gap:4px"><h3>Diagnostic</h3><p class="small muted">${B.diagnostic.length} questions, one per task statement. Untimed, no feedback until the end.</p></div>
       <div class="row">${diag ? `<span class="chip acc">${diag.correct}/${diag.total}</span><a class="btn ghost" href="#result-${diag.id}">Result</a>` : ""}<button class="btn ${diag?"":"primary"}" data-act="diag" ${S.active?"disabled":""}>${diag?"Retake":"Start"}</button></div></div>
     <div class="grid3">${[1,2,3,4,5,6].map(mockCard).join("")}</div>
     <section class="panel stack" style="gap:10px"><h2>History</h2>${hist.length ? `<div class="tablewrap"><table class="t"><thead><tr><th>Date</th><th>Attempt</th><th>Score</th><th>Scaled</th><th>Time</th><th></th></tr></thead><tbody>${hist.map(a => `<tr><td>${shortDate(a.at)}</td><td>${esc(a.label)}</td><td class="num">${a.correct}/${a.total} (${pct(a.raw)})</td><td class="num">${a.kind==="mock"?`<strong>${a.scaled}</strong>`:"—"}</td><td class="num">${mmss(a.dur)}</td><td>${a.ids?`<a href="#result-${a.id}">Review</a>`:""}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">No attempts yet.</p>`}</section>
@@ -550,7 +563,7 @@ function vReview(){
       <section class="panel stack" style="gap:10px"><div class="bignum num">${due.length}</div><p>due for review now</p><div><button class="btn primary" data-act="review" ${due.length?"":"disabled"}>Review ${Math.min(30, due.length)}</button></div></section>
       <section class="panel stack" style="gap:10px"><div class="bignum num">${missed.length}</div><p>currently missed (last attempt wrong)</p><div><button class="btn" data-act="missed" ${missed.length?"":"disabled"}>Retry missed</button></div></section>
     </div>
-    <section class="panel stack" style="gap:10px"><h2>Mistakes log by sub-skill</h2>${Object.keys(bySS).length ? `<div class="tablewrap"><table class="t"><thead><tr><th>Sub-skill</th><th>Missed</th><th></th></tr></thead><tbody>${Object.entries(bySS).sort((a,b)=>b[1]-a[1]).map(([s,n]) => `<tr><td><span class="dot" style="background:var(--d-${s.split(".")[0]})"></span> ${esc(sub(s).name)} <span class="muted small">${s}</span></td><td class="num">${n}</td><td><a href="#lesson-${s.replace(".","-")}">Lesson</a> · <a href="#" data-act="quizss" data-s="${s}" data-src="missed">Retry</a></td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Nothing missed yet.</p>`}</section>
+    <section class="panel stack" style="gap:10px"><h2>Mistakes log by task statement</h2>${Object.keys(bySS).length ? `<div class="tablewrap"><table class="t"><thead><tr><th>Task statement</th><th>Missed</th><th></th></tr></thead><tbody>${Object.entries(bySS).sort((a,b)=>b[1]-a[1]).map(([s,n]) => `<tr><td><span class="dot" style="background:var(--d-${s.split(".")[0]})"></span> ${esc(sub(s).name)} <span class="muted small">${s}</span></td><td class="num">${n}</td><td><a href="#lesson-${s.replace(".","-")}">Lesson</a> · <a href="#" data-act="quizss" data-s="${s}" data-src="missed">Retry</a></td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Nothing missed yet.</p>`}</section>
   </div>`;
 }
 
@@ -558,10 +571,11 @@ function vCram(){
   return `<div class="stack" style="max-width:900px">
     <div class="stack" style="gap:6px"><div class="eyebrow">Final-day cram sheet</div><h1>Every exam trap, by weight</h1><p class="muted">Read top to bottom. Domains run from heaviest to lightest.</p></div>
     <section class="panel stack" style="gap:8px"><h3>Exam facts</h3><ul style="margin:0;padding-left:1.2em">
-      <li>${MOCK_N} questions · ${MOCK_MIN} minutes ≈ <strong>2 min 15 s per question</strong>. Flag anything over 3 minutes and move on.</li>
+      <li>${MOCK_N} questions · ${MOCK_MIN} minutes = <strong>2 minutes per question</strong>. Flag anything over 3 minutes and move on.</li>
+      <li>You get <strong>${SCN_PER_MOCK} of the 6 scenarios</strong> at random, about ${PER_SCN} questions each. Read each scenario carefully once: its constraints decide the close calls.</li>
       <li>Multi-response items say how many to pick ("Select TWO"). No partial credit.</li>
       <li>Scaled 100–1000, pass at <strong>720</strong>. That isn't 72% correct. Your report shows percent correct per domain.</li>
-      <li>Applications & Integration is a third of the exam (≈18 questions). Claude Code and Eval/Debugging together are ≈2–3.</li></ul></section>
+      <li>Agentic Architecture & Orchestration is over a quarter of the exam (≈16 questions). When a rule must always hold, the answer is usually a deterministic control (hook, code, tool gating), not a stronger prompt.</li></ul></section>
     ${B.domains.map(d => { const ls = B.lessons.filter(l => l.subskill.split(".")[0] === d.code); if (!ls.length) return "";
       return `<section class="stack" style="gap:10px"><h2 class="row" style="gap:10px;align-items:center"><span class="dot" style="background:var(--d-${d.code});width:12px;height:12px"></span>${esc(d.name)} <span class="muted small num">${d.weight}%</span></h2>
       ${ls.map(l => `<div class="panel stack" style="gap:8px"><h3>${esc(sub(l.subskill).name)} <span class="muted small mono">${l.subskill}</span></h3>${(l.traps||[]).map(t => `<div class="trap small">${fmt(t)}</div>`).join("")}</div>`).join("")}</section>`; }).join("")}
@@ -569,6 +583,12 @@ function vCram(){
 }
 
 /* ---------- runner ---------- */
+function scnCard(q, a){
+  const x = scn(q.scenario); if (!x) return "";
+  let pos = "";
+  if (a && a.kind === "mock") { const order = [...new Set(a.ids.map(id => QM[id].scenario))]; pos = ` · ${order.indexOf(q.scenario) + 1} of ${order.length}`; }
+  return `<div class="scn"><div class="eyebrow">Scenario${pos}</div><strong>${esc(x.name)}</strong><p class="small muted">${esc(x.desc)}</p></div>`;
+}
 let tick = null;
 function vRun(){
   const a = S.active; if (!a) return `<div class="empty">No attempt in progress. <a href="#exams">Exams</a> · <a href="#practice">Practice</a></div>`;
@@ -595,7 +615,7 @@ function vRun(){
     <section class="panel stack" style="gap:16px">
       <div class="row" style="justify-content:space-between;align-items:center"><span class="qnum">Question ${a.idx+1} of ${a.ids.length}${a.kind!=="mock"?` · ${q.subskill} ${esc(sub(q.subskill).name)}`:""}</span>
         <button class="btn ghost small" data-act="flag" aria-pressed="${a.flags.includes(id)}">${a.flags.includes(id) ? "⚑ Flagged" : "⚐ Flag for review"}</button></div>
-      <p class="stem">${fmt(q.stem)}</p>${codeBlock(q.code)}
+      ${scnCard(q, a)}<p class="stem">${fmt(q.stem)}</p>${codeBlock(q.code)}
       ${multi ? `<p class="selinfo">Select ${word}.</p>` : ""}
       <div class="opts" role="${multi?"group":"radiogroup"}">${opts}</div>
       ${checked ? `<div class="feedback ${ok?"good":"bad"}">${ok ? "Correct." : `Incorrect. The answer is ${q.answer.map(i => "ABCDEF"[i]).join(" and ")}.`}${q.ref ? ` <a href="${esc(q.ref)}" target="_blank" rel="noopener" class="small">Docs</a>` : ""}</div>` : ""}
@@ -614,8 +634,8 @@ function vResult(id){
   const acc = {}; const counts = {}; for (const [d, [c, t]] of Object.entries(a.byDomain)) { acc[d] = t ? c/t : null; counts[d] = t; }
   const isMock = a.kind === "mock";
   const items = a.ids ? a.ids.map((qid, i) => { const q = QM[qid]; if (!q) return ""; const got = (a.answers||{})[qid] || []; const ok = sameSet(got, q.answer);
-    return `<details class="panel" ${ok?"":""}><summary class="row" style="gap:10px;align-items:center;cursor:pointer"><span class="chip ${ok?"good":"bad"}">${ok?"Correct":"Missed"}</span><span class="mono small muted">Q${i+1} · ${q.subskill}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(q.stem.slice(0, 110))}</span></summary>
-      <div class="stack" style="gap:12px;margin-top:14px"><p class="stem">${fmt(q.stem)}</p>${codeBlock(q.code)}<div class="opts">${q.options.map((o, k) => `<div class="opt ${q.select>1?"multi":""} ${q.answer.includes(k)?"correct":got.includes(k)?"wrong":""}"><span class="k">${"ABCDEF"[k]}</span><span class="txt">${fmt(o)}<span class="why">${fmt(q.explanations[k])}</span></span></div>`).join("")}</div>
+    return `<details class="panel" ${ok?"":""}><summary class="row" style="gap:10px;align-items:center;cursor:pointer"><span class="chip ${ok?"good":"bad"}">${ok?"Correct":"Missed"}</span><span class="mono small muted">Q${i+1} · ${q.scenario} · ${q.subskill}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(q.stem.slice(0, 110))}</span></summary>
+      <div class="stack" style="gap:12px;margin-top:14px">${scnCard(q)}<p class="stem">${fmt(q.stem)}</p>${codeBlock(q.code)}<div class="opts">${q.options.map((o, k) => `<div class="opt ${q.select>1?"multi":""} ${q.answer.includes(k)?"correct":got.includes(k)?"wrong":""}"><span class="k">${"ABCDEF"[k]}</span><span class="txt">${fmt(o)}<span class="why">${fmt(q.explanations[k])}</span></span></div>`).join("")}</div>
       <div class="small">${got.length ? `You chose ${got.map(k => "ABCDEF"[k]).join(", ")}.` : "Not answered."} ${q.ref ? `<a href="${esc(q.ref)}" target="_blank" rel="noopener">Docs</a> · ` : ""}<a href="#lesson-${q.subskill.replace(".","-")}">Lesson</a></div></div></details>`; }).join("") : `<p class="muted">Answer details for this older attempt were trimmed to save space.</p>`;
   return `<div class="stack">
     <div class="stack" style="gap:6px"><div class="eyebrow">${shortDate(a.at)} · ${mmss(a.dur)} taken</div><h1>${esc(a.label)}</h1></div>
@@ -681,7 +701,7 @@ document.addEventListener("click", e => {
     case "mock": { if (busy()) return; const m = +el.dataset.m; const ids = m <= 2 ? buildDrawnMock() : orderForExam(B.sealedMocks[sealedIndex(m)] || []);
       startAttempt({kind:"mock", label:`Mock exam ${m}`, ids, timed:true, feedback:false, mock:m}); break; }
     case "quiz": { if (busy()) return; const d = (el.dataset.d || "").split(",").filter(Boolean);
-      startAttempt({kind:"practice", label: el.dataset.weak ? "Targeted quiz · weakest sub-skills" : `Practice · ${d.map(x => dom(x).name).join(", ")}`, ids: pickPractice({domains:d, n:+el.dataset.n || 15, weak:!!el.dataset.weak}), feedback:true, key: el.dataset.key || null}); break; }
+      startAttempt({kind:"practice", label: el.dataset.weak ? "Targeted quiz · weakest task statements" : `Practice · ${d.map(x => dom(x).name).join(", ")}`, ids: pickPractice({domains:d, n:+el.dataset.n || 15, weak:!!el.dataset.weak}), feedback:true, key: el.dataset.key || null}); break; }
     case "quizss": { e.preventDefault(); if (busy()) return; const s = el.dataset.s; startAttempt({kind:"practice", label:`Practice · ${sub(s).name}`, ids: pickPractice({subskills:[s], n:10, source: el.dataset.src || "smart"}), feedback:true}); break; }
     case "review": { if (busy()) return; let ids = shuffle(dueIds()).slice(0, 30); if (ids.length < 10) ids = [...new Set([...ids, ...shuffle(missedIds())])].slice(0, 20);
       if (!ids.length) { toast("Nothing is due yet. Answer some questions first."); if (el.dataset.key) { S.done[el.dataset.key] = true; save(); route(); } return; }
@@ -689,8 +709,8 @@ document.addEventListener("click", e => {
     case "missed": if (busy()) return; startAttempt({kind:"review", label:"Retry missed", ids: shuffle(missedIds()).slice(0, 30), feedback:true}); break;
     case "retryattempt": { if (busy()) return; const at = S.attempts.find(x => x.id === el.dataset.id); const ids = at.ids.filter(q => !sameSet((at.answers[q]||[]), QM[q].answer));
       startAttempt({kind:"review", label:`Retry · ${at.label}`, ids, feedback:true}); break; }
-    case "startpractice": if (busy()) return; startAttempt({kind:"practice", label:"Custom practice", ids: pickPractice({domains:PF.domains, subskills:PF.subskills, n:PF.n, source:PF.source}), feedback: PF.feedback === "instant"}); break;
-    case "clearpf": PF.domains = []; PF.subskills = []; route(); break;
+    case "startpractice": if (busy()) return; startAttempt({kind:"practice", label:"Custom practice", ids: pickPractice({domains:PF.domains, subskills:PF.subskills, scenarios:PF.scenarios, n:PF.n, source:PF.source}), feedback: PF.feedback === "instant"}); break;
+    case "clearpf": PF.domains = []; PF.subskills = []; PF.scenarios = []; route(); break;
     case "lessondone": S.lessonsDone[el.dataset.s] = Date.now(); save(); rerunKeepScroll(); toast("Marked as read"); break;
     case "cramdone": S.done[el.dataset.key] = true; save(); break;
     case "flag": { const id = a.ids[a.idx]; a.flags = a.flags.includes(id) ? a.flags.filter(x => x !== id) : [...a.flags, id]; save(); rerunKeepScroll(); break; }

@@ -1,0 +1,1319 @@
+{
+  "lessons": [
+    {
+      "subskill": "D2.1",
+      "title": "Tool interface design",
+      "summary": "The exam checks whether you can design tools an agent picks correctly and uses efficiently: descriptions that say what a tool does and when to call it, schemas that make bad input hard to express, clean boundaries between similar tools, and outputs that return only high-signal fields. Expect symptoms (wrong tool picked, wasted tokens, invented IDs) and ask for the design fix.",
+      "keyPoints": [
+        "The **description is the main selection signal**. State what the tool does, what it returns, and **when to call it** (and when not to). Vague one-liners (\"Order tool.\") make Claude skip the tool or pick the wrong one.",
+        "Schema hygiene: describe every property with units and format (\"amount in cents, integer\"), use `enum` for fixed value sets, mark only truly required fields in `required`, and give params unambiguous names (`customer_id`, not `id`).",
+        "**Boundaries between similar tools**: if two tools overlap (`search_customers` / `find_customer`), either merge them or rewrite both descriptions so each says what it covers and when to prefer it. Namespacing by service or resource (`kb_search`, `web_search`) also helps.",
+        "**Consolidate multi-step chains** the agent always runs together (`schedule_event` instead of `list_users` + `list_events` + `create_event`), and prefer **search over list** so the agent never pages through everything.",
+        "**Return high-signal fields only**: readable names and the few fields the next step needs, not raw API dumps or bare UUIDs. A `response_format` option (concise / detailed) lets the agent ask for IDs only when it needs them.",
+        "Large results: filter, paginate and set sensible default limits; when you truncate, **say so** and tell the agent how to narrow the query. Silent truncation makes the agent reason from partial data.",
+        "**Narrow, purpose-built tools beat generic power tools** (`get_order_status(order_id)` over `run_sql(query)`): the backend can enforce ownership and read-only access, and the harness can gate and log a typed call.",
+        "Promote an action out of `bash` into a dedicated typed tool when it must be approved, audited or rendered (`send_email(to, subject, body)` rather than `curl` in a shell).",
+        "Tool design is a context-engineering decision: every definition and every result costs context. Fewer, better tools usually beat many thin wrappers around REST endpoints."
+      ],
+      "traps": [
+        "Fixing wrong tool selection with `tool_choice` or a system-prompt rule when the real problem is overlapping or vague descriptions.",
+        "Adding more granular tools (`get_x_by_id`, `get_y_by_id`) when the agent is already drowning in calls; consolidate instead.",
+        "Returning every field \"so Claude has maximum information\"; it dilutes attention and burns context.",
+        "Silently truncating large outputs or silently mapping invalid input to a default value.",
+        "Giving the model a free-form `run_sql` / `bash` tool and relying on prompt rules to keep it safe."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"name\": \"kb_search_articles\",\n  \"description\": \"Search the internal help-center knowledge base. Use for product how-to and policy questions. Do NOT use for order or account data (use orders_lookup). Returns up to `limit` articles as {title, url, snippet}; say if more exist.\",\n  \"input_schema\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"query\": {\"type\": \"string\", \"description\": \"Keywords, e.g. 'refund window digital goods'\"},\n      \"limit\": {\"type\": \"integer\", \"description\": \"Max results, default 5\"},\n      \"response_format\": {\"type\": \"string\", \"enum\": [\"concise\", \"detailed\"]}\n    },\n    \"required\": [\"query\"]\n  }\n}"
+      },
+      "docs": [
+        {
+          "title": "Writing effective tools for agents",
+          "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+        },
+        {
+          "title": "Define tools",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools"
+        },
+        {
+          "title": "Tool use overview",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+        }
+      ],
+      "drill": "Take three tools from a real agent you run. For each, rewrite the description to answer: what it does, what it returns, when to call it, when NOT to call it. Then look at one real tool result and cut it to the fields the next step actually uses, adding a `response_format` switch. Re-run five transcripts and compare tool-selection errors and tokens per task."
+    },
+    {
+      "subskill": "D2.2",
+      "title": "Structured errors for MCP tools",
+      "summary": "Questions here test whether a failed tool call gives the agent enough information to recover: reported in-band as an error result (`isError` in MCP, `is_error` on the API `tool_result`), classified so the agent knows whether retrying can help, and phrased as an actionable next step. The classic wrong answers are empty success, thrown exceptions, and generic failure text.",
+      "keyPoints": [
+        "MCP has two error channels. **Protocol errors** (JSON-RPC `error`) are for unknown tools, malformed requests and server faults. **Tool execution errors** (API failures, invalid input data, business-logic failures) go in the tool result with `isError: true` so the model sees them and can adapt.",
+        "On the Messages API the equivalent is a `tool_result` with `is_error: true`, keeping the same `tool_use_id`, in the same user message as the turn's other results. Never throw out of the loop and never drop the result.",
+        "**Never return an empty or \"success\" result on failure.** The agent will treat it as real data (\"no orders found\") or retry the same call in a loop because nothing told it what went wrong.",
+        "Classify errors so the agent can choose a strategy: **transient** (timeout, rate limit: retry later, maybe with a `retry_after`), **validation** (bad argument: fix the input and call again), **business rule** (policy forbids it: don't retry, take another path such as escalation), **permission** (not authorised: don't retry, escalate or ask).",
+        "Make errors machine-readable as well as human-readable: a small consistent envelope such as `{error_category, retryable, message, suggested_action}` across all your MCP servers lets prompts and hooks react uniformly.",
+        "Error text should be **actionable**: name the field, the accepted format and an example (\"`start_date` must be YYYY-MM-DD, got '3/4'\"), or the alternative path (\"refund exceeds the $500 agent limit; escalate with reason `over_limit`\").",
+        "Distinguish **\"no results\"** (a valid, successful empty answer) from **\"could not check\"** (an error). Downstream agents and coordinators make very different decisions on each.",
+        "Handle cheap deterministic recovery (a bounded retry on a transient timeout) inside the tool or server; surface the error to the model when judgment is needed or retries are exhausted.",
+        "Keep stack traces, internal hostnames and secrets out of error text; they waste context and can leak. Log the detail server-side and give the model the actionable summary."
+      ],
+      "traps": [
+        "Returning `\"\"` or `[]` as a normal result when the backend call failed.",
+        "Letting an exception become a JSON-RPC error for a business-rule failure, so the client shows only a generic failure and the agent retries blindly.",
+        "Marking a business-rule or permission error as retryable, which produces identical retries until the loop cap.",
+        "Fixing a retry loop by rewriting the system prompt (\"don't call the same tool twice\") instead of fixing the error result.",
+        "Dumping the raw stack trace into the tool result as the \"most informative\" message."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"content\": [{\n    \"type\": \"text\",\n    \"text\": \"{\\\"error_category\\\": \\\"business_rule\\\", \\\"retryable\\\": false, \\\"message\\\": \\\"Order 81723 was already refunded on 2026-10-02.\\\", \\\"suggested_action\\\": \\\"Tell the customer the refund date; do not call refund_order again.\\\"}\"\n  }],\n  \"isError\": true\n}"
+      },
+      "docs": [
+        {
+          "title": "MCP spec: Tools (error handling)",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+        },
+        {
+          "title": "Handle tool calls",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls"
+        },
+        {
+          "title": "Writing effective tools for agents",
+          "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+        }
+      ],
+      "drill": "In a small MCP server, make one tool fail four ways: timeout, bad date format, policy refusal, missing permission. Return each as `isError: true` with a shared envelope (`error_category`, `retryable`, `message`, `suggested_action`). Connect it to Claude Code and watch how the agent's next move differs per category. Then change one to an empty success and observe the agent's behaviour."
+    },
+    {
+      "subskill": "D2.3",
+      "title": "Tool distribution and tool choice",
+      "summary": "This task is about who gets which tools and how strongly you steer the call. The exam rewards giving each agent or subagent a small, role-scoped tool set, using tool search when a catalog is genuinely large, and choosing the right `tool_choice` mode, including knowing that forced modes are not available on every model.",
+      "keyPoints": [
+        "**More tools degrade selection.** Anthropic's tool search docs note selection accuracy drops once an agent has more than about 30 to 50 tools available, and definitions alone can cost tens of thousands of tokens.",
+        "**Scope tools per role**: a coordinator gets delegation and synthesis tools; a search subagent gets search/fetch; a refund subagent gets refund tools. Least privilege also limits blast radius (an extractor should not hold `update_erp`).",
+        "Claude Code / Agent SDK subagents: `tools` lists exactly what the subagent gets; omit it and it **inherits every tool**; `disallowedTools` removes tools and wins if a tool is in both lists.",
+        "Allow vs restrict: `allowedTools` / `--allowedTools` only **pre-approves** tools; unlisted tools still exist. To restrict availability use `--tools` (built-ins), or a bare name in `disallowedTools` / `--disallowedTools`, which removes the tool from context. `--tools` does not affect MCP tools (`--disallowedTools \"mcp__*\"` does).",
+        "Large catalogs on the API: add the **tool search tool** and mark most tools `defer_loading: true`; keep the 3 to 5 most-used tools loaded; at least one tool must stay non-deferred. Claude Code applies MCP tool search by default.",
+        "`tool_choice` modes: `auto` (default: Claude decides) and `none` (no tool calls; the definitions stay in the request) work on every model. Changing `tool_choice` does not invalidate the cached tools and system prefix.",
+        "`disable_parallel_tool_use: true` caps Claude at **one** tool call per response; by default it may request several in parallel.",
+        "Forced modes (`any`, `{\"type\":\"tool\",\"name\":...}`) existed for guaranteeing a call, but **current models (e.g. Opus 5.5, Sonnet 5.5) reject them with a 400**, including in Batches. For guaranteed structured output use **structured outputs** (`output_config.format`); to steer toward a tool use `auto` + a prompt naming the tool + `strict: true` on the tool.",
+        "Because `auto` never guarantees a call, the harness should **check that the expected tool was called and retry if not**; add `disable_parallel_tool_use: true` when exactly one call per turn is required."
+      ],
+      "traps": [
+        "Giving every agent every tool \"for flexibility\": the coordinator starts doing subagent work and selection accuracy falls.",
+        "Thinking `allowedTools: [\"Read\", \"Grep\"]` makes an agent read-only. It only auto-approves those; Bash and Edit are still there.",
+        "Omitting `tools` on a subagent meant to be read-only; it inherits Edit and Bash.",
+        "Designing around forced `tool_choice` (`any` / named tool); current models return a 400. Use structured outputs or `auto` + strict + verify.",
+        "Deferring every tool, including the tool search tool, which is a 400."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "options = ClaudeAgentOptions(\n    agents={\n        \"refund-specialist\": AgentDefinition(\n            description=\"Use for refund eligibility checks and issuing refunds.\",\n            prompt=\"You handle refunds within policy...\",\n            tools=[\"mcp__billing__get_order\", \"mcp__billing__issue_refund\"],\n        ),\n    },\n    disallowed_tools=[\"Bash\", \"Write\", \"Edit\"],  # removes these built-ins\n)"
+      },
+      "docs": [
+        {
+          "title": "Tool search tool",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+        },
+        {
+          "title": "Define tools (tool_choice)",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools"
+        },
+        {
+          "title": "Agent SDK permissions (allowedTools vs disallowedTools)",
+          "url": "https://code.claude.com/docs/en/agent-sdk/permissions"
+        },
+        {
+          "title": "Subagents",
+          "url": "https://code.claude.com/docs/en/sub-agents"
+        },
+        {
+          "title": "Structured outputs",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+        }
+      ],
+      "drill": "Build a coordinator with two subagents. Give the coordinator only the Agent tool, one subagent only search tools, the other only Read. Run a task and confirm in the transcript that each stays in its lane. Then remove `tools` from one subagent and watch it inherit everything. Finally, get the same extraction two ways (`output_config.format`, and `auto` + prompt + `strict: true` + a check that the tool was called) and compare."
+    },
+    {
+      "subskill": "D2.4",
+      "title": "MCP server integration",
+      "summary": "Expect configuration and placement decisions: where a server is declared (project `.mcp.json` vs local or user scope), how secrets stay out of git, which transport fits, which MCP primitive fits a capability, and whether to adopt an existing server, write a custom tool, or build a new server.",
+      "keyPoints": [
+        "Claude Code scopes: **local** (default, private to you, this project, stored in `~/.claude.json`), **project** (`.mcp.json` at the repo root, committed and shared; Claude Code asks for approval before using project servers), **user** (all your projects, private).",
+        "Same server name in several scopes: Claude Code uses the **whole entry** from the highest-precedence source (local, then project, then user); fields are not merged.",
+        "Secrets: `.mcp.json` supports `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`, `url` and `headers`. Commit the file with placeholders; each developer or CI job supplies the value.",
+        "Transports: **stdio** for local processes the client launches; **Streamable HTTP** for remote, shared servers (with OAuth for per-user auth). The older SSE transport is deprecated.",
+        "Primitives: **tools** are model-controlled (Claude decides to call), **resources** are application-controlled context (in Claude Code, `@server:protocol://path`), **prompts** are user-controlled templates (in Claude Code, `/mcp__server__prompt`).",
+        "Build vs adopt: use an existing, maintained server for a common system (GitHub, Jira, a database) before writing your own; write a custom in-app tool when one application owns the capability; build an MCP server when several clients must reuse the same integration.",
+        "CI / scripted runs: `--mcp-config <file>` loads servers from a file and `--strict-mcp-config` ignores every other MCP configuration, so a pipeline gets exactly the servers it declares.",
+        "Claude Code warns on MCP tool output over 10,000 tokens and caps it at 25,000 by default (`MAX_MCP_OUTPUT_TOKENS`). Design tools to paginate rather than raising the cap.",
+        "MCP tool names in permission rules and hook matchers take the form `mcp__<server>__<tool>`; `mcp__<server>__*` matches all of one server's tools."
+      ],
+      "traps": [
+        "Committing tokens in `.mcp.json` because the repo is private.",
+        "Expecting a local-scope override and the project entry to merge (e.g. keep the project's auth header). The whole entry from one scope wins.",
+        "Choosing stdio for a server thousands of users reach remotely, or the deprecated SSE transport for a new remote server.",
+        "Building and hosting an MCP server for one function used by one app.",
+        "Mapping a user-picked template to a resource or a tool instead of a prompt."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"mcpServers\": {\n    \"tickets\": {\n      \"type\": \"http\",\n      \"url\": \"https://tickets.internal.example.com/mcp\",\n      \"headers\": { \"Authorization\": \"Bearer ${TICKETS_TOKEN}\" }\n    },\n    \"warehouse\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@acme/warehouse-mcp\"],\n      \"env\": { \"WAREHOUSE_URL\": \"${WAREHOUSE_URL:-postgres://localhost/dev}\" }\n    }\n  }\n}"
+      },
+      "docs": [
+        {
+          "title": "Claude Code MCP",
+          "url": "https://code.claude.com/docs/en/mcp"
+        },
+        {
+          "title": "MCP transports (spec)",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports"
+        },
+        {
+          "title": "MCP server features (spec)",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/server"
+        },
+        {
+          "title": "CLI reference",
+          "url": "https://code.claude.com/docs/en/cli-reference"
+        }
+      ],
+      "drill": "In a scratch repo, commit a `.mcp.json` with one stdio and one HTTP server whose credentials use `${VAR}`. Open Claude Code, approve the project servers, and check `/mcp`. Add a local-scope server with the same name and confirm the whole entry is replaced. Finally run `claude -p --mcp-config ci-mcp.json --strict-mcp-config` and confirm only the CI file's servers load."
+    },
+    {
+      "subskill": "D2.5",
+      "title": "Built-in tools",
+      "summary": "The exam expects you to know what each Claude Code / Agent SDK built-in tool is for and how it behaves at the edges: content search vs path matching, Edit's exact unique-match rule and what to do when it fails, Write's full overwrite, what WebSearch and WebFetch actually return, and how tool names are used in permissions and subagent tool lists.",
+      "keyPoints": [
+        "**Grep searches file contents** (ripgrep regex syntax, so escape metacharacters like `{`; output modes `files_with_matches` (default), `content`, `count`; filter with `glob` or `type`). **Glob matches file paths** by pattern (`src/**/*.ts`), returns paths sorted by modification time. Find files by name with Glob, find code by content with Grep. (On macOS/Linux Claude Code may run these searches as `grep`/`find` via Bash; the decision is the same.)",
+        "Exploration pattern for large codebases: Glob/Grep to locate, then **targeted Read** of the relevant files or line ranges, not reading whole directories.",
+        "**Edit is exact string replacement**: `old_string` must match exactly (whitespace included) and appear **exactly once**. If it matches several times, add surrounding context to make it unique, or set `replace_all: true` when every occurrence should change. No regex, no fuzzy matching.",
+        "**Write creates or fully overwrites** a file; it never appends or merges. Use Edit for partial changes; use Read then Write when a file needs a full rewrite or Edit cannot anchor a unique match.",
+        "**Read** returns file contents with line numbers; large files are read in pages with `offset`/`limit`; it also reads images, PDFs (page ranges for long ones) and notebooks. It refuses binary formats like `.xlsx` (use a skill or a script) and does not list directories.",
+        "**Bash** runs each command in a separate process: the working directory carries over inside the project, but **environment variables do not persist** between commands.",
+        "**WebSearch** returns result titles and URLs only (it does not fetch pages); scope with `allowed_domains` or `blocked_domains`. **WebFetch** fetches one URL and runs your extraction prompt over it, so the result is **lossy by design**; it refuses `localhost` and dotless intranet hostnames (use `curl` via Bash).",
+        "**Agent** (formerly Task) spawns a subagent with its own context; the parent sees only the final result. Restrict subagents with `tools` / `disallowedTools`.",
+        "Tool names are the strings used in permission rules, `--allowedTools`/`--disallowedTools`, subagent `tools` and hook matchers. Path rules for writing are `Edit(path)`, which also covers Write and NotebookEdit; a `Write(path)` rule matches nothing.",
+        "Before building a custom tool, check whether a built-in covers it; to use a different search backend than WebSearch, add an MCP server with a search tool."
+      ],
+      "traps": [
+        "Using Glob to find where a function is called (that is a content search: Grep).",
+        "Retrying the same Edit after \"found N matches\"; the fix is more context or `replace_all`.",
+        "Using Write to \"append\" a line and wiping the rest of the file.",
+        "Assuming WebSearch results contain page text good enough to quote; fetch the page.",
+        "Exporting an env var in one Bash call and expecting the next call to see it.",
+        "Writing a deny rule as `Write(/infra/**)`; path rules for file writes use `Edit(...)`."
+      ],
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"permissions\": {\n    \"allow\": [\"Read\", \"Grep\", \"Glob\", \"Bash(npm test *)\", \"WebFetch(domain:docs.acme.dev)\"],\n    \"deny\": [\"Edit(/infra/**)\", \"WebSearch\"]\n  }\n}"
+      },
+      "docs": [
+        {
+          "title": "Tools reference",
+          "url": "https://code.claude.com/docs/en/tools-reference"
+        },
+        {
+          "title": "Permissions",
+          "url": "https://code.claude.com/docs/en/permissions"
+        },
+        {
+          "title": "Subagents",
+          "url": "https://code.claude.com/docs/en/sub-agents"
+        }
+      ],
+      "drill": "In a repo you know, ask Claude Code to (1) find every file named `*.config.*` and (2) find every call to one function; note which search it uses for each. Make an Edit whose `old_string` appears three times and watch the failure, then fix it once with context and once with `replace_all`. Finally `export FOO=1` in one Bash call and `echo $FOO` in the next."
+    }
+  ],
+  "questions": [
+    {
+      "id": "D2-1-001",
+      "subskill": "D2.1",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "In the multi-agent research system, the search subagent has two tools: `search` (\"Searches documents.\") backed by the firm's internal index of peer-reviewed papers, updated quarterly, and `web_search` (\"Searches the web.\"). For questions about events from the last few weeks, the subagent keeps querying `search`, finds nothing recent, and the final report says the topic has no coverage. Which change BEST addresses the root cause?",
+      "select": 1,
+      "options": [
+        "Rename the internal tool `papers_search` and rewrite both descriptions to say what each one covers and when to prefer it",
+        "Add a rule to the coordinator's system prompt listing phrases such as \"this month\", \"latest\" or \"recent\" that should make every subagent use web search instead of the internal index",
+        "Merge both into a single `search` tool that sends every query to both backends and returns the union of the raw results",
+        "Force `tool_choice` to `web_search` whenever the user's question mentions the current year"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. The descriptions are the main signal Claude uses to choose between tools; stating coverage, recency and when to use each removes the ambiguity at the source.",
+        "A keyword list in another agent's prompt is brittle and sits at the wrong layer; the subagent still sees two indistinguishable tools.",
+        "Sending every query to both backends doubles result volume and mixes sources with different trust levels, which hurts provenance, without making the choice clearer.",
+        "Forcing a tool on a keyword heuristic removes judgment entirely and misfires on questions that mention a year but need peer-reviewed sources."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "D2-1-002",
+      "subskill": "D2.1",
+      "scenario": "S6",
+      "difficulty": 2,
+      "stem": "In the invoice extraction pipeline, the extractor agent first calls `list_vendors` (which pages through all 4,000 vendors) to find a match, then calls `lookup_vendor(vendor_id)`, which returns the full vendor record of about 180 fields. Each invoice now uses tens of thousands of tokens and matching accuracy falls on long invoices. The extractor only needs the canonical vendor ID, legal name, tax ID and default currency to fill the schema. Which THREE changes are MOST appropriate? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Move the pipeline to a model tier with a larger context window so that the full 180-field vendor records fit without trimming",
+        "Return only the fields the extraction step uses (vendor ID, legal name, tax ID, default currency) by default",
+        "Replace `list_vendors` with a search tool that takes a name or tax ID and returns the top few candidate vendors",
+        "Remove the vendor ID from results, because opaque IDs are where the model makes mistakes",
+        "Add a `response_format` option so the agent can request the detailed record only when it actually needs more fields",
+        "Base64-encode each vendor record to reduce the number of tokens it occupies"
+      ],
+      "answer": [
+        1,
+        2,
+        4
+      ],
+      "explanations": [
+        "A bigger window treats the symptom; the irrelevant fields still dilute attention and cost tokens on every call.",
+        "Correct. Returning only high-signal fields keeps context small and focused on what the next step needs.",
+        "Correct. Search beats list: the agent should never page through every vendor to find one match.",
+        "The canonical vendor ID is required to write the extracted record; removing it breaks the downstream step. The fix for confusing IDs is to pair them with readable names, not to drop them.",
+        "Correct. A concise/detailed switch keeps the default lean while still allowing the full record when a case needs it.",
+        "Base64 does not reduce tokens for the model and makes the content unreadable to it."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "D2-1-003",
+      "subskill": "D2.1",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "In the CI pipeline, `claude -p` reviews pull requests and posts findings through a custom tool `post_review_comment(path, line, body)`. About a fifth of the calls are rejected by the code host because `path` arrives as `./src/app.ts` or an absolute runner path, and `line` sometimes refers to the old version of the file. The tool schema currently declares both parameters with type only. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Add a paragraph to the repository's CLAUDE.md explaining the code host's comment API so Claude formats calls correctly",
+        "Post-process failed calls on the server by fuzzy-matching each comment body against the diff hunks to work out the intended file and line, then re-post the comment there automatically",
+        "Describe each parameter precisely (`path` repo-relative like `src/app.ts`; `line` on the new side of the diff) and reject other values with an error stating the expected format",
+        "Switch the review job to a more capable model tier, which is better at inferring API conventions"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "CLAUDE.md can help, but the tool's own parameter descriptions travel with the tool and are what Claude reads when filling the call; this is the wrong layer.",
+        "Guessing on the server hides the input problem and will sometimes attach comments to the wrong line.",
+        "Correct. Precise parameter descriptions with an example fix most calls up front, and an actionable validation error lets Claude correct the rest itself.",
+        "A bigger model cannot infer a convention the interface never states; the schema is underspecified."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools"
+    },
+    {
+      "id": "D2-2-001",
+      "subskill": "D2.2",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "Every MCP tool behind the support-resolution agent returns `{\"error\": \"Request failed\"}` with `isError: true` on any failure. Logs show two patterns: the agent retries `issue_refund` several times when the refund was blocked by policy, and it escalates to a human whenever `get_order` times out, even though the same call usually succeeds seconds later. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Add an `error_category` (transient, validation, business_rule, permission) and a `retryable` flag to every error result",
+        "Add a system-prompt rule: \"Always retry a failed tool up to three times before escalating.\"",
+        "Make each error message state the next step, e.g. \"retry in a few seconds\", \"fix field X\" or \"do not retry; escalate\"",
+        "Return HTTP 500 for every failure so that the MCP client's transport layer retries the request automatically before the model ever sees it",
+        "Move the agent to a larger model tier so that it can infer the real cause of each failure from the surrounding conversation"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Category and retryability tell the agent whether another attempt can possibly help, which separates the timeout case from the policy case.",
+        "A blanket retry rule makes the policy case worse (three identical refused refunds) and still treats all failures the same.",
+        "Correct. Actionable messages give the agent the next step for each case instead of leaving it to guess.",
+        "Transport-level errors hide the tool-level detail from the model and would retry the policy refusal too.",
+        "The model cannot infer what the tool never reported; the error result is uninformative regardless of model size."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D2-2-002",
+      "subskill": "D2.2",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "The support agent's `issue_refund` MCP tool enforces a $500 per-refund limit for automated refunds; larger refunds need a human approver. When a customer asks for $640, the tool returns `isError: true` with the text \"Refund failed.\" The agent retries the same call twice, then tells the customer there is a system problem. What should the tool return instead?",
+      "select": 1,
+      "options": [
+        "A successful result `{\"refunded\": false}` so the agent's loop continues without an error branch",
+        "Automatically refund the $500 maximum, report success, and let the customer contact support again if they want the remaining $140 refunded",
+        "`isError: true`, category `business_rule`, `retryable: false`, stating the $500 limit and that the agent should escalate to a human approver",
+        "A JSON-RPC `-32602 Invalid params` error, since the amount is outside the accepted range"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A bare `refunded: false` success carries no reason, so the agent still cannot explain the outcome or choose the escalation path.",
+        "Silently changing the business outcome without the customer's or a human's agreement is a policy violation dressed up as success.",
+        "Correct. A business-rule error marked non-retryable, with the limit and the escalation path, stops the retries and tells the agent exactly what to do.",
+        "Protocol errors are for malformed requests and unknown tools; clients typically surface them generically, which is what caused the blind retries."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D2-2-003",
+      "subskill": "D2.2",
+      "scenario": "S1",
+      "difficulty": 3,
+      "stem": "After a credential rotation, the service account used by the support agent's `update_shipping_address` tool lost its write scope, so every call now gets a 403 from the address service. The fix will take the platform team a day. Meanwhile the team wants the agent to handle these conversations correctly. Which tool result is BEST?",
+      "select": 1,
+      "options": [
+        "`isError: true`, category `transient`, `retryable: true`, message \"Address service unavailable, try again later\"",
+        "`isError: true` with the full 403 response body, the request headers and the token's current scopes, so the agent has every detail it might need",
+        "Retry the call inside the tool using an administrator credential, and return success if that works",
+        "`isError: true`, category `permission`, `retryable: false`, saying the agent cannot change addresses and should hand off to a human"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Calling it transient invites repeated retries that cannot succeed today and tells the customer to wait for nothing.",
+        "Headers and token details waste context, may leak secrets into the transcript, and still do not tell the agent what to do.",
+        "Silently escalating privilege bypasses the access control that failed; it is a security problem, not error handling.",
+        "Correct. A permission error marked non-retryable, with a concrete handoff path, lets the agent resolve the conversation correctly while the scope is fixed."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "D2-2-004",
+      "subskill": "D2.2",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "In the research system, a subagent's `fetch_journal_articles` tool hits a publisher API that returned 401 for most of last week after a licence lapsed. The tool caught the 401 and returned an empty article list as a normal result. The synthesis step then wrote that \"no peer-reviewed evidence was found\" in that journal. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Tell the coordinator in its system prompt to treat any empty result from that journal as suspicious and to mention possible gaps in the report",
+        "Drop the journal from the subagent's sources until the licence is renewed",
+        "Retry the 401 inside the tool until the publisher starts accepting the credentials again",
+        "On auth failures return `isError: true` with an access-failure message; return an empty list only when a search truly found nothing"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A prompt heuristic cannot tell a real empty search from a failed one; the tool must report the difference.",
+        "Removing the source hides the coverage gap instead of reporting it, and the report still overstates what was checked.",
+        "A 401 from an expired licence will not fix itself on retry; this burns time and budget.",
+        "Correct. \"Could not check\" and \"checked, found nothing\" must be distinguishable so the coordinator can report the gap or try another source."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D2-2-005",
+      "subskill": "D2.2",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "During a parallel fan-out, the research system's search subagents often get HTTP 429 responses with a `Retry-After` of 2 to 5 seconds from the search provider's MCP server. Today each 429 becomes an `isError` result, and subagents spend whole turns re-issuing the call, sometimes giving up early. How should the architect handle these errors?",
+      "select": 1,
+      "options": [
+        "Retry the 429 inside the tool a bounded number of times, honouring `Retry-After`; if it still fails, return a transient, retryable `isError` result",
+        "Keep returning `isError: true` on every 429 so the model decides on each retry with full information",
+        "Retry inside the tool until the call eventually succeeds, however long that takes, so that subagents never have to see or reason about a rate-limit error at all",
+        "Add an instruction to every subagent prompt to wait 30 seconds after any tool error before trying again"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Cheap, deterministic recovery belongs in code; the model sees the error only when retries are exhausted, and then with enough structure to choose its next move.",
+        "Each model-driven retry costs a full turn and tokens for a decision that code can make better.",
+        "Unbounded retries can hang a subagent indefinitely and blow the run's time and cost budget.",
+        "A model cannot actually wait between turns because of a prompt instruction; this is a prompt fix for a control problem."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "D2-2-006",
+      "subskill": "D2.2",
+      "scenario": "S3",
+      "difficulty": 1,
+      "stem": "A research subagent calls `search_papers` with `published_after: \"last year\"`. The backend rejects anything that is not an ISO date, and the tool returns `isError: true` with the text \"Error\". The subagent then drops the date filter and returns papers from the 1990s. What is the BEST change to the tool's error result?",
+      "select": 1,
+      "options": [
+        "Ignore the invalid `published_after` value and return the unfiltered results as a normal success, so the subagent still gets papers to work with",
+        "Name the field, the accepted format and the value received, e.g. \"`published_after` must be YYYY-MM-DD; got 'last year'. Example: 2025-01-01\"",
+        "Substitute today's date minus 365 days and continue without telling the agent",
+        "Return a JSON-RPC protocol error so that the MCP client rejects the malformed call before it ever reaches the search backend"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Silently ignoring the filter produces wrong results that look valid.",
+        "Correct. An actionable validation message lets the subagent fix its input and call again, which is exactly the recovery you want.",
+        "Guessing the meaning on the agent's behalf may be wrong and hides the problem; the agent should supply the date it means.",
+        "A protocol error is typically shown generically and gives the model less to work with than a clear error result."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "D2-2-007",
+      "subskill": "D2.2",
+      "scenario": "S6",
+      "difficulty": 2,
+      "stem": "In the extraction pipeline, `lookup_vendor` returns `{\"vendor\": null}` both when no vendor matches and when the vendor database is unreachable. Pipeline code sends every invoice with a null vendor to the new-vendor onboarding queue. During a 40-minute database outage, 900 invoices from existing vendors were misrouted. Which TWO changes BEST prevent this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Return a transient, retryable `isError` result when the database is unreachable, and keep a successful `{\"vendor\": null}` for a real no-match",
+        "Add a prompt instruction telling the extractor to look more carefully and double-check its reasoning whenever the vendor lookup comes back null",
+        "Return `isError: true` for both the no-match and the unreachable case, so that no invoice is ever routed to onboarding automatically again",
+        "During outages, serve the vendor list from a cache without marking the data as possibly stale, so the pipeline keeps running at full speed",
+        "Have pipeline code park invoices whose lookup failed with a retryable error for re-processing, instead of routing them as no-match"
+      ],
+      "answer": [
+        0,
+        4
+      ],
+      "explanations": [
+        "Correct. Separating \"could not check\" from \"checked, no match\" is the core fix.",
+        "The extractor cannot distinguish the two cases from identical output, so double-checking adds cost without information.",
+        "A real no-match is a valid answer; treating it as an error stalls legitimate onboarding and conflates the two cases again.",
+        "Unflagged stale data swaps one silent failure for another.",
+        "Correct. Once errors are classified, deterministic routing in code can hold retryable failures rather than misrouting them."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D2-2-008",
+      "subskill": "D2.2",
+      "scenario": "S6",
+      "difficulty": 1,
+      "stem": "In the contract extraction pipeline, the `validate_iban` MCP tool returns the full 40-line Java stack trace as its error text whenever validation fails. Reviewers notice internal hostnames copied into extraction notes, and error turns use far more tokens than successful ones. What should the tool do instead?",
+      "select": 1,
+      "options": [
+        "Return a normal success with an empty result whenever validation fails, so no error text reaches the model",
+        "Raise `MAX_MCP_OUTPUT_TOKENS` so the full trace always fits",
+        "Keep returning the trace, but add a rule to the extractor's prompt that internal hostnames and stack frames must never be copied into extraction notes",
+        "Log the trace server-side and return `isError: true` with a short cause, e.g. \"IBAN checksum invalid for `payee_iban`\""
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "An empty success hides the failure, so invalid IBANs would flow through as if valid.",
+        "More room for noise is the opposite of the fix and leaves the leak in place.",
+        "A prompt rule does not remove the sensitive data from context and leaves the token waste.",
+        "Correct. The model needs the actionable cause; diagnostic detail belongs in server logs."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "D2-2-009",
+      "subskill": "D2.2",
+      "scenario": "S4",
+      "difficulty": 3,
+      "stem": "The developer-productivity platform runs 12 internal MCP servers built by different teams, each reporting failures differently. The platform team is writing one error contract that every server must follow so agents and hooks can react consistently. Which THREE elements should the contract require? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "The complete upstream response, including status line and headers, in every error so that agents always have maximum context",
+        "Tool execution failures reported in the tool result with `isError: true`",
+        "JSON-RPC error codes for business-rule failures so every client handles them the same way",
+        "A `retryable` boolean, plus a suggested wait when it is known",
+        "One fixed message, \"Operation failed\", across all servers so no internal details leak",
+        "An `error_category` drawn from a small fixed set such as transient, validation, business_rule and permission"
+      ],
+      "answer": [
+        1,
+        3,
+        5
+      ],
+      "explanations": [
+        "Raw upstream responses waste context and can leak credentials or internal details.",
+        "Correct. In-band `isError` results reach the model so it can adapt; this is the MCP mechanism for execution failures.",
+        "Protocol errors are for unknown tools and malformed requests; business-rule failures belong in the tool result where the model can read them.",
+        "Correct. Retryability is what lets an agent or hook decide between retrying and changing course.",
+        "A uniform generic message removes exactly the information the agent needs to recover.",
+        "Correct. A shared, small category set lets prompts, hooks and coordinators handle every server's errors the same way."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D2-2-010",
+      "subskill": "D2.2",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "A CI job runs `claude -p` to check database migrations through an MCP tool `check_migration`, then gates the merge on Claude's verdict. The tool's handler catches connection failures and returns \"No issues found.\" During a database maintenance window, a destructive migration passed review and shipped. What is the MOST important fix?",
+      "select": 1,
+      "options": [
+        "Lower `--max-turns` so the job finishes before connection problems can affect it",
+        "Add \"be extra careful with destructive migrations\" to the CI prompt",
+        "Return `isError: true` saying the check could not run, and gate the merge on a structured field that records whether the check ran",
+        "Run the review job twice in parallel against the same database and allow the merge only when both runs independently report that the migration has no issues"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Turn limits do not change what the tool reports; the false \"no issues\" would still be returned.",
+        "The model was told there were no issues; a more careful prompt cannot detect a failure the tool disguised as success.",
+        "Correct. The tool must never report success on failure, and the pipeline should gate on an explicit \"check ran\" signal so an unverifiable run fails.",
+        "Two runs against the same unreachable database will both receive the same false success."
+      ],
+      "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    {
+      "id": "D2-3-001",
+      "subskill": "D2.3",
+      "scenario": "S1",
+      "difficulty": 1,
+      "stem": "The support-resolution agent was given every tool the company's MCP servers expose: 48 tools across billing, shipping, CRM administration, marketing campaigns and internal analytics. It regularly picks the wrong tool (for example a marketing contact lookup instead of the CRM customer lookup), and tool definitions consume a large share of each request. What is the BEST change?",
+      "select": 1,
+      "options": [
+        "Move the agent to the largest available model tier, which is better at choosing correctly among many similar-looking tools from different servers",
+        "Scope the agent to the tools support resolution needs, split by role into specialists with a few tools each, and drop admin and marketing tools",
+        "Add a long section to the system prompt that explains, tool by tool, when each of the 48 tools should and should not be used",
+        "Set `tool_choice` to `any` so the agent always commits to a tool rather than hesitating between them"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Selection accuracy degrades with large tool sets regardless of tier, and the definitions still cost context on every request.",
+        "Correct. A scoped tool set per role improves selection, cuts context and removes tools the agent should never use.",
+        "More prompt text adds context and leaves 48 overlapping tools in place; it treats the symptom.",
+        "Forcing a call does nothing to help the agent pick the right tool, and current models reject forced `tool_choice` with a 400."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+    },
+    {
+      "id": "D2-3-002",
+      "subskill": "D2.3",
+      "scenario": "S1",
+      "difficulty": 3,
+      "stem": "The support agent is built with the Agent SDK. A security review finds that the refund subagent has requested `mcp__crm__delete_contact` during testing, although refunds only need two billing tools. What is the MOST likely cause, and the fix?",
+      "code": {
+        "lang": "python",
+        "src": "options = ClaudeAgentOptions(\n    mcp_servers={\"billing\": billing_srv, \"crm\": crm_srv},\n    allowed_tools=[\"mcp__billing__get_order\", \"mcp__billing__issue_refund\"],\n    agents={\n        \"refund-specialist\": AgentDefinition(\n            description=\"Handles refund eligibility and refunds.\",\n            prompt=\"You process refunds within policy...\",\n        ),\n    },\n)"
+      },
+      "select": 1,
+      "options": [
+        "`allowed_tools` is applied in order, so put the billing tools first in the list to give them priority",
+        "Add a sentence to the subagent's prompt forbidding any CRM tool and explaining that refunds never require changes to customer contact records",
+        "No `tools` field means the subagent inherits every tool, and `allowed_tools` only pre-approves calls; set `tools` to the two billing tools",
+        "Switch to `permission_mode=\"bypassPermissions\"` so that only the tools in `allowed_tools` can execute"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Order in the allow list has no effect on which tools exist; the CRM tools are still offered to the subagent.",
+        "A prompt rule is a request, not a restriction; the tool remains available.",
+        "Correct. An omitted `tools` field means the subagent inherits the parent's tools, and allow rules auto-approve listed tools without removing others. Listing `tools` scopes the subagent.",
+        "`bypassPermissions` approves calls to unlisted tools too; `allowed_tools` does not constrain it, so this widens access."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/permissions"
+    },
+    {
+      "id": "D2-3-003",
+      "subskill": "D2.3",
+      "scenario": "S1",
+      "difficulty": 3,
+      "stem": "After the support agent has created an escalation ticket, the harness makes one final request to produce the customer-facing message. In a few percent of cases Claude calls `lookup_order` again on that request, delaying the reply. The team wants no tool calls on this request but wants to keep the `tools` array byte-identical so the cached prefix is reused. Which configuration BEST fits?",
+      "select": 1,
+      "options": [
+        "Omit the `tools` array on the final request so tools cannot be called",
+        "`tool_choice: {\"type\": \"auto\", \"disable_parallel_tool_use\": true}` on the final request",
+        "Set a very low `max_tokens` on the final request so there is no room for a tool call",
+        "`tool_choice: {\"type\": \"none\"}` on the final request, with the same `tools` array as earlier turns"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Removing the tools changes the request prefix, which loses the cache the team wants to keep.",
+        "This still allows one tool call per response; it limits parallelism, not whether a tool is called.",
+        "A tight token limit risks truncating the customer message and does not reliably prevent a short tool call.",
+        "Correct. `none` prevents tool use while the definitions stay in the request, and changing `tool_choice` does not invalidate the cached tools and system prefix."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools"
+    },
+    {
+      "id": "D2-3-004",
+      "subskill": "D2.3",
+      "scenario": "S3",
+      "difficulty": 1,
+      "stem": "In the multi-agent research system, the coordinator was given `web_search`, `web_fetch` and the tool for delegating to subagents. Transcripts show it often runs searches and fetches pages itself instead of delegating, so its context fills with raw pages and synthesis quality drops on long questions. What is the BEST change?",
+      "select": 1,
+      "options": [
+        "Tell the coordinator in its prompt to delegate all searching and to avoid fetching pages itself",
+        "Raise the coordinator's context budget so the raw pages it fetches and its working synthesis both fit comfortably in one window",
+        "Remove search and fetch from the coordinator and give them only to the search subagents",
+        "Force `tool_choice` to the delegation tool on every coordinator turn"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A prompt instruction may help, but the tools remain available and the coordinator will still reach for them.",
+        "More context postpones the problem and keeps irrelevant raw content in the coordinator's window.",
+        "Correct. Scoping tools by role keeps the coordinator on decomposition and synthesis and keeps raw content in subagent contexts.",
+        "Forcing delegation every turn stops the coordinator from ever writing its synthesis, and current models reject forced `tool_choice` modes."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D2-3-005",
+      "subskill": "D2.3",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "The research system's synthesis subagent was given web search and fetch \"just in case\" it finds a gap. Reviewers find that final reports now cite sources the analysis subagents never vetted, and some claims have no traceable citation. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Keep the tools but add a prompt rule that the synthesis subagent may only search when a claim is unsupported",
+        "Remove search and fetch from the synthesis subagent; it works from the vetted findings it is given and reports gaps back to the coordinator",
+        "Add a second synthesis subagent that independently re-checks every citation the first one added from its own searches before the report is published",
+        "Move synthesis into the coordinator so a single agent both searches and writes the report"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The permission remains and so does the behaviour; a prompt rule does not scope the tool set.",
+        "Correct. Least-privilege tool sets keep each stage in its role, and returning gaps keeps the coordinator in charge of further research.",
+        "Adding a checker treats the symptom and adds cost while unvetted sources keep entering.",
+        "Merging roles gives one agent even more tools and context, which is the opposite of scoping."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "D2-3-006",
+      "subskill": "D2.3",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "The research system's own harness calls the Messages API with tools from seven MCP-backed services, 160 tools in total. Tool definitions alone take about 50k tokens per request, and subagents often choose a near-duplicate tool from the wrong service. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Add the tool search tool and mark most tools `defer_loading: true`, keeping the few most-used tools loaded",
+        "Mark every tool, including the tool search tool, `defer_loading: true` so nothing loads up front",
+        "Give each subagent only the services and tools its role needs instead of the full catalog",
+        "Raise `max_tokens` so subagents have more room to reason about which tool to choose",
+        "Move all 160 tool descriptions into the system prompt and keep only short tool names and schemas in the `tools` array"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Tool search loads only the definitions Claude needs, which cuts context and keeps selection accurate with large catalogs.",
+        "At least one tool, normally the search tool itself, must stay non-deferred; deferring everything is rejected with a 400.",
+        "Correct. Role-scoped tool sets shrink each agent's choice to what it actually uses.",
+        "Output budget does not change how many definitions crowd the context or how similar they are.",
+        "The descriptions would still occupy the context, and separating them from the tool definitions makes selection harder."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+    },
+    {
+      "id": "D2-3-007",
+      "subskill": "D2.3",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "A search subagent in the research system needs to run about a dozen independent queries per sub-question. Transcripts show exactly one search per turn and 12 sequential turns. Its request configuration was copied from another service:",
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"tool_choice\": {\"type\": \"auto\", \"disable_parallel_tool_use\": true},\n  \"tools\": [{\"name\": \"web_search\", \"...\": \"...\"}, {\"name\": \"fetch_page\", \"...\": \"...\"}]\n}"
+      },
+      "select": 1,
+      "options": [
+        "Remove `disable_parallel_tool_use` so Claude can request several independent searches in a single turn",
+        "Split the work into twelve subagents, one per query, so that the coordinator can run all of the queries concurrently",
+        "Lower `max_tokens` so each turn finishes faster",
+        "Change `tool_choice` to `{\"type\": \"any\"}` so the subagent must call a tool on every turn"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `disable_parallel_tool_use: true` caps Claude at one tool call per response; removing it lets independent searches go out together.",
+        "Twelve subagents add coordination overhead to work a single agent can parallelise with tool calls.",
+        "Shorter turns do not reduce the number of sequential turns.",
+        "Forcing a call does not let the agent issue more than one per turn while parallel use is disabled."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools"
+    },
+    {
+      "id": "D2-3-008",
+      "subskill": "D2.3",
+      "scenario": "S6",
+      "difficulty": 3,
+      "stem": "The extraction pipeline guarantees JSON by forcing a tool: `tool_choice: {\"type\": \"tool\", \"name\": \"record_invoice\"}` with `strict: true`. After moving to a newer model version, every request returns a 400 saying `tool` and `any` tool_choice types are not supported for this model. The tool exists only to obtain schema-valid JSON. What is the BEST change?",
+      "select": 1,
+      "options": [
+        "Switch to `tool_choice: {\"type\": \"any\"}`, which still forces a call but lets the model pick the tool",
+        "Use structured outputs (`output_config.format`) with the invoice JSON schema instead of a forced tool call",
+        "Drop the tools, ask for JSON in the prompt, and extract it from the reply text with a regular expression",
+        "Pin the pipeline to the previous model version indefinitely so the forced tool call keeps working without any code changes"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`any` is also a forced mode and is rejected by the same models.",
+        "Correct. When a forced call only existed to get JSON, structured outputs give schema-constrained output directly and work on models that reject forced `tool_choice`.",
+        "Prompt-only JSON loses the schema guarantee and regex parsing is fragile.",
+        "Pinning is a stopgap that blocks future upgrades; the design should not depend on a model-specific feature it does not need."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+      "id": "D2-3-009",
+      "subskill": "D2.3",
+      "scenario": "S6",
+      "difficulty": 2,
+      "stem": "The document pipeline has three extraction tools: `record_invoice`, `record_contract` and `record_form`. Documents arrive unlabelled, and each response must call exactly one of the three. The pipeline runs on a current model that rejects forced `tool_choice` modes. Which configuration BEST meets the requirement?",
+      "select": 1,
+      "options": [
+        "`tool_choice: {\"type\": \"any\", \"disable_parallel_tool_use\": true}`, which guarantees exactly one call to one of the three tools",
+        "`tool_choice: {\"type\": \"auto\", \"disable_parallel_tool_use\": true}`, `strict: true` on the tools, a prompt requiring one record call, and code that retries if no record tool was called",
+        "`tool_choice: {\"type\": \"none\"}`, with the extracted fields returned as JSON text that the pipeline parses",
+        "`tool_choice: {\"type\": \"auto\"}` alone, trusting the prompt to produce one call per document"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`any` is a forced mode; current models reject it with a 400, so this request fails outright.",
+        "Correct. `auto` lets Claude pick the right extractor, disabling parallel use caps it at one call, `strict` keeps arguments schema-valid, and the code check covers the turns where no call was made.",
+        "`none` prevents tool calls and gives up the schema guarantees the tools provide.",
+        "Without a verification step nothing catches a response with no call, and without `disable_parallel_tool_use` Claude may call more than one tool."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools"
+    },
+    {
+      "id": "D2-3-010",
+      "subskill": "D2.3",
+      "scenario": "S6",
+      "difficulty": 1,
+      "stem": "To \"let it finish the job\", the extraction agent was also given `update_erp` and `email_vendor` tools. Occasionally it posts a record to the ERP before the pipeline's validation and human-review steps have run, and a few vendors received emails about invoices that were later rejected. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Remove `update_erp` and `email_vendor` from the extractor; pipeline code posts and notifies only after validation and review pass",
+        "Add a prompt rule that the agent must complete every validation step and wait for human review before it calls `update_erp` or `email_vendor`",
+        "Add a hook that logs every `update_erp` and `email_vendor` call so the audit trail is complete",
+        "Lower the model's temperature so it follows the intended order more consistently"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. An extraction step should only extract; side-effecting actions belong in deterministic code after the checks.",
+        "A prompt rule is probabilistic; the premature posts are exactly the failures it would not prevent.",
+        "Logging records the problem but does not stop it.",
+        "Sampling settings do not enforce ordering or remove the capability."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "D2-3-011",
+      "subskill": "D2.3",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "A CI review job must never modify the checkout. The shared wrapper script that launches every CI job adds `--permission-mode acceptEdits`, which the auto-fix jobs need. In one review run, Claude edited a file while \"fixing\" a typo it found. The review job is invoked as:",
+      "code": {
+        "lang": "bash",
+        "src": "claude -p \"Review the diff in pr.diff. Do not change any files.\" \\\n  --allowedTools \"Read,Grep,Glob\" \\\n  --permission-mode acceptEdits \\\n  --output-format json"
+      },
+      "select": 1,
+      "options": [
+        "Repeat \"Do not change any files\" at both the start and the end of the prompt, and add it to CLAUDE.md, so the instruction carries more weight",
+        "Add `--max-turns 1` so Claude has no turns left in which to make edits",
+        "Switch to `--permission-mode bypassPermissions` so that only the tools named in `--allowedTools` are allowed to run during the review",
+        "`--allowedTools` only pre-approves; restrict availability with `--tools \"Read,Grep,Glob\"` or bare-name `--disallowedTools \"Edit,Write,Bash\"`"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Prompt emphasis is still a request; the edit tools stay available and auto-approved by `acceptEdits`.",
+        "One turn breaks the review itself and does not remove the capability.",
+        "`bypassPermissions` approves unlisted tools as well; it would make edits easier, not impossible.",
+        "Correct. Allow rules auto-approve but do not remove other tools. `--tools` restricts the built-in tool set, and bare-name deny rules remove tools from context."
+      ],
+      "ref": "https://code.claude.com/docs/en/cli-reference"
+    },
+    {
+      "id": "D2-3-012",
+      "subskill": "D2.3",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "A CI auto-fix job should have exactly these tools: the built-ins Read, Edit and Bash, plus the tools of one MCP server, `tickets`. The repository's committed `.mcp.json` declares five other servers that developers use. Which TWO settings together achieve this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "`--allowedTools \"Read,Edit,Bash,mcp__tickets__*\"` on its own",
+        "`--tools \"Read,Edit,Bash\"` to restrict the built-in tool set",
+        "Rely on `--tools \"Read,Edit,Bash\"` alone, since it also removes tools from every MCP server not listed",
+        "`--mcp-config ci-mcp.json --strict-mcp-config`, where `ci-mcp.json` declares only the `tickets` server",
+        "A CLAUDE.md section listing which tools the CI job is allowed to use"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "Allow rules pre-approve listed tools; every other built-in and every MCP server's tools remain available.",
+        "Correct. `--tools` restricts which built-in tools exist in the session.",
+        "`--tools` does not affect MCP tools; the five other servers would still load.",
+        "Correct. `--strict-mcp-config` ignores all other MCP configuration, so only the servers in the CI file load.",
+        "CLAUDE.md is context, not enforcement; it does not change the tool set."
+      ],
+      "ref": "https://code.claude.com/docs/en/cli-reference"
+    },
+    {
+      "id": "D2-3-013",
+      "subskill": "D2.3",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "The team adds a project subagent so Claude Code can run the test suite during reviews without ever modifying files. Its frontmatter is shown below. Which tools does the subagent get?",
+      "code": {
+        "lang": "markdown",
+        "src": "---\nname: test-reviewer\ndescription: Runs the test suite and reviews failures. Use after code changes.\ntools: Read, Edit, Write, Bash\ndisallowedTools: Edit, Write\n---\nRun the tests, read failing files, and report root causes. Never modify files."
+      },
+      "select": 1,
+      "options": [
+        "Read and Bash",
+        "Read, Edit, Write and Bash, because an explicit `tools` list takes precedence over `disallowedTools`",
+        "Every tool the main session has, except Edit and Write",
+        "None; the subagent fails to load because the two fields conflict"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. The subagent gets the `tools` list minus anything in `disallowedTools`.",
+        "When both fields are set, `disallowedTools` wins; a tool listed in both is removed.",
+        "Inheriting everything except the denied tools is the behaviour when only `disallowedTools` is set.",
+        "Setting both fields is valid; Claude Code resolves them rather than failing."
+      ],
+      "ref": "https://code.claude.com/docs/en/sub-agents"
+    },
+    {
+      "id": "D2-4-001",
+      "subskill": "D2.4",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "The team connected an internal `docs` MCP server to Claude Code through the project `.mcp.json`. The server exposes API specification files as resources and a `release_notes` prompt that takes a version argument. A developer asks how these show up in a Claude Code session. Which TWO statements are correct? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "A resource can be attached to a prompt by typing `@docs:` and choosing it, e.g. `@docs:file://api/orders.yaml`",
+        "Resources are model-controlled: Claude decides on its own to call them, exactly like tools",
+        "The prompt runs as a slash command, e.g. `/mcp__docs__release_notes 2.3`",
+        "The `release_notes` prompt becomes a tool that Claude may call autonomously whenever it thinks release notes would help",
+        "Resources only become usable after their content has been copied into the project's CLAUDE.md file"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. MCP resources appear in the `@` autocomplete and are referenced as `@server:protocol://path`.",
+        "Resources are application-controlled context that the user or client attaches; tools are the model-controlled primitive.",
+        "Correct. MCP prompts are user-controlled templates and appear as slash commands in the `/mcp__server__prompt` form.",
+        "Prompts are user-invoked templates, not tools; Claude does not call them on its own.",
+        "Resources are read from the server on demand; copying them into CLAUDE.md would load them every session for no reason."
+      ],
+      "ref": "https://code.claude.com/docs/en/mcp"
+    },
+    {
+      "id": "D2-4-002",
+      "subskill": "D2.4",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "The team wants Claude Code to read GitHub issues and pull-request review threads while it implements features. A developer proposes writing a custom stdio MCP server that wraps the dozen GitHub REST endpoints the team uses. What should the tech lead recommend?",
+      "select": 1,
+      "options": [
+        "Build the custom server as proposed, since a server tailored to the team's dozen endpoints will be smaller and easier to reason about",
+        "Add a maintained, existing GitHub MCP server to the project `.mcp.json`, with the token supplied through `${GITHUB_TOKEN}`",
+        "Paste the GitHub REST API reference into CLAUDE.md so Claude can construct `curl` calls through Bash when it needs issue data",
+        "Have each developer run `claude mcp add` at local scope with their own token pasted into the command"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A custom wrapper duplicates a maintained integration and becomes the team's code to secure and keep current.",
+        "Correct. Adopting an existing server for a common system is the default; project scope shares the configuration and env-var expansion keeps the token out of git.",
+        "A large API reference in CLAUDE.md costs context every session and replaces a typed integration with ad hoc shell calls.",
+        "Local scope works for one person but is not shared, so every developer has to configure it by hand and setups drift."
+      ],
+      "ref": "https://code.claude.com/docs/en/mcp"
+    },
+    {
+      "id": "D2-4-003",
+      "subskill": "D2.4",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "The repository's committed `.mcp.json` declares five MCP servers developers use locally, including two stdio servers that need a local database. In CI, `claude -p` jobs are slow to start and log connection failures for those servers. The CI jobs only need the `tickets` server. What is the BEST configuration?",
+      "select": 1,
+      "options": [
+        "Run with `--mcp-config ci-mcp.json --strict-mcp-config`, where `ci-mcp.json` declares only `tickets`",
+        "Pass `--tools \"Read,Edit,Bash\"`, which stops MCP servers that are not needed from loading",
+        "Add a CI step that deletes `.mcp.json` from the checkout before Claude Code starts",
+        "Pass `--disallowedTools \"mcp__*\"` so that none of the developers' MCP servers are used by the job"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. `--strict-mcp-config` makes the job use only the servers in the given file, ignoring all other MCP configuration.",
+        "`--tools` restricts built-in tools only; it does not affect MCP servers.",
+        "Mutating the checkout is fragile and easy to break when the file moves or other configuration sources exist.",
+        "This removes every MCP tool, including the `tickets` tools the job needs."
+      ],
+      "ref": "https://code.claude.com/docs/en/cli-reference"
+    },
+    {
+      "id": "D2-4-004",
+      "subskill": "D2.4",
+      "scenario": "S3",
+      "difficulty": 3,
+      "stem": "The research system, built on the Agent SDK, connects a vendor's scholarly-database MCP server named `scholar`, which exposes a tool named `search`. The literature subagent is defined as below, yet in testing it never calls the database and reports that no search tool is available. What is the MOST likely cause?",
+      "code": {
+        "lang": "python",
+        "src": "options = ClaudeAgentOptions(\n    mcp_servers={\"scholar\": {\"type\": \"http\", \"url\": SCHOLAR_URL}},\n    agents={\n        \"literature\": AgentDefinition(\n            description=\"Finds and summarises peer-reviewed papers.\",\n            prompt=\"Search the scholarly database for...\",\n            tools=[\"search\", \"Read\"],\n        ),\n    },\n)"
+      },
+      "select": 1,
+      "options": [
+        "Subagents cannot use MCP tools; only the main agent can, so searches must be routed through the coordinator",
+        "The server must use the stdio transport for its tools to be visible to subagents",
+        "MCP tools are named `mcp__<server>__<tool>`, so the list must say `mcp__scholar__search`; the bare name `search` matches no tool",
+        "The tool also has to be added to `allowed_tools`, because a subagent's `tools` list only applies to built-in tools"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Subagents can be given MCP tools in their tool list; the coordinator does not have to proxy them.",
+        "Transport does not affect tool visibility; remote HTTP servers expose tools the same way.",
+        "Correct. MCP tools are exposed with the server-prefixed name, and that full name is what tool lists, permission rules and hook matchers use.",
+        "`allowed_tools` pre-approves calls; it does not make a tool exist, and `tools` lists accept MCP tool names."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/mcp"
+    },
+    {
+      "id": "D2-5-001",
+      "subskill": "D2.5",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "While changing a timeout in `client.ts`, Claude Code's Edit call fails because `old_string` (`timeout: 3000,`) appears three times in the file. Only the occurrence inside `retryPolicy()` should change. What should happen next?",
+      "select": 1,
+      "options": [
+        "Retry the Edit with `replace_all: true` so the call succeeds",
+        "Retry the Edit with an `old_string` that includes enough surrounding lines from `retryPolicy()` to match exactly once",
+        "Switch to a regular-expression `old_string` that targets the line inside `retryPolicy()`",
+        "Rewrite the whole file from memory with the Write tool, changing only the one value inside `retryPolicy()` and keeping the rest as it was"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "`replace_all` changes all three occurrences, two of which must stay as they are.",
+        "Correct. Edit needs `old_string` to match exactly once; adding surrounding context pins down the intended occurrence.",
+        "Edit does exact string replacement; it does not support regex or fuzzy matching.",
+        "Rewriting from memory risks silently changing other lines; Write is for new files or deliberate full rewrites, ideally after a fresh Read."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-002",
+      "subskill": "D2.5",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "A developer asked Claude Code to \"add an entry for the new export feature to CHANGELOG.md\". After the change, the file contains only the new entry; three years of history are gone. The transcript shows a single Write call containing the new entry. What explains this, and what should Claude have done?",
+      "select": 1,
+      "options": [
+        "Write was given a relative path, so it created a second CHANGELOG.md in another directory; Claude should have passed an absolute path",
+        "The file was not read first, so Write fell back to truncating it; Claude should have called Read immediately before the same Write call",
+        "Write needs `append: true` to keep existing content; Claude should have set that flag on the call",
+        "Write replaces the whole file with the given content; Claude should have used Edit anchored on a unique line such as the top heading"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "The stem shows the original file itself lost its history; this is not a path problem.",
+        "Reading first would not change what Write does with content that contains only the new entry; it still overwrites the file.",
+        "Write has no append mode; it creates or fully overwrites a file.",
+        "Correct. Write never appends or merges. A partial change belongs in Edit (or a Read followed by a Write of the complete new content)."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-003",
+      "subskill": "D2.5",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "In a Go service, a developer asks Claude Code to find every function that takes an empty-interface parameter. Claude's Grep call with pattern `interface{}` returns no matches, but the developer knows several committed, non-ignored files contain that text. What is the MOST likely reason?",
+      "select": 1,
+      "options": [
+        "Grep skips files with a `.go` extension unless a `type` filter is set explicitly",
+        "Grep only searches file names, so Claude should have used a Glob pattern that matches the text instead",
+        "The files are probably listed in `.gitignore`, which Grep respects, so the search skipped them without reporting it",
+        "Grep uses ripgrep regex syntax, where `{` and `}` are metacharacters; the pattern should be `interface\\{\\}`"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Grep searches all non-ignored files by default; `type` and `glob` are optional filters.",
+        "This reverses the tools: Grep searches contents and Glob matches paths.",
+        "Grep does skip gitignored files, but the stem says the files are committed and not ignored.",
+        "Correct. Grep is built on ripgrep, so regex metacharacters in the pattern must be escaped."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-004",
+      "subskill": "D2.5",
+      "scenario": "S2",
+      "difficulty": 2,
+      "stem": "Claude Code runs `export DATABASE_URL=postgres://localhost/test` in one Bash call and `npm run migrate` in the next. The migration fails because `DATABASE_URL` is not set. The team wants migrations to work reliably in every session. What should they do?",
+      "select": 1,
+      "options": [
+        "Add a CLAUDE.md rule telling Claude to run `export` once at the start of each session, since the Bash tool's shell keeps variables after the first export",
+        "Env vars don't persist between Bash calls: chain them in one command, or set them session-wide via `CLAUDE_ENV_FILE` or a SessionStart hook",
+        "Run `cd` into the project directory first, because the working directory resets between calls and that clears the environment",
+        "Switch the migration to run through the Write tool, which shares the environment of the main session"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Each Bash command runs in a separate process; an earlier `export` is gone by the next call.",
+        "Correct. Variables must be set within the same command, or provided session-wide through `CLAUDE_ENV_FILE` or a SessionStart hook.",
+        "The working directory does carry over inside the project; it is environment variables that do not persist.",
+        "Write creates or overwrites files; it does not run commands or carry an environment."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-005",
+      "subskill": "D2.5",
+      "scenario": "S2",
+      "difficulty": 1,
+      "stem": "During iterative refinement, a developer asks Claude Code to check the response from the dev server it just started. Claude calls WebFetch on `http://localhost:3000/health` and the call is refused before any request is made. What should Claude use instead?",
+      "select": 1,
+      "options": [
+        "`curl` through the Bash tool, because WebFetch refuses `localhost` and other hostnames without a dot",
+        "WebSearch with the query `localhost:3000 health` to locate the endpoint",
+        "WebFetch again with `https://localhost:3000/health`, since the HTTP scheme is what was refused",
+        "A `WebFetch(domain:localhost)` allow rule added to project settings"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. WebFetch refuses local and dotless hostnames by design; local servers are reached with `curl` via Bash.",
+        "WebSearch queries a public search backend and cannot reach a local server.",
+        "WebFetch upgrades HTTP to HTTPS on its own; the refusal is about the host, not the scheme.",
+        "The refusal happens before permission rules matter; an allow rule does not make WebFetch reach localhost."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-006",
+      "subskill": "D2.5",
+      "scenario": "S5",
+      "difficulty": 2,
+      "stem": "A CI job asks `claude -p` to diagnose a failed integration test from a 3 MB `test-output.log`. Claude's first Read call on the whole file returns an error telling it to read a portion or search instead. What is the BEST next step?",
+      "select": 1,
+      "options": [
+        "Grep the log for failure markers like `FAIL` or `Error:`, then Read only the surrounding line ranges with `offset` and `limit`",
+        "Read the log sequentially in pages with `offset` and `limit`, from the first line to the last, so that no part of the output is missed",
+        "Raise the job's model tier to one with a larger context window and Read the whole file again",
+        "Ask Claude to `cat` the whole log through Bash, which has no size limit on its output"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Search first, then targeted reads: the failure lines are found cheaply and only the relevant context enters the window.",
+        "Paging through 3 MB fills the context with passing-test noise before the failure is even found.",
+        "The limit is on the Read call, not just the window; and loading the whole log would still bury the signal.",
+        "Bash output is also capped, and dumping the whole log is the same context problem in a different tool."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-007",
+      "subskill": "D2.5",
+      "scenario": "S5",
+      "difficulty": 3,
+      "stem": "The CI auto-fix job must never change Terraform under `infra/`. The team added the deny rule below to the project's `.claude/settings.json`, yet a run still modified `infra/main.tf` with the Edit tool. What is the BEST correction?",
+      "code": {
+        "lang": "json",
+        "src": "{\n  \"permissions\": {\n    \"deny\": [\"Write(/infra/**)\"]\n  }\n}"
+      },
+      "select": 1,
+      "options": [
+        "Use `Write(//infra/**)`, because a double slash is required for a path relative to the project root",
+        "Add a CLAUDE.md rule telling Claude never to modify files under `infra/`, alongside the existing deny rule",
+        "Move the rule from `deny` into `ask`, since an ask rule also blocks unattended runs",
+        "Replace it with `Edit(/infra/**)`; path rules for file changes are written as `Edit(...)`, which covers Edit, Write and NotebookEdit"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A `Write(...)` path rule matches no call in either form, and `//` denotes an absolute filesystem path, not a project-relative one.",
+        "CLAUDE.md is context, not enforcement; the deny rule itself is what needs fixing.",
+        "An ask rule is weaker than a deny, and it would still use the same ineffective `Write(...)` path form.",
+        "Correct. `Edit(path)` rules govern every built-in tool that writes files; a rule written as `Write(path)` matches nothing."
+      ],
+      "ref": "https://code.claude.com/docs/en/agent-sdk/permissions"
+    },
+    {
+      "id": "D2-5-008",
+      "subskill": "D2.5",
+      "scenario": "S4",
+      "difficulty": 1,
+      "stem": "On the developer-productivity platform, a new engineer asks Claude Code: \"Where is the rate limiter configured in this monorepo, and which services call it?\" The repository has about 9,000 files. Which TWO tool uses are the BEST way to start? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Glob for paths such as `**/*rate*limit*` to find candidate configuration files by name",
+        "Read every file under `services/` first, so that the full picture is already in context before Claude answers",
+        "Grep for the limiter's constructor (e.g. `RateLimiter(`) across the repo, then Read only the matching files",
+        "WebSearch for the rate-limiting library's documentation",
+        "Write a summary of every top-level directory to a notes file before searching anything"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Glob finds files by name pattern, which is the fast way to locate likely config files.",
+        "Reading thousands of files floods the context; search first, then read selectively.",
+        "Correct. Grep finds usages by content, and targeted Reads follow only the hits.",
+        "Library docs do not say where this repo configures or calls the limiter.",
+        "Summarising every directory up front is slow and mostly irrelevant to the question."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-009",
+      "subskill": "D2.5",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "The platform team wants Claude Code's web lookups to go through the company's licensed enterprise search provider instead of the built-in WebSearch tool, for compliance logging. Which approach BEST meets this?",
+      "select": 1,
+      "options": [
+        "Set an environment variable that points the built-in WebSearch tool at the enterprise provider's API endpoint",
+        "Write a skill that tells Claude to send each query to the provider's search URL with WebFetch and parse the results",
+        "Add a CLAUDE.md instruction asking Claude to prefer the enterprise provider whenever it searches",
+        "Connect an MCP server exposing the provider's search as a tool, and deny `WebSearch` in managed or project settings"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "The WebSearch backend is not configurable; there is no setting that redirects it.",
+        "WebFetch runs an extraction prompt over a single page; it is not a search integration, and nothing stops the built-in search from being used.",
+        "A preference in CLAUDE.md neither provides the integration nor guarantees the built-in tool is not used.",
+        "Correct. A different search backend comes in through an MCP tool, and a deny rule on `WebSearch` keeps lookups on the compliant path."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-010",
+      "subskill": "D2.5",
+      "scenario": "S4",
+      "difficulty": 2,
+      "stem": "An engineer on the platform asked Claude Code to summarise a vendor's API changelog with WebFetch. Claude replied that \"the page does not mention any deprecations\", but the page has listed a deprecation near the bottom for months. What is the MOST likely explanation and fix?",
+      "select": 1,
+      "options": [
+        "WebFetch served a stale copy from its cache; wait for the cache to expire and fetch the page again",
+        "WebFetch returns an extraction prompt's answer, not the raw page; refetch with a prompt about deprecations, or get the raw page with `curl`",
+        "The changelog domain is not on the preapproved list, so WebFetch only returned the page title and first paragraph",
+        "WebSearch should have been used instead, because WebFetch cannot read pages that are longer than one screen of content and stops early"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The cache window is short and the deprecation has been on the page for months, so staleness does not explain it.",
+        "Correct. WebFetch runs the given prompt over the fetched content in a separate model call; what reaches Claude depends on what the prompt asked for.",
+        "The preapproved list affects whether a permission prompt appears, not how much of the page is processed.",
+        "WebSearch returns titles and URLs without page content, and WebFetch handles long pages."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-011",
+      "subskill": "D2.5",
+      "scenario": "S3",
+      "difficulty": 2,
+      "stem": "A source-gathering subagent in the research system has only the WebSearch tool. Reviewers find that its quoted passages often do not appear in the cited pages, and some citations point to low-quality content farms. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Add WebFetch so the subagent reads each page before quoting it, since WebSearch returns titles and URLs, not page content",
+        "Raise the per-session web search limit so the subagent can run more searches per question",
+        "Use `allowed_domains` on WebSearch to restrict results to vetted publishers when a question needs authoritative sources",
+        "Replace WebSearch with the Read tool pointed at each result URL to get the exact text",
+        "Pass both `allowed_domains` and `blocked_domains` in the same WebSearch call for the most precise filtering of results"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Without fetching the page, the subagent is quoting from titles and its own memory; WebFetch retrieves the content.",
+        "More searches return more titles and URLs, not page text, and do nothing about source quality.",
+        "Correct. Domain allow-listing on WebSearch keeps low-quality sources out of the candidate set.",
+        "Read reads local files; it does not fetch URLs.",
+        "The two lists cannot be combined in a single WebSearch call."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-012",
+      "subskill": "D2.5",
+      "scenario": "S1",
+      "difficulty": 2,
+      "stem": "The support agent uses the Agent tool to hand order investigations to a subagent that calls several order and shipping tools. The parent agent then tells customers \"your refund amount has been confirmed\" without quoting the amount, because it never sees the order records the subagent looked up. What is the BEST change?",
+      "select": 1,
+      "options": [
+        "Give the parent the same order and shipping tools so it can repeat the lookups itself after the subagent finishes",
+        "Run the subagent directly inside the parent's context so that all of its intermediate tool calls and outputs are visible to the parent agent",
+        "Define the subagent's output so its final message includes the facts the parent needs (order ID, amount, dates, status) in a fixed structure",
+        "Increase the parent's context window so the subagent's tool outputs fit alongside the conversation"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Duplicating every lookup wastes calls and undoes the reason for delegating.",
+        "Sharing the whole intermediate transcript defeats the context isolation a subagent provides; the parent needs the facts, not the raw calls.",
+        "Correct. The parent sees only the subagent's final result, so that result must carry the specific facts in a predictable shape.",
+        "The subagent's intermediate outputs never reach the parent, whatever the parent's window size."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    },
+    {
+      "id": "D2-5-013",
+      "subskill": "D2.5",
+      "scenario": "S6",
+      "difficulty": 1,
+      "stem": "While prototyping the extraction pipeline in Claude Code, an engineer asks Claude to pull vendor rows from `vendors_q3.xlsx`. Claude's Read call on the file is refused. What is the BEST way forward?",
+      "select": 1,
+      "options": [
+        "Use a spreadsheet skill, or a script run through Bash that converts the sheet to CSV, then Read the result",
+        "Read the file again with `offset` and `limit` so only part of it is loaded",
+        "Rename the file to `vendors_q3.csv` so the Read tool will accept it",
+        "Fetch the spreadsheet with WebFetch using a `file://` URL, which converts documents to Markdown before returning them"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Read refuses binary formats; a skill for the file type or a conversion script gets the data into a readable form.",
+        "Paging does not help; Read refuses binary formats such as `.xlsx` regardless of range.",
+        "Renaming does not change the binary content; the result would be unreadable.",
+        "WebFetch is for web URLs, not local files."
+      ],
+      "ref": "https://code.claude.com/docs/en/tools-reference"
+    }
+  ]
+}

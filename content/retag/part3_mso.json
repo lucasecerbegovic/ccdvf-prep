@@ -1,0 +1,387 @@
+{
+ "questions": [
+  {
+   "id": "MSO2-018",
+   "subskill": "D4.2",
+   "difficulty": 1,
+   "stem": "In an invoice-extraction pipeline, a zero-shot extraction prompt returns correct fields, but the formatting varies: date formats differ, and null fields are sometimes omitted and sometimes written as \"N/A\". What is the most direct prompt-level fix?",
+   "select": 1,
+   "options": [
+    "Add a few `<example>`-tagged input/output pairs showing the exact format, including missing fields",
+    "Raise effort to `max`",
+    "Move the formatting instructions out of the system prompt and into the user message, closer to the input",
+    "Ask the model to 'be consistent'"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Few-shot (multishot) examples are one of the most reliable ways to pin down format and edge-case handling. Include edge cases such as missing values. Structured outputs can enforce the schema as well.",
+    "Effort governs how thoroughly the model works, not consistency of format.",
+    "Placement alone does not define the format you want.",
+    "A vague instruction does not show the model what 'consistent' means. Examples do."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S6"
+  },
+  {
+   "id": "MSO2-019",
+   "subskill": "D4.2",
+   "difficulty": 2,
+   "stem": "The support resolution agent summarises each ticket for its case notes using five few-shot examples. All five are short billing tickets written by the same agent. On long technical tickets, the outputs are oddly short and copy phrases from the examples. Which TWO changes BEST address this? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Diversify the examples across ticket types, lengths and edge cases so the model stops copying surface patterns",
+    "Remove the examples entirely and go zero-shot, since examples always constrain the model's output length",
+    "Duplicate the strongest example several times so that it carries more weight than the others during generation",
+    "State explicitly that the examples illustrate format and that length should match the input ticket's complexity",
+    "Move the examples after the ticket to be summarised so they are the last thing the model reads before writing"
+   ],
+   "answer": [
+    0,
+    3
+   ],
+   "explanations": [
+    "Correct. Models generalise from examples, including unintended features such as length or phrasing. Diversity reduces that overfitting.",
+    "This throws away format control. The problem is the examples' coverage, not the use of examples, and examples do not inherently constrain length.",
+    "Duplicating an example strengthens exactly the surface pattern that is causing the problem.",
+    "Correct. Saying what the examples are meant to demonstrate helps the model separate the format from incidental details.",
+    "Moving the examples does not fix their lack of diversity. Long reference material usually goes before the question, not after it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices",
+   "scenario": "S1"
+  },
+  {
+   "id": "MSO4-002",
+   "subskill": "D1.2",
+   "difficulty": 3,
+   "stem": "A multi-agent research system must read about 300 sources per question, extract findings, and write a synthesised report that needs deep judgment. The team wants high quality at a sustainable cost. Which coordinator/subagent architecture BEST fits, before any eval tuning?",
+   "select": 1,
+   "options": [
+    "A top-tier orchestrator for planning and synthesis, with per-source extraction delegated to cheaper, faster workers",
+    "Use the most capable tier for every call, including per-source extraction, so quality is maximised at every step of the pipeline",
+    "The cheapest tier for everything, retrying the synthesis until a reviewer approves it",
+    "A different model for each turn of a single conversation, chosen by a router per message"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. When there is a lot of independent work to hand off, matching the tier to each sub-task is effective: frontier judgment where it matters, cheap fast workers for the high-volume extraction. Validate it on evals.",
+    "This pays frontier prices for mechanical extraction that a cheaper tier probably handles well.",
+    "Synthesis needs the judgment of a stronger model, and retry loops on a weak synthesiser add cost and latency.",
+    "Switching models within one conversation breaks the prompt cache (caches are model-scoped) and can drop prior reasoning. Choose the model per route or conversation."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model",
+   "scenario": "S3"
+  },
+  {
+   "id": "MSO4-005",
+   "subskill": "D4.3",
+   "difficulty": 2,
+   "stem": "A document-extraction pipeline built for an older model forces JSON by ending `messages` with a prefilled assistant turn containing `{`. After moving to a recent model generation, every call returns a 400. What is the recommended replacement?",
+   "code": {
+    "lang": "typescript",
+    "src": "const resp = await client.messages.create({\n  model: NEW_MODEL,\n  max_tokens: 2048,\n  messages: [\n    { role: \"user\", content: `Extract fields from:\\n${doc}` },\n    { role: \"assistant\", content: \"{\" },\n  ],\n});"
+   },
+   "select": 1,
+   "options": [
+    "Put the `{` at the end of the user message instead",
+    "Keep the prefill, but add an `anthropic-beta` header to re-enable it",
+    "Use structured outputs (`output_config.format` with a JSON schema) so the response is guaranteed to match the schema",
+    "Keep asking for JSON in the prompt, then use a regex to pull the first `{...}` span out of the text and parse that"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A stray brace in the user turn does not constrain the output, and it may confuse the model.",
+    "No beta header restores last-turn prefill on these models.",
+    "Correct. Recent models reject a prefilled final assistant turn. Structured outputs replace the most common use of prefill (forcing JSON) with schema-guaranteed output. Assistant messages elsewhere in the history, for example in few-shot examples, are still fine.",
+    "Regex extraction is fragile defensive parsing. Structured outputs remove the need for it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+   "scenario": "S6"
+  }
+ ],
+ "archived": [
+  {
+   "id": "MSO1-001",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-002",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-003",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-004",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-005",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-006",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-007",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-008",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-009",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-010",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-011",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-012",
+   "reason": "rate-limit/concurrency mechanics; batch angle is cost/ops, not D4.5 design"
+  },
+  {
+   "id": "MSO1-013",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-014",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-015",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-016",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-017",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-018",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-019",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-020",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-021",
+   "reason": "SDK streaming mechanics"
+  },
+  {
+   "id": "MSO1-022",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO1-023",
+   "reason": "SDK/HTTP transport, retries, streaming or API plumbing; not on CCAR-F"
+  },
+  {
+   "id": "MSO2-001",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-002",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-003",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-004",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-005",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-006",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-007",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-008",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-009",
+   "reason": "reasoning-before-decision prompt ordering; not a CCAR-F task statement"
+  },
+  {
+   "id": "MSO2-010",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-011",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-012",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-013",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-014",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-015",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-016",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-017",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO2-020",
+   "reason": "LLM fundamentals (tokens, sampling, thinking/effort, max_tokens); not on CCAR-F"
+  },
+  {
+   "id": "MSO3-001",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-002",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-003",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-004",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-005",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-006",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-007",
+   "reason": "cost arithmetic and cache TTL trivia bundled with batch; caching-in-batch is best-effort detail"
+  },
+  {
+   "id": "MSO3-008",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-009",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-010",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-011",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO3-012",
+   "reason": "cost/token/caching arithmetic; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-001",
+   "reason": "model-tier trivia"
+  },
+  {
+   "id": "MSO4-003",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-004",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-006",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-007",
+   "reason": "model routing/cache trivia"
+  },
+  {
+   "id": "MSO4-008",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-009",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-010",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-011",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  },
+  {
+   "id": "MSO4-012",
+   "reason": "model selection, pinning and migration trivia; not on CCAR-F"
+  }
+ ],
+ "lessonNotes": [
+  {
+   "task": "D4.2",
+   "note": "MSO.2 keyPoint 9 (zero-shot vs few-shot, 3-5 diverse examples) and trap 6 (all-alike examples get copied) are accurate and reusable"
+  },
+  {
+   "task": "D4.3",
+   "note": "MSO.4 keyPoint on prefill 400s on recent models -> structured outputs (output_config.format) is usable source material"
+  },
+  {
+   "task": "D4.5",
+   "note": "MSO.3 keyPoint 7 (Batches 50% off, up to 24h, stacks with caching) and trap 5 are usable; batch fits non-blocking bulk work"
+  },
+  {
+   "task": "D1.2",
+   "note": "MSO.4 keyPoint 3 (frontier orchestrator + cheaper workers pays off only with enough delegable work) and trap 2 (per-message routing breaks cache) are usable"
+  },
+  {
+   "task": "D1.1",
+   "note": "MSO.1 keyPoints 5-8 on stop_reason arriving in message_delta and final-message accumulation are marginal; mostly SDK plumbing"
+  },
+  {
+   "task": "none",
+   "note": "Remaining MSO.1-MSO.4 lesson content (retries, SSE, tokens, sampling, caching economics, model pinning/migration) is off-blueprint for CCAR-F"
+  }
+ ]
+}

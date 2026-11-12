@@ -1,0 +1,1435 @@
+{
+ "lessons": [
+  {
+   "subskill": "D4.1",
+   "title": "Prompts with explicit criteria",
+   "summary": "The exam tests whether you replace vague adjectives (\"be conservative\", \"flag anything important\", \"high quality\") with concrete, checkable criteria: what to act on, what to skip, and how to grade severity. Expect scenarios where a reviewer or classifier produces too many false positives or inconsistent judgments and you must pick the prompt change that fixes the cause.",
+   "keyPoints": [
+    "**Be clear and direct**: state the goal, audience, output format and constraints. Anthropic's test: if a colleague with minimal context would be confused by the prompt, Claude will be too.",
+    "Vague qualifiers (\"be careful\", \"only important issues\", \"be conservative with refunds\") leave the threshold to the model, so results drift between runs and inputs. Replace them with **observable conditions** (\"flag only if the change can cause data loss, a security hole or a crash on a reachable path\").",
+    "Define **what to flag AND what to skip**. Explicit exclusions (style, naming, pre-existing code, speculative issues without a concrete trigger) are the main lever for cutting false positives in review and triage prompts.",
+    "A reviewer told to find problems will always find *something*. Scope it (\"report gaps that affect correctness and skip style\") or you end up acting on noise.",
+    "**Severity levels need definitions and an example each**, e.g. `critical` = exploitable or data-corrupting in production; `minor` = correct but harder to maintain. Undefined labels collapse into \"everything is high\".",
+    "**Give the why**: the reason behind a rule (\"findings are posted as PR comments that block merge, so only report what a senior engineer would block on\") lets Claude generalise to cases the rule did not list.",
+    "Current models follow instructions closely: old `CRITICAL: you MUST ALWAYS…` emphasis causes **over-triggering**. Use normal phrasing and say *when* the behaviour applies.",
+    "Criteria that must never be violated (refund limits, required steps) belong in **code** (hooks, validation, tool gating); explicit prompt criteria improve judgment but are not an enforcement boundary.",
+    "Prove a criteria change with an **eval set** (labelled true and false positives), not by eyeballing one run."
+   ],
+   "traps": [
+    "Adding \"be more careful\" or \"only report real issues\" to fix false positives. It restates the vague goal; define the criteria and exclusions instead.",
+    "Switching to a bigger model to fix inconsistent judgments that come from an undefined threshold.",
+    "Shouting (CRITICAL / MUST / ALWAYS) to make a rule stick. On current models it over-triggers.",
+    "Asking for a confidence score and filtering on it instead of defining what qualifies. Self-reported confidence is not calibrated against your criteria.",
+    "Relying on prompt criteria alone for a hard business rule such as a refund ceiling."
+   ],
+   "code": {
+    "lang": "text",
+    "src": "<review_criteria>\nReport a finding ONLY if it is one of:\n- correctness: the changed code produces a wrong result on a realistic input\n- security: injection, auth bypass, or secret exposure introduced by this diff\n- data: a migration or write path that can lose or corrupt data\nDo NOT report: style, naming, formatting, missing comments, issues in\nunchanged lines, or hypothetical problems without a concrete trigger.\nSeverity: blocker = must fix before merge (give the failing input);\nwarning = real but low impact. If nothing qualifies, return no findings.\n</review_criteria>"
+   },
+   "docs": [
+    {
+     "title": "Prompting best practices",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+     "title": "Best practices for Claude Code",
+     "url": "https://code.claude.com/docs/en/best-practices"
+    }
+   ],
+   "drill": "Take a review or triage prompt you use. Run it on 10 inputs and label each finding true/false positive. Rewrite it with explicit include/exclude criteria and defined severities (one example each), re-run on the same 10, and compare the false-positive count."
+  },
+  {
+   "subskill": "D4.2",
+   "title": "Few-shot prompting",
+   "summary": "The exam tests when examples beat more instructions (ambiguous judgment calls, exact output format, edge-case handling) and how to build them: a few relevant, diverse examples in tags, ideally showing the reasoning for the hard cases. Expect symptoms such as inconsistent formatting, copied surface patterns or mis-handled edge cases.",
+   "keyPoints": [
+    "Examples are **one of the most reliable ways** to steer output format, tone and structure. Anthropic's guidance: make them relevant, **diverse**, and structured; **3–5** is a good default.",
+    "Wrap each in `<example>` tags inside `<examples>` so Claude can separate them from instructions and from the real input.",
+    "Few-shot wins over more prose when the rule is hard to state but easy to show: ambiguous classifications, borderline cases, exact output shape (date format, how to write a missing field, null vs omitted).",
+    "Cover the **edge cases** that are failing: a document with a missing field, a conflicting value, an \"other\" category, a case that should produce no output. Examples that only show the happy path teach only the happy path.",
+    "For judgment calls, show **why**: an example with a short rationale (\"flagged because the clause auto-renews without notice\") teaches the decision boundary, not just the label.",
+    "Claude matches examples' length, phrasing and structure. Near-identical examples get copied; vary surface form deliberately and label them as illustrative.",
+    "Pair positive and **contrastive** examples near the boundary (one that should be flagged, a similar one that should not) to cut false positives.",
+    "Examples add input tokens on every call: keep the static examples block early in the prompt so it can be prompt-cached.",
+    "Worked examples also shape how Claude reasons in its thinking: present each as problem, method, answer."
+   ],
+   "traps": [
+    "Adding a paragraph of extra rules for an ambiguity that two contrasting examples would settle.",
+    "Five examples from the same document type or author: the model copies their length and phrasing onto very different inputs.",
+    "Examples that never show the edge case (missing value, no findings), so the model invents a value or a finding.",
+    "Examples whose output format disagrees with the stated schema or instructions: the model follows the examples.",
+    "Treating more examples as always better. Relevance and diversity matter more than volume."
+   ],
+   "code": {
+    "lang": "text",
+    "src": "<examples>\n<example>\n<clause>Either party may terminate with 30 days' written notice.</clause>\n<output>{\"risk\": \"none\", \"reason\": \"mutual, standard notice\"}</output>\n</example>\n<example>\n<clause>This agreement renews automatically for successive 3-year terms.</clause>\n<output>{\"risk\": \"high\", \"reason\": \"auto-renewal with no opt-out window\"}</output>\n</example>\n</examples>"
+   },
+   "docs": [
+    {
+     "title": "Prompting best practices: use examples effectively",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    }
+   ],
+   "drill": "Pick a classification prompt with a known confusing boundary. Write two pairs of contrastive examples (one flagged, one not, each with a one-line reason) plus one 'no output' example. Compare accuracy on 15 borderline inputs before and after."
+  },
+  {
+   "subskill": "D4.3",
+   "title": "Structured output with JSON schemas",
+   "summary": "The exam tests how to guarantee machine-parseable output (structured outputs via `output_config.format`, or `strict: true` tools) and how to design the schema so it does not force bad data: required vs nullable fields, enums with an escape hatch, clear types and units. It also tests the difference between syntactically valid and semantically correct.",
+   "keyPoints": [
+    "**JSON outputs**: `output_config: {format: {type: \"json_schema\", schema}}` constrains decoding so the response matches the schema. SDK helpers (`messages.parse()` with Pydantic/Zod) also return typed, validated objects.",
+    "**Strict tool use**: `strict: true` on a tool definition guarantees tool inputs match its `input_schema`. Every object needs `additionalProperties: false`.",
+    "Prompt-only \"respond with JSON only\" and assistant prefill are obsolete: prefill returns a 400 on recent model generations; use structured outputs.",
+    "**Required means the model must produce a value.** If the source can lack a field, a required non-null field forces fabrication. Make it nullable (or optional) and describe what null means (\"not present in the document\").",
+    "**Enums** for closed sets; add an `\"other\"` value plus a free-text `*_detail` field so unexpected inputs are captured instead of being forced into the nearest wrong category.",
+    "Describe each property: type, unit, format (ISO 8601 dates, amounts as numbers with a separate currency code). Schema descriptions are instructions the model reads.",
+    "Some JSON Schema features (e.g. numeric/length constraints, recursion) are not supported for constrained decoding; SDK helpers strip them and validate client-side.",
+    "**Schema-valid is not correct.** Constrained decoding guarantees shape, not truth: totals can still disagree, IDs can be wrong. Semantic checks belong in code (D4.4).",
+    "Check `stop_reason` before parsing: `max_tokens` (truncated) or `refusal` output may not match the schema."
+   ],
+   "traps": [
+    "Making every field required \"for completeness\": the model invents plausible values for absent data.",
+    "A closed enum with no `other`: novel document types get silently forced into the wrong bucket.",
+    "Believing structured outputs make extracted values accurate.",
+    "Retrying parse failures in a loop when the response was truncated (`max_tokens`).",
+    "Keeping a JSON-forcing prefill when migrating to a newer model."
+   ],
+   "code": {
+    "lang": "json",
+    "src": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\"doc_type\", \"doc_type_detail\", \"po_number\", \"total\"],\n  \"properties\": {\n    \"doc_type\": {\"type\": \"string\", \"enum\": [\"invoice\", \"credit_note\", \"receipt\", \"other\"]},\n    \"doc_type_detail\": {\"type\": [\"string\", \"null\"], \"description\": \"Only when doc_type is other\"},\n    \"po_number\": {\"type\": [\"string\", \"null\"], \"description\": \"null if no PO number is printed\"},\n    \"total\": {\"type\": \"number\", \"description\": \"Grand total as printed, no currency symbol\"}\n  }\n}"
+   },
+   "docs": [
+    {
+     "title": "Structured outputs",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+     "title": "Tool use overview",
+     "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    }
+   ],
+   "drill": "Take an extraction schema and list every field the source documents can lack. Make those nullable with a description of null, add `other` + detail to each enum, then run 10 documents with missing data and count fabricated values before and after."
+  },
+  {
+   "subskill": "D4.4",
+   "title": "Validation and retry loops",
+   "summary": "The exam tests the loop around the model: validate semantics in code, retry with the specific error fed back, cap retries, and recognise when retrying cannot help because the information is not in the source. Expect scenarios where a pipeline either retries blindly, gives up too early, or accepts schema-valid but wrong data.",
+   "keyPoints": [
+    "Structured outputs give valid syntax; **semantic validation is your code's job**: totals equal the sum of line items, end date after start date, IDs exist, values fall in allowed ranges.",
+    "On failure, **retry with the specific error** (\"line items sum to 1,180.00 but total is 1,280.00; re-read the totals section\") plus the original document and the previous output. A bare \"try again\" repeats the same mistake.",
+    "**Cap retries** (often 1–2) and route persistent failures to human review or a fallback queue with the error attached.",
+    "**Know when retry can't help**: if the value is absent or illegible in the source, re-asking produces fabrication or the same failure. Return null/\"not found\" and route to review instead.",
+    "**Self-correction fields**: ask for both the value as stated in the document and the value computed from parts (e.g. `stated_total` and `calculated_total`), plus a flag for conflicts. Code compares them; mismatches become review items rather than silent errors.",
+    "Retry only the failing step or item, not the whole chain or batch.",
+    "Truncation (`stop_reason: max_tokens`) and refusals are not validation errors: retrying unchanged fails the same way; fix the cause or branch.",
+    "Log validation failures by type: recurring errors point to a prompt, example or schema fix rather than more retries."
+   ],
+   "traps": [
+    "Retrying until the output passes validation, with no cap: an absent value eventually gets invented to satisfy the check.",
+    "Retrying with a generic message and no error detail.",
+    "Treating a schema-valid response as correct and skipping business-rule checks.",
+    "Asking the model to self-report whether its numbers are consistent instead of computing the check in code.",
+    "Restarting the whole multi-step pipeline when one step fails."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "for attempt in range(2):\n    inv = extract(doc, feedback)\n    errors = []\n    if abs(sum(l.amount for l in inv.lines) - inv.stated_total) > 0.01:\n        errors.append(f\"lines sum to {sum(l.amount for l in inv.lines):.2f}, stated_total is {inv.stated_total:.2f}\")\n    if inv.due_date and inv.due_date < inv.issue_date:\n        errors.append(\"due_date is before issue_date\")\n    if not errors:\n        return inv\n    feedback = \"Fix these issues, re-reading the document:\\n\" + \"\\n\".join(errors)\nreturn send_to_review(doc, inv, errors)"
+   },
+   "docs": [
+    {
+     "title": "Structured outputs",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+     "title": "Building effective agents",
+     "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    }
+   ],
+   "drill": "Add two semantic checks (a sum and a date order) after an extraction call. Feed failures back with the exact numbers, cap at two attempts, and log which documents still fail; inspect whether those documents actually contain the data."
+  },
+  {
+   "subskill": "D4.5",
+   "title": "Message Batches API",
+   "summary": "The exam tests when to move work to the Message Batches API (bulk, non-blocking, cost-sensitive) and when not to (someone is waiting, a deadline tighter than the processing window, or a multi-turn tool loop). It also checks the mechanics that affect design: `custom_id` correlation, unordered results, and resubmitting only failed items.",
+   "keyPoints": [
+    "Batches are **asynchronous** and priced at **50%** of standard rates; the discount stacks with prompt caching.",
+    "Processing can take **up to 24 hours** and there is **no latency SLA**; requests not finished by then expire. Many batches finish much faster, but you cannot design on that.",
+    "Good fit: overnight extraction backlogs, re-classification of archives, eval suites, nightly reports—anything nobody is waiting on.",
+    "Bad fit: interactive or blocking paths (a user uploading one invoice and waiting, a pre-merge CI check), and any deadline shorter than the processing window.",
+    "Each batch request is a **single Messages call**: there is no multi-turn tool loop inside a request. Agentic work that needs tool results mid-task stays real-time, unless you restructure it (pre-fetch inputs so one call suffices).",
+    "Results are **not returned in submission order**: correlate with `custom_id` (use a stable business key such as a document ID).",
+    "Per-request outcomes: `succeeded`, `errored`, `canceled`, `expired`. Only succeeded requests are billed. Resubmit **only** failed/expired items; fix invalid requests before resending.",
+    "A common hybrid: real-time for the interactive path, batch for the backlog and for low-priority re-processing (e.g. validation retries that can wait until the next run)."
+   ],
+   "traps": [
+    "Moving a user-facing or merge-blocking step to batch to save cost.",
+    "Assuming a batch will finish in an hour because it usually does.",
+    "Mapping results back by array position instead of `custom_id`.",
+    "Trying to run a multi-step tool-using agent inside one batch request.",
+    "Resubmitting the entire batch because a few hundred requests failed."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "batch = client.messages.batches.create(requests=[\n    {\"custom_id\": doc.id, \"params\": {\"model\": MODEL, \"max_tokens\": 2048,\n        \"system\": SYSTEM, \"messages\": [{\"role\": \"user\", \"content\": doc.text}]}}\n    for doc in backlog\n])\n# later, once processing_status == \"ended\"\nfor r in client.messages.batches.results(batch.id):\n    if r.result.type == \"succeeded\":\n        save(r.custom_id, r.result.message)\n    else:\n        retry_queue.append(r.custom_id)"
+   },
+   "docs": [
+    {
+     "title": "Batch processing",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    }
+   ],
+   "drill": "Split one of your workloads into 'someone waits' vs 'nobody waits'. For the second, write the batch submit + results loop keyed by `custom_id`, and a function that builds a follow-up batch from only the errored/expired IDs."
+  },
+  {
+   "subskill": "D4.6",
+   "title": "Multi-pass review",
+   "summary": "The exam tests how to structure review so it actually catches problems: an independent reviewer instance that did not generate the work, per-unit passes followed by a cross-unit integration pass, and scoped criteria so the reviewer reports what matters. Expect scenarios where one model reviews its own output in the same context, or one giant pass over a large change misses issues.",
+   "keyPoints": [
+    "A generator reviewing its own output **in the same context** is anchored on the reasoning that produced it. A **fresh instance** (separate session, subagent or `claude -p` call) that never saw that reasoning is a better reviewer.",
+    "Claude Code's `/code-review` reviews the diff in a fresh subagent that never saw the conversation; a second session reviewing a file without having watched it being written is the same idea.",
+    "Give the reviewer **fewer tools** where possible (e.g. a subagent limited to `Read, Grep, Glob`): it cannot \"fix\" what it should only report, and the limit is enforced, not requested.",
+    "**Attention dilution**: one pass over 40 files or 30 sources gives each item shallow attention. Run **per-file (or per-document) local passes**, then a separate **cross-file integration pass** over summaries/interfaces for issues no single file shows (contract mismatches, duplicated logic, inconsistent claims).",
+    "Review **against explicit criteria or a spec** (D4.1) and tell the reviewer what to skip; an unscoped reviewer always finds something.",
+    "In CI, review only what changed (the diff, or files changed since the last reviewed commit) rather than re-reviewing the whole repo every run.",
+    "Multiple independent reviewers (voting) raise recall for high-stakes checks, at extra cost; use it where a miss is expensive.",
+    "Delegating the same task to a subagent does not make the answer better by itself; the benefit comes from the reviewer's **independence** and focus."
+   ],
+   "traps": [
+    "Appending \"now review your work for bugs\" to the generator's own conversation and calling it a review stage.",
+    "One mega-prompt reviewing an entire large PR or report at once.",
+    "Only doing per-file passes and missing cross-file contract breaks.",
+    "Giving the reviewer write access and letting it silently rewrite the code it reviews.",
+    "Using a bigger context window as the cure for a pass that misses issues."
+   ],
+   "code": {
+    "lang": "markdown",
+    "src": "---\nname: reviewer\ndescription: Reviews changed files against the spec they were built from. Use after implementing a feature, before opening the PR.\ntools: Read, Grep, Glob\n---\nYou are reviewing code you did not write. Compare each changed file with the\nspec you are given. Report only correctness gaps and missing tests for listed\nedge cases, with file and line. Skip style."
+   },
+   "docs": [
+    {
+     "title": "Best practices for Claude Code",
+     "url": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+     "title": "Subagents",
+     "url": "https://code.claude.com/docs/en/sub-agents"
+    }
+   ],
+   "drill": "Generate a small feature in one Claude Code session. Review it (a) by asking the same session to review its work and (b) with a read-only reviewer subagent given the spec. Compare which real issues each found."
+  }
+ ],
+ "questions": [
+  {
+   "id": "D4-1-001",
+   "subskill": "D4.1",
+   "scenario": "S5",
+   "difficulty": 2,
+   "stem": "The team's CI pipeline runs `claude -p` on every pull request with the prompt \"Review this PR thoroughly and flag any issues.\" Each PR now gets 20–30 comments, most of them about naming, formatting and code the PR did not touch. Developers have started ignoring the bot entirely, including its rare real bug reports. Which change BEST fixes the root cause?",
+   "select": 1,
+   "options": [
+    "Append \"Only flag important issues and avoid nitpicks\" to the existing prompt",
+    "Ask Claude to attach a confidence score between 0 and 1 to each finding, and have the CI job post only the findings scored at 0.8 or higher while discarding the rest",
+    "Rewrite the prompt to define what counts as a finding (correctness, security, data loss in changed lines), what to skip (style, naming, unchanged code) and each severity",
+    "Cap the number of posted comments at five per PR, keeping the first five the model reports"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "\"Important\" and \"nitpick\" are still undefined, so the threshold stays with the model and the noise continues.",
+    "Self-reported confidence is not calibrated against what the team considers a finding; it filters on the wrong signal.",
+    "Correct. The cause is an undefined reporting threshold. Explicit include/exclude criteria and severity definitions are the main lever for cutting false positives in review prompts.",
+    "A cap hides the symptom and may drop the real bug if it is reported sixth."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-1-002",
+   "subskill": "D4.1",
+   "scenario": "S5",
+   "difficulty": 3,
+   "stem": "In the CI review job, findings labelled `critical` block the merge. The prompt asks Claude to label each finding `critical`, `major` or `minor`, without further detail. About 60% of findings come back `critical`, including a missing docstring and an unused import, so merges stall. The team wants the label itself to be trustworthy. What should the architect change?",
+   "select": 1,
+   "options": [
+    "Define each severity with a concrete condition and an example (critical = exploitable or data-corrupting on a reachable path) and say critical blocks merges",
+    "Change the merge gate to block only when three or more critical findings are reported on the same PR",
+    "Add \"Use the critical label sparingly and only when truly necessary\" to the severity instructions",
+    "Run the reviewer twice in parallel on the same diff and keep a critical label only when both independent runs assign it to the same finding"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Undefined labels collapse toward the top. Concrete definitions with an example each, plus the reason (critical blocks merges), give the model a threshold it can apply consistently.",
+    "This changes the gate rather than the labels; one real critical bug would no longer block the merge.",
+    "\"Sparingly\" and \"truly necessary\" are vague qualifiers that leave the threshold undefined.",
+    "Two runs with the same undefined scale will often agree on the same inflated labels; it doubles cost without defining what critical means."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-1-003",
+   "subskill": "D4.1",
+   "scenario": "S5",
+   "difficulty": 2,
+   "stem": "A security-review step in the CI pipeline (`claude -p` with a review prompt) reports hard-coded credentials in `tests/fixtures/`, where the values are deliberately fake, and reports old vulnerabilities in files the pull request did not modify. Security engineers say both kinds of finding are noise for this gate. Which TWO prompt changes BEST reduce these false positives? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Add \"Be conservative and avoid false positives\" at the top of the review prompt",
+    "State that values under `tests/fixtures/` are synthetic test data and are not to be reported as secrets, giving that reason",
+    "Add \"CRITICAL: You MUST NEVER report a false positive\" to the system prompt",
+    "Raise the reasoning effort to the maximum so the reviewer thinks harder about each finding",
+    "Limit the scope explicitly: report only issues introduced by lines changed in this diff, and state that pre-existing issues are out of scope for this gate"
+   ],
+   "answer": [
+    1,
+    4
+   ],
+   "explanations": [
+    "A vague qualifier: it does not tell the reviewer which findings to drop.",
+    "Correct. An explicit exclusion with its reason lets the model skip fixture data and generalise to similar synthetic values.",
+    "Shouted absolutes do not define what a false positive is and can over-trigger on current models.",
+    "More effort does not supply the missing criteria; the reviewer would still consider fixtures and unchanged code in scope.",
+    "Correct. Defining scope (changed lines only, pre-existing issues excluded) removes the second class of noise at its cause."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-1-004",
+   "subskill": "D4.1",
+   "scenario": "S1",
+   "difficulty": 2,
+   "stem": "The support-resolution agent's system prompt says \"Be conservative with refunds.\" QA finds the agent refuses some clearly eligible refunds (a defective item returned within a week) while approving others that policy excludes (used items past 60 days). The refund tool itself works correctly. Which prompt change BEST improves the consistency of the agent's refund decisions?",
+   "select": 1,
+   "options": [
+    "Replace the line with \"Use your judgment as an experienced support agent when deciding refunds\"",
+    "Add two few-shot examples of correctly approved refunds to the system prompt so the agent can see what a good, policy-compliant refund decision looks like",
+    "Move the agent to a more capable model tier so it reasons about refunds more carefully",
+    "Replace the line with the actual eligibility criteria (time window, item condition, defect vs change of mind) and the path for out-of-policy cases"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Still leaves the threshold undefined; judgment without criteria is what produced the inconsistency.",
+    "Two approvals only show the positive side and no boundary; the agent may lean toward approving more.",
+    "A larger model cannot apply a policy it was never given; \"conservative\" remains ambiguous.",
+    "Correct. Concrete, checkable conditions replace a vague adjective, and an explicit path for out-of-policy cases removes the remaining guesswork."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-1-005",
+   "subskill": "D4.1",
+   "scenario": "S1",
+   "difficulty": 3,
+   "stem": "After the team rewrote the support agent's prompt with explicit refund criteria, including \"refunds above $200 require a human\", decisions became far more consistent. However, in roughly 1 of 500 conversations a persistent customer still talks the agent into calling `issue_refund` for more than $200. Compliance says this must never happen. What should the architect do NEXT?",
+   "select": 1,
+   "options": [
+    "Add \"CRITICAL: NEVER issue a refund above $200 under any circumstances\" to the system prompt",
+    "Enforce the limit in code (a PreToolUse hook or tool-side check that blocks `issue_refund` above $200 and escalates), keeping the criteria in the prompt",
+    "Add few-shot examples in which the agent politely declines customers who push for larger refunds",
+    "Lower the sampling temperature for the support agent so that it follows the written refund rule more deterministically, even when customers push back repeatedly"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Emphasis makes violations rarer at best; it is still probabilistic and does not meet a \"never\" requirement.",
+    "Correct. Explicit criteria improve judgment, but a hard business limit needs a deterministic control. A hook or tool-side check guarantees the ceiling; the prompt still guides normal decisions.",
+    "Examples may reduce the rate further but cannot guarantee the limit is never exceeded.",
+    "Lower temperature does not make behaviour deterministic and does not enforce a rule; some recent models also reject sampling parameters."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/hooks"
+  },
+  {
+   "id": "D4-1-006",
+   "subskill": "D4.1",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the multi-agent research system, the coordinator briefs each search subagent with \"Find high-quality sources on the sub-question.\" Final reports increasingly cite SEO blog posts, undated vendor pages and marketing whitepapers. The search tools themselves return a good mix of results. Which change BEST addresses this?",
+   "select": 1,
+   "options": [
+    "Give each search subagent additional search tools so it can reach more academic databases",
+    "Change the brief to \"Be rigorous and use only the most reliable sources you can find\"",
+    "Let the synthesis subagent decide at the end which of the collected sources look trustworthy enough to cite, since it is the only agent that sees every source side by side",
+    "Spell out source criteria in the brief: acceptable types (peer-reviewed, official statistics, primary documents), a recency window, and explicit exclusions"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "The tools already return good sources; the problem is the selection criterion, not reach.",
+    "\"Rigorous\" and \"reliable\" are as vague as \"high-quality\"; the subagent still decides what qualifies.",
+    "Right idea at the wrong layer: synthesis would still face the same undefined standard, after tokens were spent collecting weak sources.",
+    "Correct. Concrete include/exclude criteria at the point of selection, plus a stated reason, turn \"high-quality\" into something the subagent can apply and you can audit."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D4-1-007",
+   "subskill": "D4.1",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "The research system's synthesis subagent is instructed: \"Write a balanced, comprehensive report from the findings.\" Reports vary from 400 to 4,000 words, sometimes drop evidence that contradicts the majority view, and sometimes include claims that appear in no finding. Which THREE changes make the instructions explicit enough to fix this? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Specify the report structure and a length target per section",
+    "Add \"Be thorough, objective and balanced in every report you write\"",
+    "Require every factual claim to cite a finding ID from the input, and state that claims with no supporting finding are left out",
+    "Prefix the instructions with \"IMPORTANT: ALWAYS present a balanced view\"",
+    "Move the synthesis step to the most capable model tier available",
+    "When findings disagree, require both positions to be presented with their sources and dates instead of choosing one"
+   ],
+   "answer": [
+    0,
+    2,
+    5
+   ],
+   "explanations": [
+    "Correct. A defined structure and length target removes the length variance that \"comprehensive\" invites.",
+    "Restates the same vague goals; it defines no behaviour that can be checked.",
+    "Correct. A concrete grounding rule (cite an ID or omit) addresses unsupported claims and makes outputs checkable.",
+    "Emphasis is not a definition; \"balanced\" remains open to interpretation and capitals can over-trigger.",
+    "A stronger model still has to guess what \"balanced\" and \"comprehensive\" mean here.",
+    "Correct. This turns \"balanced\" into an explicit rule for handling conflicting evidence."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-1-008",
+   "subskill": "D4.1",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "Besides extracting fields, the invoice pipeline asks Claude to set `needs_review: true` for \"invoices that look unusual.\" About 40% of invoices are now flagged and the review team cannot keep up; most flagged invoices turn out to be fine. Which change BEST reduces the flag rate without losing the cases reviewers care about?",
+   "select": 1,
+   "options": [
+    "Replace the instruction with \"Only flag invoices that are truly unusual\"",
+    "Ask Claude for a 1–10 suspicion score and set `needs_review` only for scores of 8 or higher",
+    "List the conditions that warrant review (remit-to name differs from letterhead, amount in words disagrees with figures, handwritten edits to totals) and flag nothing else",
+    "Add three examples of unusual invoices that were correctly flagged by the review team last quarter, so that the model can learn from them what the reviewers actually care about"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Another vague qualifier; the model still decides what \"unusual\" means.",
+    "An uncalibrated score inherits the same undefined notion of \"unusual\"; the cut-off is arbitrary.",
+    "Correct. Concrete conditions plus an explicit \"nothing else\" rule define the boundary, which is what cuts false positives.",
+    "Positive-only examples show what to flag but not what to leave alone, and may increase flagging of anything that resembles them."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-1-009",
+   "subskill": "D4.1",
+   "scenario": "S6",
+   "difficulty": 1,
+   "stem": "The contract-extraction pipeline asks Claude to \"extract the key obligations\" from each supplier contract into an `obligations` array. On the same contract, separate runs return between 4 and 15 items, sometimes including definitions and recitals. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Define an obligation (a named party must do, pay or deliver something, with its trigger or deadline), list what to skip (definitions, recitals) and the per-item fields",
+    "Ask for \"only the most important obligations\" so the list stays short",
+    "Set a fixed `maxItems` of 8 on the `obligations` array in the schema",
+    "Run the extraction three times on every contract and keep only the obligations that appear in at least two of the three runs, discarding all the others as model noise"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The variance comes from an undefined term. A definition, an explicit skip list and per-item fields make the task checkable and consistent.",
+    "\"Most important\" is still undefined and would drop real obligations on long contracts.",
+    "A count limit truncates arbitrarily and does not define what qualifies.",
+    "Voting reduces noise at three times the cost but keeps the undefined criterion; consistent misreadings survive."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-1-010",
+   "subskill": "D4.1",
+   "scenario": "S2",
+   "difficulty": 2,
+   "stem": "The team's project CLAUDE.md contains \"Write clean, well-tested code that follows our conventions.\" Claude Code's changes keep arriving without integration tests for new endpoints, and they use three different error-handling styles. Which edit to CLAUDE.md BEST fixes this?",
+   "select": 1,
+   "options": [
+    "Change the line to \"IMPORTANT: ALWAYS write clean, well-tested code that follows ALL of our conventions\"",
+    "Replace it with checkable rules, e.g. \"Every new endpoint gets an integration test in `tests/api/` using `api_client`; throw only `AppError` from `src/errors.ts`\"",
+    "Delete the line, since Claude Code already infers the project's conventions by reading the codebase",
+    "Add a link to the team's 40-page engineering handbook in CLAUDE.md so that Claude can go and read all of the team's coding and testing conventions itself whenever it needs them"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Emphasis does not tell Claude what \"well-tested\" or \"our conventions\" mean in this repo.",
+    "Correct. Concrete rules that name the location, fixture and error type are something Claude can follow and a reviewer can check.",
+    "The repo currently shows three styles, so inference has nothing consistent to infer from; the decision has to be stated.",
+    "Pointing at a long document loads a lot of context without stating which specific rules apply to these two problems."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-1-011",
+   "subskill": "D4.1",
+   "scenario": "S4",
+   "difficulty": 1,
+   "stem": "The internal developer platform offers a Claude-powered \"summarise this incident channel\" command. On-call engineers report that summaries mix speculation with confirmed facts, vary from three lines to two pages, and sometimes recount off-topic chat. Which revision to the command's prompt BEST addresses all three complaints?",
+   "select": 1,
+   "options": [
+    "\"Summarise the channel concisely and accurately for an on-call engineer.\"",
+    "Add one example summary from last month's best-written incident review",
+    "Route the command to a larger, more capable model tier so that the summaries are more careful about separating facts from guesses and about staying on topic",
+    "\"Two sections: Confirmed (each fact with its message link) and Open hypotheses; then a UTC timeline. Under 200 words. Skip off-topic chat.\""
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "\"Concisely\" and \"accurately\" are the vague goals that produced the inconsistency.",
+    "A single example helps format but will be copied closely and does not state the confirmed-vs-speculative rule or the length limit.",
+    "Model size does not define what counts as confirmed or how long the summary should be.",
+    "Correct. It states the structure, the confirmed-vs-hypothesis distinction with evidence, a length limit and an explicit skip rule."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-001",
+   "subskill": "D4.2",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The invoice pipeline assigns each line item a general-ledger category. Over months, the team has grown the category rules to two pages of prose, yet accuracy on borderline items (software subscription vs licence vs implementation services) is still poor and each new rule seems to break another case. What is the BEST next step?",
+   "select": 1,
+   "options": [
+    "Add another paragraph of rules that covers the specific borderline wordings found in last month's errors",
+    "Replace the borderline rules with a handful of contrastive examples near each boundary, each with a one-line reason for its category",
+    "Move categorisation to the most capable model tier and keep the existing two pages of rules as they are",
+    "Split categorisation into a separate call per category, each answering yes or no for every line item on the invoice, and keep the category with a yes"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Rule accretion is what has been failing; another paragraph is likely to interact badly with the existing ones again.",
+    "Correct. When a boundary is hard to state but easy to show, a few contrastive examples with the deciding reason usually beat more prose.",
+    "A stronger model still has to reconcile two pages of overlapping rules; the ambiguity is in the instructions.",
+    "Independent yes/no calls multiply cost and can return several or zero categories for the same item, without clarifying the boundary."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-002",
+   "subskill": "D4.2",
+   "scenario": "S6",
+   "difficulty": 1,
+   "stem": "To improve extraction, an engineer pasted three sample invoices and their expected JSON directly above the real invoice text in the user message, with no separators. Occasionally the output for the real invoice contains a vendor name or invoice number that comes from one of the sample invoices. What is the MOST likely cause and fix?",
+   "select": 1,
+   "options": [
+    "The model's context window is too small for four invoices; drop to a single sample invoice",
+    "The samples are too similar to real invoices; replace them with obviously synthetic data such as \"ACME Corp\"",
+    "Examples and input are not delimited; wrap each sample in `<example>` tags inside `<examples>` and the real invoice in its own tag",
+    "Few-shot examples are unsuitable for extraction tasks like this one; remove them and rely on the JSON schema's field descriptions alone"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Four invoices are far below context limits; the issue is that the model cannot tell which text is the input.",
+    "Synthetic values may make leaks easier to spot but do not separate examples from the real input.",
+    "Correct. Anthropic recommends wrapping examples in `<example>`/`<examples>` tags so Claude can distinguish them from instructions and input; tagging the real document completes the separation.",
+    "Examples are a reliable way to steer extraction format and edge cases; the fix is structure, not removal."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-003",
+   "subskill": "D4.2",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "A form-extraction pipeline processes scanned insurance claim forms. Its schema already makes optional fields nullable. The prompt has four few-shot examples, all of fully completed, clearly printed forms. On real forms with blank or illegible boxes, Claude often returns a plausible value instead of null. Which change BEST addresses this?",
+   "select": 1,
+   "options": [
+    "Add examples where blank and illegible boxes produce null, so the examples cover that edge case and not only the happy path",
+    "Add the instruction \"Never guess\" in capitals at the end of the extraction prompt",
+    "Make every field in the schema required so missing values are easier to detect downstream",
+    "Remove the few-shot examples completely, because examples make the model too confident in its extractions"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Examples teach what they show. Happy-path-only examples imply every box has a value; examples of blank and illegible boxes set the expected behaviour for those cases.",
+    "Shouted instructions are weaker than the four examples that implicitly demonstrate always filling every field.",
+    "Required fields force a value and make fabrication worse.",
+    "The examples are useful for format; the gap is that they omit the edge case."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-004",
+   "subskill": "D4.2",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "The contract pipeline labels each clause `high`, `medium` or `none` for risk. Its prompt includes five few-shot examples, all of them high-risk clauses (unlimited liability, automatic renewal, unilateral price change). In production, many standard clauses with similar wording, such as a mutual 30-day termination notice, are labelled `high`. Which TWO changes BEST improve precision? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Add contrastive examples of benign clauses that share wording with risky ones, labelled `none`",
+    "Add ten more high-risk examples so the model learns the risky patterns in more detail",
+    "Append \"Only label a clause high if it is truly risky\" to the classification instructions",
+    "Include in each example a one-line reason naming the feature that decides the label",
+    "Set temperature to 0 so the labels become deterministic across production runs"
+   ],
+   "answer": [
+    0,
+    3
+   ],
+   "explanations": [
+    "Correct. Examples only on one side of the boundary teach \"looks like a contract clause = high\". Near-boundary negatives show what does not qualify.",
+    "More one-sided examples strengthen the same bias.",
+    "A vague qualifier does not define where the boundary is.",
+    "Correct. Showing the deciding feature (e.g. \"no opt-out window\") teaches the decision rule rather than surface wording.",
+    "Determinism (which temperature does not guarantee anyway) would only make the wrong labels consistent."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-005",
+   "subskill": "D4.2",
+   "scenario": "S1",
+   "difficulty": 2,
+   "stem": "The support-resolution agent first classifies each new message into an intent that decides which workflow runs. Messages such as \"I was charged twice and I want to close my account\" are labelled inconsistently: sometimes `billing`, sometimes `cancellation`, and the second need is dropped. The intent definitions in the prompt are already clear for single-intent messages. What is the BEST change?",
+   "select": 1,
+   "options": [
+    "Expand each intent definition with a longer paragraph explaining which of the intents should win whenever a single message mentions several different topics",
+    "Ask the customer to describe one issue per message before the agent will classify their message",
+    "Replace the classifier step entirely with keyword rules that check for words like \"charged\" and \"close\"",
+    "Add a few examples of multi-intent messages showing the expected output (a primary intent plus secondary intents) with a short rationale"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "More prose may help, but the exact output for multi-intent cases is easier to show than describe and still leaves the format undefined.",
+    "This pushes the system's ambiguity onto customers and degrades the experience.",
+    "Keyword rules are brittle and still need a rule for which intent wins.",
+    "Correct. The failing case is a specific ambiguous pattern with a specific expected output shape; a few examples of it, with reasons, settle both."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-006",
+   "subskill": "D4.2",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research coordinator decomposes each question into sub-questions for search subagents. For comparative questions (\"How do EU and US battery-recycling rules differ?\"), it produces overlapping sub-questions, so subagents duplicate work while one jurisdiction's enforcement regime is never researched. The prompt already says \"make sub-questions non-overlapping and complete.\" What is the BEST improvement?",
+   "select": 1,
+   "options": [
+    "Use a fixed decomposition template of exactly four sub-questions for every research question",
+    "Increase the number of search subagents the coordinator may spawn, so that any gaps in the decomposition are more likely to be covered by one of them",
+    "Add example decompositions for several question types (comparative, causal, landscape), each with non-overlapping sub-questions covering every dimension",
+    "Repeat the instruction \"non-overlapping and complete\" at both the start and the end of the coordinator prompt"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A fixed template ignores that different question types need different splits; it trades one coverage gap for another.",
+    "More subagents add cost and more duplication without changing how the question is split.",
+    "Correct. The instruction is already present; examples show what a good split looks like for each question type, which is the part the model is getting wrong.",
+    "Repeating an instruction the model already has does not show it how to decompose a comparative question."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D4-2-007",
+   "subskill": "D4.2",
+   "scenario": "S3",
+   "difficulty": 1,
+   "stem": "The research system's synthesis subagent must format citations in the client's house style, which has awkward cases: sources with no author, reports with both a publication and a revision date, and web pages with only an access date. A paragraph describing the style has not produced consistent results. What is the MOST effective prompt change?",
+   "select": 1,
+   "options": [
+    "Rewrite the style paragraph in more formal language that matches the style guide's exact wording",
+    "Provide 3–5 example citations in tags, including the no-author, two-date and access-date-only cases",
+    "Ask the synthesis subagent to look up the house style on the web before it writes each report",
+    "Move citation formatting into a separate subagent that formats citations without the rest of the report"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Rewording the same description does not show the awkward cases.",
+    "Correct. Exact format with edge cases is easier to show than to describe; a few diverse, tagged examples covering those cases are the standard fix.",
+    "The style is client-specific and not on the web; it also adds latency and tool calls.",
+    "A separate subagent still needs to be shown the format; this adds orchestration without fixing the cause."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-2-008",
+   "subskill": "D4.2",
+   "scenario": "S5",
+   "difficulty": 3,
+   "stem": "The CI review job already runs `claude -p --json-schema review.json`, so every result is valid JSON with `file`, `line`, `severity` and `body` fields. The problem is the `body` text: some comments state the problem and a concrete fix, others are vague (\"consider improving this\"), and some restate the code. Reviewers want every comment to say what breaks, when, and what to change. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Add 3–4 example findings whose `body` shows the problem → trigger → fix pattern, across different issue types",
+    "Tighten the JSON schema with a `minLength` of 200 characters on the `body` field",
+    "Split `body` into many more required schema fields, such as `problem`, `trigger`, `impact`, `fix`, `alternatives` and `references`",
+    "Switch the output format to `stream-json` so that the review comments can be inspected while they are being generated"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Structure is already guaranteed; what varies is the content style of a free-text field. Examples are the most reliable way to steer that style.",
+    "Length is not quality and forces padding; string-length constraints are also not a reliable lever for content.",
+    "Some splitting can help, but many required fields push the model to fill them even when they do not apply, and still do not show what a good value looks like.",
+    "Streaming changes delivery, not the content of the comments."
+   ],
+   "ref": "https://code.claude.com/docs/en/cli-reference"
+  },
+  {
+   "id": "D4-2-009",
+   "subskill": "D4.2",
+   "scenario": "S2",
+   "difficulty": 2,
+   "stem": "The team uses Claude Code to add database migrations. CLAUDE.md describes the migration conventions in a paragraph (naming, reversible `down` step, batching large updates). Claude follows the naming but often omits the batching pattern or writes `down` steps differently from the rest of the repo. What is the BEST way to improve consistency?",
+   "select": 1,
+   "options": [
+    "Rewrite the paragraph in capital letters and move it to the very top of CLAUDE.md so it gets read first",
+    "Turn on plan mode for every migration task so the team can review and approve Claude's proposed approach before any migration file is written",
+    "Add a PostToolUse hook that rejects any migration file whose name does not match the naming pattern",
+    "Point Claude at two or three existing migrations that model the pattern (including a batched update) and say to follow them"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Emphasis does not show what the batching or `down` pattern looks like.",
+    "Plan mode adds a review step but does not teach the pattern; the same deviations would show up in the plan.",
+    "The naming is already correct; this checks the one thing that is not failing.",
+    "Correct. Concrete examples in the repo act as few-shot examples for code structure, which is easier to show than to describe."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-3-001",
+   "subskill": "D4.3",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The document pipeline's schema has `\"doc_type\": {\"enum\": [\"invoice\", \"credit_note\", \"receipt\"]}` and uses structured outputs. A new supplier starts sending pro-forma invoices and account statements. These come back labelled `invoice` and are posted to accounts payable as real bills. Which schema change BEST prevents this class of error?",
+   "select": 1,
+   "options": [
+    "Add `proforma` and `statement` to the enum so these two document types get their own labels and can be routed away from accounts payable",
+    "Remove the enum and make `doc_type` a free-text string so the model can describe any document",
+    "Keep the enum and add a prompt line saying \"if the document type is unclear, choose receipt\"",
+    "Add `other` to the enum plus a nullable `doc_type_detail` string, and route `other` documents to review instead of posting"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Fixes today's two types but the next unexpected type will again be forced into the nearest label.",
+    "Free text loses the closed set downstream code relies on and makes routing unreliable.",
+    "This forces unknown documents into another wrong category instead of surfacing them.",
+    "Correct. A closed enum with no escape hatch forces a wrong choice. `other` plus a detail field captures unexpected inputs, and routing them to review keeps them out of AP."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-3-002",
+   "subskill": "D4.3",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The invoice schema defines `\"total\": {\"type\": \"string\"}`. Downstream code receives values such as `\"1.234,56\"`, `\"$1,234.56\"` and `\"1234.56 EUR\"`, and its parser misreads European formats as amounts a thousand times too small. Which schema design BEST fixes this at the source?",
+   "select": 1,
+   "options": [
+    "Keep `total` as a string and add a regex-based normaliser in code that strips currency symbols and infers the decimal separator from the vendor's billing country",
+    "Make `total` a `number` described as \"grand total as printed, without currency symbol or thousands separators\" and add a separate `currency` field with ISO 4217 codes",
+    "Keep `total` as a string and add three few-shot examples that show amounts written with a dot as the decimal separator",
+    "Make `total` an object containing `raw_text`, `integer_part`, `decimal_part`, `separator` and `symbol`, all required strings"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Guessing the separator in code reproduces the same ambiguity, now with country heuristics that fail for multinational vendors.",
+    "Correct. A numeric type removes formatting ambiguity at generation time, the description states the convention, and currency becomes its own typed field instead of being mixed into the value.",
+    "Examples may help but a string type still permits any format; the schema should carry the type.",
+    "Over-engineered: many required string parts push the work back into downstream parsing and invite inconsistent splitting."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-4-001",
+   "subskill": "D4.4",
+   "scenario": "S6",
+   "difficulty": 1,
+   "stem": "The extraction pipeline validates each result in code (line items sum to the total, due date after issue date, vendor ID exists). On failure it sends the same request again with \"Your output was invalid. Try again.\" appended. Only about a quarter of retries pass. What is the BEST improvement to the retry?",
+   "select": 1,
+   "options": [
+    "Raise the retry limit from two to five attempts so that more of the failing documents eventually pass validation without any manual intervention",
+    "Send each retry to a more capable model tier while keeping the same generic retry message",
+    "Include the specific failures (e.g. \"line items sum to 1,180.00 but total is 1,280.00\") with the original document and the previous output",
+    "Drop the validation step for vendors whose invoices fail most often to reduce wasted retries"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "More blind attempts mostly repeat the same mistake and raise cost; they also increase the chance of a value being bent to pass the check.",
+    "A stronger model may help a little, but it still does not know what was wrong.",
+    "Correct. A retry works when the model is told exactly which rule failed and with which values, alongside the source and its previous answer, so it can re-read the relevant part.",
+    "Removing validation for the worst vendors lets their errors through unnoticed."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-4-002",
+   "subskill": "D4.4",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "A validation rule in the invoice pipeline requires `vat_id` for EU vendors. When it fails, the pipeline retries with the error fed back, up to five times. Retries usually pass on the second or third attempt, but an audit finds that many of these \"fixed\" VAT IDs appear nowhere on the invoice. What is the BEST change?",
+   "select": 1,
+   "options": [
+    "Allow `vat_id` to be null (\"not printed on the document\"), stop retrying in that case, and route those invoices to human review",
+    "Reduce the retry limit to two so the model has fewer chances to produce an invalid VAT ID",
+    "Add a checksum validator for VAT ID formats and keep retrying with the error fed back until the model returns an ID that passes both checks",
+    "Add \"Never invent a VAT ID\" to the retry message and keep the five-attempt limit for EU vendors"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. When the information is absent from the source, retrying cannot succeed honestly; pressure to pass validation produces fabrication. Represent absence explicitly and send it to a human.",
+    "Fewer retries reduce but do not remove fabrication, because the loop still demands a value that does not exist.",
+    "A format check makes invented IDs look even more legitimate; the problem is absence, not format.",
+    "The loop still requires a value the document does not contain; the instruction conflicts with the validation it is trying to satisfy."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-4-003",
+   "subskill": "D4.4",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The invoice pipeline occasionally misreads a line-item amount; the result is schema-valid and looks plausible, so nobody notices until month-end reconciliation. The team wants these errors caught at extraction time without adding a second model call per invoice. Which design BEST achieves this?",
+   "select": 1,
+   "options": [
+    "Add a `confidence` field to each line item and send items below 0.7 to human review",
+    "Run a second, independent extraction of every invoice with a different prompt and compare the two results field by field, flagging any disagreement",
+    "Trust the structured-output guarantee and rely on month-end reconciliation to surface any differences",
+    "Extract `stated_total` exactly as printed alongside the line items, recompute the line-item sum in code, and retry or flag the invoice on mismatch"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Self-reported confidence is not calibrated; misreads are typically reported with high confidence.",
+    "Effective but it doubles extraction cost, which the requirement rules out.",
+    "Structured outputs guarantee shape, not correctness; the gap is exactly what is failing.",
+    "Correct. A self-correction field (the printed total) gives code an independent value to check the extracted parts against, at no extra call; mismatches become retries with the discrepancy or review items."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-4-004",
+   "subskill": "D4.4",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "The extraction pipeline re-sends a document with the validation error as feedback when a check fails. Which TWO of the following failures will that retry generally NOT fix, so they should go straight to human review or a fallback path? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Line items sum to 1,180.00 while the extracted total is 1,280.00",
+    "`due_date` was extracted as earlier than `issue_date` on an invoice with clearly printed dates",
+    "Validation requires `po_number`, but the invoice has no PO number printed anywhere",
+    "A date came back as `03/04/2025` although the schema description asks for ISO 8601",
+    "Page 2 of the scan, which holds the line items, is missing from the uploaded file"
+   ],
+   "answer": [
+    2,
+    4
+   ],
+   "explanations": [
+    "Retryable: the information is on the page and a targeted error message tells the model where to re-read.",
+    "Retryable: the dates are present and legible, so feedback naming the conflict usually corrects the misread.",
+    "Correct. The value does not exist in the source; retrying invites fabrication. Represent it as absent and review.",
+    "Retryable: the date is present; feedback on the expected format fixes it.",
+    "Correct. The source itself is incomplete; no amount of re-reading recovers the missing page."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-4-005",
+   "subskill": "D4.4",
+   "scenario": "S6",
+   "difficulty": 1,
+   "stem": "The contract-extraction pipeline uses structured outputs. A business rule says a contract's `end_date` must be after its `start_date`. Where should the pipeline enforce this rule?",
+   "select": 1,
+   "options": [
+    "In the JSON schema, so constrained decoding prevents an end date earlier than the start date",
+    "In code after the response is parsed, triggering a retry with the specific error or a review item",
+    "In the prompt only, as a sentence telling the model that the end date always follows the start date",
+    "In a `dates_valid` boolean that the model sets itself after it has extracted both dates"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Structured outputs enforce shape and types; a cross-field comparison between two dates is not something to rely on the schema for.",
+    "Correct. Semantic and cross-field rules are validated in code after parsing; failures feed a targeted retry or review.",
+    "A prompt can lower the error rate but cannot guarantee the rule.",
+    "A self-reported flag is not a check; the model can set it to true on a wrong extraction."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+  },
+  {
+   "id": "D4-4-006",
+   "subskill": "D4.4",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "The invoice pipeline's validation-and-retry loop (two retries with error feedback) works for most vendors. For one large vendor, about 300 invoices a week fail all retries with the same error: a \"shipping and handling\" summary row is extracted as a line item, so totals never reconcile. What is the BEST long-term fix?",
+   "select": 1,
+   "options": [
+    "Raise the retry limit for that vendor to five attempts so more of its invoices eventually pass",
+    "Send that vendor's retries to the most capable model tier while keeping the existing prompt, since a stronger model should read the layout correctly",
+    "Treat it as a systematic prompt gap: add an example of this layout (summary rows are not line items) and route this week's failures to review",
+    "Relax the totals check for that vendor so its invoices stop failing validation on every run"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The same error on every attempt shows the retry message is not resolving the misunderstanding; more attempts add cost.",
+    "May fix some cases, but pays the premium on every retry and leaves the first-pass prompt wrong.",
+    "Correct. A failure that repeats identically across retries and documents points at the prompt, not at noise. Fixing it with a targeted example removes the failures at the first pass.",
+    "Disabling the check hides real errors for exactly the vendor that has them."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+  },
+  {
+   "id": "D4-4-007",
+   "subskill": "D4.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the research system, the synthesis subagent returns a report as JSON in which each claim lists the `source_ids` that support it. Occasionally a claim cites an ID that does not exist in the findings the subagent was given. The report is then published with a broken citation. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "In the coordinator's code, check each cited ID against the findings set; on failure re-prompt with the invalid and valid IDs, then drop or flag claims still unsupported",
+    "Add \"Only cite source IDs that appear in the findings you were given\" to the synthesis prompt",
+    "Remove `source_ids` from the structured output entirely and instead let readers check each claim against the bibliography at the end of the published report",
+    "Remove `source_ids` from the output and let readers check the claims against the bibliography"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Existence of a cited ID is a cheap deterministic check in code; a targeted retry fixes most cases and a final fallback keeps unsupported claims out.",
+    "A prompt-only rule reduces but does not guarantee correct citations; nothing catches the failures that remain.",
+    "Self-review in the same context tends to confirm its own output and is still not a deterministic check.",
+    "Removing provenance hides the problem and makes the report less trustworthy."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D4-4-008",
+   "subskill": "D4.4",
+   "scenario": "S5",
+   "difficulty": 2,
+   "stem": "A CI job runs `claude -p --json-schema fix-plan.json` to produce a plan of file edits for a failing build, and a later step applies the plan. The JSON always matches the schema, but sometimes the plan lists a file path that does not exist in the repo, and the apply step crashes. What should the pipeline do?",
+   "select": 1,
+   "options": [
+    "Increase `--max-turns` so Claude has more turns to explore the repository with Read, Grep and Glob before it writes out the final plan of file edits",
+    "Validate every path before applying; on failure, re-run once with the error naming the missing paths, then fail the job with that message if it persists",
+    "Add \"Only reference files that exist in the repository\" to CLAUDE.md so CI picks it up",
+    "Drop `--json-schema` and parse a free-text plan, so the model is not constrained by the schema"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "More turns may help exploration but does not check the plan before it is applied.",
+    "Correct. Schema-valid output still needs semantic validation in code. A capped, targeted retry with the specific error, then a clear failure, keeps bad plans from being applied.",
+    "A prompt-level rule can reduce the rate but nothing stops a bad path reaching the apply step.",
+    "The schema is not the cause; removing it loses the structural guarantee and adds parsing failures."
+   ],
+   "ref": "https://code.claude.com/docs/en/headless"
+  },
+  {
+   "id": "D4-5-001",
+   "subskill": "D4.5",
+   "scenario": "S6",
+   "difficulty": 1,
+   "stem": "The extraction platform has two workloads: a customer portal where a user uploads one invoice and waits on screen for the extracted fields, and a monthly backlog of about 200,000 archived invoices from newly onboarded clients. To cut spend, a manager proposes routing all extraction through the Message Batches API. What should the architect recommend?",
+   "select": 1,
+   "options": [
+    "Keep the portal on real-time Messages calls and send the monthly backlog through the Message Batches API",
+    "Route everything through batches, and show portal users a \"processing\" message until their batch result arrives",
+    "Keep both workloads on real-time calls and switch the backlog to the smallest model tier to save cost",
+    "Batch the portal uploads every five minutes into small batches so users still get results quickly"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Batch the bulk, non-blocking backlog for the 50% discount; keep the interactive path real-time.",
+    "Batches have no latency SLA and can take up to 24 hours; a user waiting on screen is a blocking path.",
+    "A smaller model may hurt extraction quality and leaves the 50% batch saving on the table for work nobody is waiting on.",
+    "Small batches are still asynchronous with no completion guarantee, so users could wait hours."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-5-002",
+   "subskill": "D4.5",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "Each quarter, the extraction pipeline must process about 8,000 regulatory filings and deliver results within two hours of the filing window closing, or the firm incurs a penalty. An engineer points out that batches in their past jobs usually finished within an hour and proposes using the Message Batches API for the 50% saving. What is the BEST decision?",
+   "select": 1,
+   "options": [
+    "Use a batch, since past batches finished well inside the two-hour window and the saving is substantial",
+    "Use a batch with prompt caching on the shared instructions so that every request is processed faster",
+    "Split the work into eight batches of 1,000 filings each and submit them together, because smaller batches are processed and returned first",
+    "Use real-time requests with concurrency sized to the rate limits, because batches can take up to 24 hours with no latency guarantee"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Past speed is not a guarantee; a batch may take up to 24 hours, so the penalty risk is real.",
+    "Caching cuts cost and can help latency on real-time calls, but it does not give a batch a completion-time guarantee.",
+    "Batch size does not come with a completion-time guarantee.",
+    "Correct. A hard deadline shorter than the batch processing window rules out batches; real-time requests with planned concurrency meet it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-5-003",
+   "subskill": "D4.5",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The nightly extraction batch of 50,000 invoices has ended. Results are due by the end of the next business day. Code validation finds 1,000 schema-valid results that fail business rules (totals do not reconcile), and in 200 of those the needed value is clearly missing from the scan. Cost is the main concern. Which TWO actions are BEST? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Resubmit all 50,000 invoices in a new batch with a strengthened prompt so the whole run stays consistent",
+    "Put the 800 fixable items in a follow-up batch keyed by the same `custom_id`s, each request including its specific validation error",
+    "Add the 1,000 failed invoices unchanged to tomorrow night's batch, without the validation errors",
+    "Raise `max_tokens` on every request in the next nightly batch so that more invoices pass validation",
+    "Send the 200 invoices with missing data to human review instead of retrying them"
+   ],
+   "answer": [
+    1,
+    4
+   ],
+   "explanations": [
+    "Re-processing 49,000 good results wastes money; only failed items need another pass.",
+    "Correct. A follow-up batch fits the deadline and cost goal; retrying only failures with their specific error and keeping `custom_id` makes the join trivial.",
+    "Without the error feedback the retry is likely to repeat the same mistake, and it misses the next-day deadline.",
+    "The failures are semantic, not truncation; a higher limit does not address them.",
+    "Correct. When the information is absent from the source, retrying cannot help and risks fabrication; route it to people."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-5-004",
+   "subskill": "D4.5",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "An architect is reviewing the design document for the extraction platform's nightly batch job, which submits one request per document through the Message Batches API. Which THREE statements in the document are correct? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Each batch request is a single Messages call, so a multi-step tool loop (look up the vendor, then extract) cannot run inside one request",
+    "Results are returned in submission order, so they can be joined back to documents by position",
+    "Using the document ID as `custom_id` lets results be joined to source documents reliably",
+    "Requests that expire are not billed and can be resubmitted in a later batch",
+    "Every batch is guaranteed to finish within one hour of submission",
+    "The batch discount cannot be combined with prompt caching on the shared instructions"
+   ],
+   "answer": [
+    0,
+    2,
+    3
+   ],
+   "explanations": [
+    "Correct. A batch request is one Messages call; tool loops that need results mid-task must be flattened (pre-fetch inputs) or run in real time.",
+    "Results can come back in any order; join on `custom_id`.",
+    "Correct. A stable business key as `custom_id` is the reliable correlation mechanism.",
+    "Correct. Only succeeded requests are billed; expired, errored and canceled ones are not, and can be resubmitted.",
+    "Batches can take up to 24 hours; there is no one-hour guarantee.",
+    "The batch discount stacks with prompt caching discounts."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-5-005",
+   "subskill": "D4.5",
+   "scenario": "S5",
+   "difficulty": 1,
+   "stem": "The platform team runs two Claude workloads in CI: a pull-request review that must post findings before a PR can merge, and a nightly licence-and-dependency audit that sends each of 400 repositories' manifests to the Messages API in a single call and emails a report in the morning. Finance asks for a 30% cost reduction. Which change BEST fits?",
+   "select": 1,
+   "options": [
+    "Move both workloads to the Message Batches API and post PR review results whenever their batch completes",
+    "Move the PR review to the Message Batches API, because it is the higher-volume workload of the two",
+    "Move the nightly audit to the Message Batches API and keep the merge-blocking PR review on real-time calls",
+    "Keep both on real-time calls and set a lower `max_tokens` on each request so that responses cost less"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "PR review blocks merges; up to 24 hours of batch latency would stall the team.",
+    "Volume is not the criterion; the review is on the blocking path.",
+    "Correct. The audit is single-call, bulk and nobody waits on it overnight: an ideal batch workload at 50% cost. The blocking review stays real-time.",
+    "Lowering `max_tokens` truncates outputs rather than reducing the cost of the work needed."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-5-006",
+   "subskill": "D4.5",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the research system, an analyst submits a question and watches the report build over a few minutes. The coordinator waits for each wave of subagent results before deciding the next sub-questions. To cut cost, someone proposes sending every subagent call through the Message Batches API. What is the BEST response?",
+   "select": 1,
+   "options": [
+    "Reject it here: the coordinator blocks on each wave and a user is waiting, but batches have no latency guarantee; batch only non-blocking work",
+    "Adopt it, because the 50% saving outweighs the risk of an occasional slow research report",
+    "Adopt it, but cap each batch at ten requests so that every wave of subagent calls finishes quickly",
+    "Adopt it only for the synthesis step, since synthesis is the single final call the coordinator makes before it returns the finished report to the analyst"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Batches suit work nobody is waiting on. Both the dependency between waves and the waiting analyst put this path on real-time calls.",
+    "Batches can take up to 24 hours; an interactive report that blocks on each wave could stall for hours.",
+    "Small batches still carry no completion-time guarantee.",
+    "The analyst is still waiting on the synthesis result, so it is on the blocking path too."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-5-007",
+   "subskill": "D4.5",
+   "scenario": "S4",
+   "difficulty": 3,
+   "stem": "The internal developer platform regenerates onboarding summaries for 3,000 service repositories every weekend. Today an Agent SDK agent explores each repo with Glob, Grep and Read over several turns, then writes the summary. Nobody waits on the job, and the team wants the 50% batch discount. What is the BEST approach?",
+   "select": 1,
+   "options": [
+    "Submit the existing agent conversations to the Message Batches API unchanged, since the batch service runs each agent's tool loop through to completion",
+    "Gather each repo's key inputs in code (README, manifests, directory tree), then batch one single-call summary request per repo",
+    "Keep the weekend job on the real-time agent, because exploring code is never compatible with batch processing",
+    "Batch only the first turn of each agent run and continue the remaining exploration turns in real time"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A batch request is one Messages call; it cannot execute your tools and continue a multi-turn loop.",
+    "Correct. Flattening the loop by pre-fetching inputs makes each repo one batchable request. It is an architecture change, so check that summary quality holds on a sample.",
+    "Too absolute: the exploration can be replaced with pre-fetched inputs for a well-understood repo layout, making the work batchable.",
+    "Splitting turns across batch and real-time adds latency and complexity while saving little."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "D4-6-001",
+   "subskill": "D4.6",
+   "scenario": "S2",
+   "difficulty": 1,
+   "stem": "A developer implements a rate limiter with Claude Code over a long session, then types \"Now review your changes for bugs.\" Claude reports that the implementation looks correct. A teammate later finds two edge-case bugs in the same diff. For future features, what is the BEST way to get a useful review?",
+   "select": 1,
+   "options": [
+    "In the same session, ask Claude to be much more critical this time and to assume that the diff contains at least three bugs it must find",
+    "Switch the same session to a more capable model before asking for the review of the diff",
+    "Review in a fresh context that never saw the implementation, such as `/code-review` or a reviewer subagent given the spec",
+    "Ask the same session for the review twice and merge whatever findings appear in either answer"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Still anchored on the reasoning that produced the code; demanding a bug count also invites invented findings.",
+    "A different model in the same context still sees and is influenced by the implementation reasoning.",
+    "Correct. A reviewer that did not write the code and did not see the reasoning behind it is not swayed by that reasoning; `/code-review` runs in such a fresh subagent.",
+    "Repeating the same anchored review mostly reproduces the same blind spots."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-6-002",
+   "subskill": "D4.6",
+   "scenario": "S2",
+   "difficulty": 3,
+   "stem": "The team is adding a project subagent in `.claude/agents/reviewer.md` that Claude Code will use to review features before PRs are opened. Which TWO properties make it an effective independent reviewer? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "It inherits the implementing conversation so it understands why each decision was made",
+    "Its `tools` are limited to `Read, Grep, Glob`, so it can report problems but not edit files",
+    "It has Edit and Write so it can fix each problem as soon as it finds it, saving a round trip",
+    "It runs on the same model with \"be extra careful\" added to its description field",
+    "Its prompt has it compare the changed files against the spec, report correctness gaps and skip style"
+   ],
+   "answer": [
+    1,
+    4
+   ],
+   "explanations": [
+    "Subagents start with a fresh context; inheriting the reasoning would recreate the anchoring that makes self-review weak.",
+    "Correct. A read-only tool set makes it a reviewer rather than a second author, and the limit is enforced by Claude Code rather than requested in a prompt.",
+    "A reviewer that silently rewrites code mixes generation and review, and its changes are themselves unreviewed.",
+    "Emphasis in a description adds nothing; independence and criteria are what make the review useful.",
+    "Correct. Reviewing against explicit criteria, with an instruction to skip style, keeps the reviewer from padding its report with noise."
+   ],
+   "ref": "https://code.claude.com/docs/en/sub-agents"
+  },
+  {
+   "id": "D4-6-003",
+   "subskill": "D4.6",
+   "scenario": "S2",
+   "difficulty": 2,
+   "stem": "A Claude Code refactor touches 45 files. The developer asks a fresh reviewer session to review the whole diff in one pass. The review is detailed for the first few files and then turns into generic remarks; a bug in file 38 is missed. Which review structure BEST fixes this?",
+   "select": 1,
+   "options": [
+    "Review each file or small module in its own focused pass, then run a separate integration pass over changed interfaces and call sites",
+    "Rerun the single-pass review on a model with a larger context window so that all 45 changed files and their surrounding code fit comfortably",
+    "Keep the single pass but add \"review every file with equal thoroughness\" to the review prompt",
+    "Split the refactor into 45 separate pull requests so that each one can be reviewed on its own"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. One giant pass dilutes attention. Per-file passes give each file focused review, and a separate integration pass catches what no single file shows.",
+    "The diff already fits; the problem is attention spread across too much material, not window size.",
+    "An instruction does not change how attention is spread over a huge input.",
+    "Over-engineering: it breaks up a coherent change and loses the cross-file view entirely."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-6-004",
+   "subskill": "D4.6",
+   "scenario": "S2",
+   "difficulty": 3,
+   "stem": "The team now reviews large Claude Code changes with one reviewer pass per file. Every pass on a recent change came back clean, yet a bug shipped: `formatPrice(amount, currency)` gained a third parameter `locale` with a default value, and two callers in other modules kept the old call and silently formatted prices for the wrong region. What is the MOST likely gap in the review design?",
+   "select": 1,
+   "options": [
+    "Each per-file pass used too short a prompt and should list more specific bug categories",
+    "Per-file passes should be run three times each with differently worded prompts, and the findings merged",
+    "The per-file passes should use a larger, more capable model tier than the one that generated the code",
+    "There is no cross-file integration pass checking changed signatures and contracts against their call sites"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A file-local pass of the changed function cannot see the callers in other modules, however detailed its prompt.",
+    "Voting raises recall for issues visible within a file; this bug is only visible across files.",
+    "Model capability does not help when the relevant code is not in the pass's input.",
+    "Correct. Per-file passes catch local issues; contract changes that break callers elsewhere need a separate integration pass over interfaces and call sites."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-6-005",
+   "subskill": "D4.6",
+   "scenario": "S5",
+   "difficulty": 2,
+   "stem": "A CI job runs `claude -p` to generate a fix for a failing test, then runs `claude -p --continue \"Review the fix you just made and list any problems\"` before opening a PR. The review step almost never reports problems, but human reviewers often do. What is the BEST change to the review step?",
+   "select": 1,
+   "options": [
+    "Use `--resume` with the generator's exact session ID instead of `--continue`, so that the review step is attached to precisely the right session even when jobs run in parallel",
+    "Run the review as a separate `claude -p` invocation in a new session, given the diff and explicit review criteria, not the generator's conversation",
+    "Keep `--continue` but add \"Be highly skeptical of your own work\" to the review prompt",
+    "Drop the review step, because the fix already passes the test that was failing"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Resuming the right session is still the generator reviewing its own work in the same context.",
+    "Correct. A fresh session that sees only the diff and the criteria is an independent reviewer, not anchored on the reasoning that produced the fix.",
+    "Wording does not remove the anchoring of reviewing in the generator's own context.",
+    "One passing test does not cover regressions, security or side effects that review is meant to catch."
+   ],
+   "ref": "https://code.claude.com/docs/en/headless"
+  },
+  {
+   "id": "D4-6-006",
+   "subskill": "D4.6",
+   "scenario": "S5",
+   "difficulty": 3,
+   "stem": "The CI review job re-reviews the entire pull request on every push. On long-lived PRs this is costly, and developers complain that the same comments are re-posted after each push. Which TWO changes BEST address this? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Review only the files changed since the last reviewed commit on each push",
+    "Replace the PR review with a single nightly review of the whole repository",
+    "Send each push's review through the Message Batches API so that it costs half as much",
+    "Pass the PR's existing review comments to the reviewer and tell it not to repeat them",
+    "Merge the per-file passes into one large pass over the full PR to reduce calls per push"
+   ],
+   "answer": [
+    0,
+    3
+   ],
+   "explanations": [
+    "Correct. Reviewing only what changed avoids paying again for unchanged code and avoids repeat findings on it.",
+    "Moves review off the PR, so developers lose feedback before merge.",
+    "Review blocks merge; batch latency of up to 24 hours does not fit, and it does not stop duplicates.",
+    "Correct. Giving the reviewer the prior findings lets it report only what is new.",
+    "One large pass dilutes attention and still re-reviews unchanged code."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-6-007",
+   "subskill": "D4.6",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the research system, after the synthesis subagent writes its report, the coordinator asks the same synthesis subagent (in the same conversation) to \"check that every claim is supported by the sources.\" It confirms nearly every claim, yet spot checks keep finding claims whose cited source says something different. What is the BEST change?",
+   "select": 1,
+   "options": [
+    "Ask the synthesis subagent to quote the exact supporting sentence from a source for each claim while it performs that same self-check in its conversation",
+    "Have the coordinator re-read the report itself and judge which claims seem plausible enough to keep",
+    "Run the self-check twice in the synthesis conversation and keep only the claims confirmed both times",
+    "Add a verification subagent with fresh context that gets the report and cited source excerpts and returns unsupported claims"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Quoting helps grounding, but the check is still performed by the author, anchored on its own conclusions.",
+    "Plausibility is not verification, and the coordinator does not compare claims against the source text.",
+    "Repeating an anchored self-check tends to repeat the same confirmations.",
+    "Correct. An independent instance that did not write the report, given the evidence and a clear task, is far less likely to rubber-stamp its claims."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D4-6-008",
+   "subskill": "D4.6",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "The research system now has an independent verifier. It receives the full 12-section report and all 30 source documents in one call. It reliably catches unsupported claims in the first and last sections but misses many in the middle sections. Which design BEST improves recall?",
+   "select": 1,
+   "options": [
+    "Verify each section separately against only the sources it cites, then run a short cross-section consistency pass",
+    "Move the verifier to a model tier with a larger context window so that all 30 sources fit more comfortably",
+    "Add \"Pay special attention to the middle sections of the report\" to the verifier's instructions",
+    "Shuffle the order of the report's sections on each run so that every section is sometimes at the start"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Splitting into focused per-section passes removes attention dilution, and a separate cross-section pass catches inconsistencies no single section reveals.",
+    "Everything already fits; a larger window does not fix shallow attention over a huge input.",
+    "An instruction does not change how attention spreads over the input and may only shift which parts are missed.",
+    "Shuffling moves the blind spot around rather than removing it, and makes results less reproducible."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D4-6-009",
+   "subskill": "D4.6",
+   "scenario": "S1",
+   "difficulty": 2,
+   "stem": "The support-resolution agent drafts replies that deny refunds and quote policy terms. Occasionally a draft states the wrong return window or invents a condition, which creates complaints. The team wants a check on refund-denial replies before they are sent, without a human reading every one. What is the BEST design?",
+   "select": 1,
+   "options": [
+    "Add \"Before replying, double-check that your policy statements are correct\" to the agent's system prompt",
+    "Generate three independent drafts for every refund-denial reply and automatically send whichever draft is most similar to the other two drafts",
+    "Send each denial draft to a separate fresh-context review call with the relevant policy text and pass/fail criteria; regenerate or escalate on failure",
+    "Move the support agent to the most capable model tier so that its policy statements are more accurate"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A self-check inside the agent's own context is anchored on the draft and is not an independent gate.",
+    "Agreement among drafts written from the same context does not verify them against the policy; all three can share the same mistake.",
+    "Correct. An independent reviewer with the source policy and explicit criteria is a targeted second pass on high-stakes replies; failures get a defined path.",
+    "A stronger model lowers the error rate but provides no check before sending."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-6-010",
+   "subskill": "D4.6",
+   "scenario": "S4",
+   "difficulty": 1,
+   "stem": "The developer-productivity team is adding a shared `review` command to the platform's Claude Code configuration. It runs the review in a fresh subagent instead of the engineer's current session. An engineer asks why that should find more issues than asking the current session. What is the BEST explanation?",
+   "select": 1,
+   "options": [
+    "A fresh subagent automatically runs on a larger, more capable model than the engineer's session",
+    "The fresh reviewer has not seen the reasoning that produced the code, so it is not anchored on that reasoning",
+    "A fresh subagent has a larger context window, so it can read more of the codebase than the session",
+    "Subagents are given extra built-in tools that the main Claude Code session does not have"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Subagents do not automatically get a bigger model; the benefit is independence.",
+    "Correct. Independence is the point: a reviewer that did not watch the code being written is not swayed by the reasoning behind it.",
+    "Context window size is not what makes the review better.",
+    "Subagents typically get the same or fewer tools; a reviewer is often restricted to read-only tools."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D4-6-011",
+   "subskill": "D4.6",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The contract pipeline extracts each document in a contract package separately: a master agreement plus six amendments. The resulting records disagree on payment terms because amendment 4 changes them, and downstream systems pick whichever record they read first. What is the BEST design change?",
+   "select": 1,
+   "options": [
+    "Extract all seven documents in one giant call so that the model sees every document at once",
+    "Always keep only the record extracted from the most recently dated document in the package and discard the records from all the earlier documents",
+    "Raise `max_tokens` on each per-document call so the extraction captures more detail from each amendment",
+    "Keep per-document extraction and add a cross-document reconciliation pass that applies document dates and precedence and flags conflicts"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "One giant pass dilutes attention across hundreds of pages and loses the focused per-document extraction.",
+    "Later amendments often change only some terms; discarding earlier records loses everything they do not override.",
+    "Output length is not the issue; each record is internally correct.",
+    "Correct. Local per-document passes followed by an integration pass is the multi-pass pattern: the second pass sees relationships no single document shows."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D4-6-012",
+   "subskill": "D4.6",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "For high-value contracts, the extraction pipeline will add a review stage before records are loaded into the contract-management system. Which THREE design choices BEST make that stage effective? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Let the reviewer silently overwrite any field it disagrees with, so that records load faster",
+    "Use a separate instance with fresh context, given the source document and extracted JSON, that checks each field and cites the supporting passage",
+    "Give the reviewer explicit field-level criteria, including how to treat fields absent from the document",
+    "Append \"verify your answer\" to the extractor's own conversation and treat its reply as the review",
+    "Review every field of all 50 contracts in a portfolio in a single reviewer call to keep cost down",
+    "Route fields where extractor and reviewer disagree to a human instead of picking one automatically"
+   ],
+   "answer": [
+    1,
+    2,
+    5
+   ],
+   "explanations": [
+    "Silent overwrites turn the reviewer into an unreviewed second extractor and hide disagreements.",
+    "Correct. An independent instance anchored on the source text, not on the extractor's reasoning, is the core of a useful second pass.",
+    "Correct. Explicit criteria make review results consistent and stop the reviewer from guessing what counts as a match.",
+    "This is self-review in the same context and inherits the extractor's blind spots.",
+    "One giant pass dilutes attention; per-document review is what catches field-level errors.",
+    "Correct. Disagreement is exactly the signal that a human should decide."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  }
+ ]
+}

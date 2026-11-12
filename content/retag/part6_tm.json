@@ -1,0 +1,751 @@
+{
+ "questions": [
+  {
+   "id": "TM1-001",
+   "subskill": "D2.1",
+   "difficulty": 1,
+   "stem": "The support-resolution agent has a `lookup_order` tool whose description is just \"Order tool.\" In testing, when customers ask \"where is my package?\", Claude often answers from earlier conversation text or asks for details it could get from the tool, rather than calling it. What should the architect do FIRST?",
+   "select": 1,
+   "options": [
+    "Force the tool with `tool_choice` on every request so Claude can never answer an order question without calling it.",
+    "Rewrite the description to state what it returns and when to call it (order status, shipping, contents).",
+    "Increase `max_tokens` so Claude has room to plan tool calls.",
+    "Add the customer's full order history to the system prompt so Claude has the data without needing the tool."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Forcing a call on every turn would also fire on unrelated questions such as greetings or return policy, and forced tool_choice is rejected on some newer models. It hides a description problem rather than fixing it.",
+    "Claude decides whether to call a tool mostly from its description. Saying when to call it is the highest-leverage fix and the documented first step.",
+    "max_tokens limits output length. It has no effect on whether Claude thinks the tool applies.",
+    "Preloading order history goes stale and bloats every request. It works around the tool instead of making it usable."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools",
+   "scenario": "S1"
+  },
+  {
+   "id": "TM1-003",
+   "subskill": "D2.2",
+   "difficulty": 1,
+   "stem": "In the support-resolution agent, the `check_inventory` tool calls a warehouse API that sometimes times out. Right now the timeout exception propagates and crashes the whole agent run. What is the BEST way to handle this?",
+   "select": 1,
+   "options": [
+    "Return a `tool_result` with `is_error: true` and a specific, actionable message about the timeout.",
+    "Catch the exception and return an empty string as a normal successful result so the agent loop keeps running.",
+    "Delete the failed `tool_use` block and resend.",
+    "Retry the entire `messages.create` call from the beginning, in a loop, until the warehouse API finally responds."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Returning the failure as an is_error result keeps the loop intact and tells Claude what happened, so it can retry, change approach, or explain to the user. Actionable messages work best.",
+    "An empty \"success\" looks like real data, so Claude may tell the customer the item is out of stock.",
+    "Rewriting Claude's turn hides the failure from the model and corrupts the transcript. The tool_use still needs an answer.",
+    "Regenerating the whole turn wastes tokens and may never succeed. The failure is in one tool and should be reported in that tool's result."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls",
+   "scenario": "S1"
+  },
+  {
+   "id": "TM1-005",
+   "subskill": "D4.3",
+   "difficulty": 2,
+   "stem": "The support-resolution agent's `create_ticket` tool sometimes gets `priority` as the string \"High\" when the schema says integer, and now and then a required `queue` field is missing. The downstream API rejects these calls. The team wants tool inputs guaranteed to conform to the schema. What should they do?",
+   "select": 1,
+   "options": [
+    "Add \"IMPORTANT: always follow the input schema exactly, using integers for priority\" to the tool description.",
+    "Set temperature to 0.",
+    "Set `strict: true` on the tool (objects need `additionalProperties: false`).",
+    "Copy the full JSON schema into the system prompt as a worked example of a valid `create_ticket` call."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Stronger wording may reduce errors but guarantees nothing.",
+    "Lower temperature reduces variation but doesn't enforce a schema. It can repeat the same wrong type every time.",
+    "Strict tool use constrains generation to the input schema, which removes type mismatches and missing required fields. That is the documented fix.",
+    "The schema is already in the tool definition. Repeating it in prose adds tokens without adding a guarantee."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/strict-tool-use",
+   "scenario": "S1"
+  },
+  {
+   "id": "TM1-009",
+   "subskill": "D2.1",
+   "difficulty": 2,
+   "stem": "An internal scheduling assistant on the developer-productivity platform exposes `list_users`, `list_events`, and `create_event`, mirroring the REST API one-to-one. Transcripts show Claude paging through hundreds of users and events to find a free slot, using tens of thousands of tokens per booking. Based on Anthropic's guidance on writing tools for agents, which TWO changes are MOST appropriate? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Return the raw JSON for every user and event, including internal IDs and all fields, so Claude has maximum information.",
+    "Add more granular endpoints such as `get_user_by_id` and `get_event_by_id` so Claude has more options.",
+    "Replace the chain with a higher-level `schedule_event` tool that finds common availability and books the meeting.",
+    "Remove pagination from `list_users` so Claude gets everyone in one call instead of many round trips.",
+    "Replace `list_users` with a `search_users` tool that returns only people matching a name or email query."
+   ],
+   "answer": [
+    2,
+    4
+   ],
+   "explanations": [
+    "Low-signal fields and opaque IDs waste tokens and lead to mistakes. The guidance is to return meaningful, concise context.",
+    "Adding more thin endpoint wrappers spreads the work across even more calls, the opposite of consolidation.",
+    "Consolidating a multi-step workflow into one purpose-built tool is a core recommendation. It saves tokens and removes chances for intermediate errors.",
+    "One unpaginated dump floods the context window. The guidance is pagination and filtering with sensible defaults.",
+    "Search beats list for agents. Returning only relevant matches keeps context small, as in the article's search_contacts vs list_contacts example."
+   ],
+   "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM1-010",
+   "subskill": "D2.1",
+   "difficulty": 2,
+   "stem": "An internal CRM tool on the developer-productivity platform returns records like `{\"owner\": \"5f2c9e1a-...\", \"acct\": \"a91e77d0-...\", \"stage\": 3}`. Claude often passes the wrong ID in follow-up calls and sometimes makes up IDs. Which change is MOST likely to improve accuracy?",
+   "select": 1,
+   "options": [
+    "Base64-encode the UUIDs to save tokens.",
+    "Add a system prompt instruction telling Claude to carefully double-check every UUID against earlier results before using it.",
+    "Enable `strict: true` on the follow-up tools so that only well-formed UUID strings can ever be passed as arguments.",
+    "Return readable names/labels, plus a `response_format` option that includes full IDs only when needed."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Encoding makes the IDs even less meaningful to the model and doesn't help it pick the right one.",
+    "Claude has nothing to check the IDs against. The problem is that the data is uninterpretable, not a lack of care.",
+    "Strict mode enforces schema shape, not meaning. A well-formed but wrong UUID still passes.",
+    "The guidance is to resolve opaque identifiers into semantically meaningful values. That measurably improves precision and reduces hallucinated IDs. A concise/detailed switch saves tokens while still exposing IDs when needed."
+   ],
+   "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM1-011",
+   "subskill": "D2.1",
+   "difficulty": 1,
+   "stem": "An internal SRE assistant's `search_logs` tool sometimes returns about 40k tokens of raw log lines. After a few calls the agent's answers get worse and the context fills up. What is the BEST change to the tool?",
+   "select": 1,
+   "options": [
+    "Add filters and a default limit with pagination; when truncating, say so and suggest how to narrow.",
+    "Silently truncate every result to its first 2,000 characters so the context window can never be flooded by one call.",
+    "Increase `max_tokens` on each request.",
+    "Move the most recent hour of logs into the system prompt on every request so the tool needs to return far less data."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Pagination, filtering, and truncation with sensible defaults are the recommended way to make tool output token-efficient. Telling the agent how to narrow the search steers it toward better queries.",
+    "Silent truncation leaves Claude reasoning from partial data without knowing it. If you truncate, say so and give guidance.",
+    "max_tokens controls output length, not how much tool output lands in the input context.",
+    "This puts a large, ever-changing blob into every request and breaks prompt caching. The tool itself should return focused results."
+   ],
+   "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM1-012",
+   "subskill": "D1.4",
+   "difficulty": 3,
+   "stem": "The support-resolution agent, built on the SDK Tool Runner, has an `issue_refund` tool. Compliance requires a human to approve any refund over $500 before money moves. Declined refunds must not execute, and Claude should be able to tell the customer what happened. Which approach BEST meets these requirements?",
+   "select": 1,
+   "options": [
+    "Add \"Always ask the user for explicit confirmation before issuing any refund over $500\" to the system prompt.",
+    "Gate inside the run function (or on the yielded call): over $500, get approval; if declined, return \"not approved\".",
+    "Drop the Tool Runner and hand-write the agent loop, because the runner executes tools automatically and cannot support approval gates.",
+    "Set `strict: true` with `\"maximum\": 500` on the amount field so Claude is structurally unable to request larger refunds."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A prompt instruction is a request, not a control. Claude might not ask, and the approval would come from the customer rather than a compliance reviewer.",
+    "Approval belongs in code that runs before the side effect. The Tool Runner supports gating in the run function or intervening on the yielded message, and returning a declined result keeps Claude informed.",
+    "This is a common misconception. The runner supports human-in-the-loop gates, so a manual loop isn't required.",
+    "Strict mode doesn't support numeric constraints like maximum (the raw API rejects the schema; the SDKs strip it and check client-side), and blocking large refunds outright isn't the requirement. They need approval, not prohibition."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-runner",
+   "scenario": "S1"
+  },
+  {
+   "id": "TM1-013",
+   "subskill": "D2.1",
+   "difficulty": 2,
+   "stem": "An internal engineering assistant has only a `bash` tool. It sends email by running `curl` against the company mail API. Security now requires every outbound email to be shown to the user for confirmation and recorded in an audit log with recipient, subject, and body. Which approach BEST meets this?",
+   "select": 1,
+   "options": [
+    "Add a regex blocklist to the bash handler that rejects any command containing `curl` or the mail API's hostname.",
+    "Instruct Claude in the system prompt to print each email for the user's review before sending it with curl via bash.",
+    "Add a second shell tool, `bash_email`, used only for email.",
+    "Promote email to a dedicated `send_email(to, subject, body)` tool the harness can gate and log."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Blocklists on shell strings are easy to bypass (wget, python -c, encoded commands), and they don't provide confirmation or structured audit data.",
+    "Prompt instructions can be skipped. The harness still sees only an opaque command string.",
+    "Another shell-string tool still gives the harness an opaque command, so it can't reliably render or audit the email fields.",
+    "A dedicated tool gives the harness typed arguments it can intercept, show for confirmation, and audit. That's the documented reason to promote an action out of bash."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM1-016",
+   "subskill": "D2.3",
+   "difficulty": 1,
+   "stem": "The support-resolution agent's tools write to a legacy order system that corrupts data under concurrent writes. The team still wants Claude to decide when to use tools, but it must request at most one tool per response. What is the simplest correct configuration?",
+   "select": 1,
+   "options": [
+    "`strict: true` on every tool definition",
+    "A low `max_tokens`, so Claude can only fit one tool call per response",
+    "`tool_choice: {type: \"none\"}` on every other request",
+    "`tool_choice: {type: \"auto\", disable_parallel_tool_use: true}`"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Strict mode validates input schemas. It doesn't limit how many calls Claude makes.",
+    "Cutting max_tokens truncates output, possibly mid-tool-call, and doesn't reliably limit the number of calls.",
+    "Disabling tools on alternate turns breaks legitimate tool use and still allows parallel calls on the other turns.",
+    "disable_parallel_tool_use limits Claude to at most one tool call per response. With auto, Claude still decides whether to call a tool."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+   "scenario": "S1"
+  },
+  {
+   "id": "TM2-001",
+   "subskill": "D3.2",
+   "difficulty": 1,
+   "stem": "On the team using Claude Code, engineers keep pasting a 30-page internal API style guide into Claude Code sessions. It's only needed when someone designs or reviews an HTTP endpoint. The repo's CLAUDE.md is already about 180 lines. What is the BEST way to give Claude this guide?",
+   "select": 1,
+   "options": [
+    "Append the full guide to CLAUDE.md.",
+    "Package it as a skill whose description says when to use it, with details in referenced files.",
+    "Build an MCP server with a `get_style_guide` tool that returns the full document whenever Claude decides it needs it.",
+    "Add a PreToolUse hook that injects the full guide into context before every file edit Claude makes in the repo."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "CLAUDE.md loads in full every session. A 30-page guide would cost context on every request, and the docs suggest keeping CLAUDE.md short.",
+    "Skills use progressive disclosure: only the description is in context until the task matches, then the body and referenced files load. That fits occasional reference material.",
+    "MCP is for connecting to external systems. Wrapping a static document in a server adds infrastructure without benefit over a skill.",
+    "This adds the guide's cost to every edit, including unrelated ones. Hooks are for deterministic automation, not on-demand knowledge."
+   ],
+   "ref": "https://code.claude.com/docs/en/features-overview",
+   "scenario": "S2"
+  },
+  {
+   "id": "TM2-002",
+   "subskill": "D2.4",
+   "difficulty": 2,
+   "stem": "The platform team wants Claude to read and update its internal ticketing system from three places: engineers in Claude Code, support staff in Claude Desktop, and a custom triage bot built on the Agent SDK. The ticketing API needs per-user OAuth. Which approach BEST meets the requirements?",
+   "select": 1,
+   "options": [
+    "Write a skill with step-by-step curl instructions for the ticketing REST API and share it with each team that needs it.",
+    "Define the same custom tools separately in each of the three apps.",
+    "Create a Claude Code plugin with a hook that periodically syncs tickets into local files that Claude can read and edit.",
+    "Build one MCP server for the ticketing system and connect it from each client."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Skills provide knowledge, not a connection or auth. Each user would have to handle credentials in shell commands, and that's fragile and insecure.",
+    "This works but duplicates and maintains the same integration three times, which is what MCP avoids.",
+    "A Claude Code plugin doesn't help Desktop users or the SDK bot, and syncing to local files adds staleness and auth problems.",
+    "MCP is the reusable-integration choice: build the connection and auth once in a standard server, and every MCP-capable client (Claude Code, Desktop, Agent SDK) can use it."
+   ],
+   "ref": "https://code.claude.com/docs/en/mcp",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM2-004",
+   "subskill": "D5.4",
+   "difficulty": 1,
+   "stem": "In an engineer's Claude Code session on the platform, they ask which of 200 services still call a deprecated endpoint. Answering means grepping and reading dozens of files, and the output is filling the main conversation even though only the final list matters. What is the BEST approach?",
+   "select": 1,
+   "options": [
+    "Delegate it to a subagent, which returns only a summary.",
+    "Write a skill describing exactly which grep commands to run and how to read the results for this kind of investigation.",
+    "Connect a code-search MCP server so Claude can query the whole repository through dedicated search tools instead of grep.",
+    "Add \"keep answers concise\" to CLAUDE.md."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Subagents isolate context. The file reads and searches happen in the subagent's window, and the main conversation gets only the findings.",
+    "A skill adds instructions to the main context. The grep output would still land in the main conversation.",
+    "Better search tools may help, but their results still enter the main context. Nothing isolates the intermediate work.",
+    "Conciseness affects Claude's replies, not the tool output that is filling the context."
+   ],
+   "ref": "https://code.claude.com/docs/en/sub-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM2-005",
+   "subskill": "D1.5",
+   "difficulty": 2,
+   "stem": "The team's repo CLAUDE.md says \"Never modify files under `db/migrations/applied/`\". Claude still edits those files now and then during refactors. The team needs a guarantee that it never happens. What should they do?",
+   "select": 1,
+   "options": [
+    "Move the rule into a dedicated skill whose description mentions migrations, so it loads whenever migrations come up.",
+    "Restate the rule in capitals in CLAUDE.md.",
+    "Add a PreToolUse hook (or permission deny rule) blocking edits to that path.",
+    "Create a migrations subagent and instruct Claude to delegate any work touching migrations to that subagent instead."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A skill is still an instruction Claude may or may not apply. It isn't enforcement.",
+    "Emphasis may reduce violations but can't guarantee them.",
+    "Hooks and permission rules are enforced by the harness, so they hold every time. Instructions in CLAUDE.md or skills are requests the model interprets.",
+    "Delegation is also an instruction-level choice. Nothing stops the main agent from editing the files directly."
+   ],
+   "ref": "https://code.claude.com/docs/en/features-overview",
+   "scenario": "S2"
+  },
+  {
+   "id": "TM2-006",
+   "subskill": "D3.2",
+   "difficulty": 2,
+   "stem": "A team using Claude Code adds 30 custom Agent Skills and worries about filling the context window. Which statement correctly describes how skill content is loaded?",
+   "select": 1,
+   "options": [
+    "Every SKILL.md loads in full at session start.",
+    "Skills load only when a user types `/skill-name`; Claude cannot select or load a skill on its own from the task.",
+    "Each skill always runs in its own separate context window, like a subagent, so skills never consume main-context tokens.",
+    "Only names and descriptions load up front; bodies load on trigger, and extra files only if read."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Full bodies aren't preloaded. Having many installed skills costs little until they're used.",
+    "By default Claude can load a skill automatically when its description matches the task. disable-model-invocation turns that off.",
+    "Skill content normally loads into the current context. Only skills configured with context: fork run in a subagent.",
+    "This is progressive disclosure: metadata (about 100 tokens per skill) is always present, instructions load on trigger, and resources and scripts load or run as needed."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview",
+   "scenario": "S2"
+  },
+  {
+   "id": "TM2-007",
+   "subskill": "D3.2",
+   "difficulty": 2,
+   "stem": "The platform's analytics team wants Claude Code to answer business questions against their Postgres warehouse. It has to follow team conventions: which of the 2,000 tables are canonical, fiscal-calendar rules, and standard metric definitions. Which TWO components together BEST meet this? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "A skill that documents the canonical tables, fiscal-calendar rules, metric definitions, and example query patterns.",
+    "A PostToolUse hook that rewrites any SQL Claude writes to use canonical table names.",
+    "The full warehouse schema for all 2,000 tables pasted into CLAUDE.md.",
+    "An output style that formats every answer as a Markdown table.",
+    "An MCP server that provides query tools against the warehouse, with the connection and credentials handled by the server."
+   ],
+   "answer": [
+    0,
+    4
+   ],
+   "explanations": [
+    "A skill teaches Claude how to use those tools well. Skill + MCP is the documented pairing, and the skill loads only when the task needs it.",
+    "Deterministically rewriting SQL can't capture semantic rules like metric definitions, and silently changing queries is risky.",
+    "A 2,000-table schema in CLAUDE.md costs context on every request, even unrelated ones.",
+    "Formatting is unrelated to querying correctly or following team conventions.",
+    "MCP supplies the external connection and tools. That is its purpose."
+   ],
+   "ref": "https://code.claude.com/docs/en/features-overview",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM2-008",
+   "subskill": "D2.4",
+   "difficulty": 2,
+   "stem": "One internal Python backend on the platform calls the Messages API and needs Claude to use one internal function, `get_account_tier(account_id)`, which lives in the same codebase. No other app or client will ever use it. What is the MOST appropriate way to expose it?",
+   "select": 1,
+   "options": [
+    "Define it as a custom tool in the `tools` array and run it in your loop (or with the SDK Tool Runner).",
+    "Wrap it in a remote MCP server, deploy it on a public HTTPS endpoint, and attach it with the MCP connector.",
+    "Upload an Agent Skill whose instructions explain how to call the function.",
+    "Put every account's tier in the system prompt so no tool is needed."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "When one application owns a capability, a client tool is the simplest fit: the function runs in-process with direct access to your code and data.",
+    "This adds deployment, public exposure, and auth with no reuse to pay for it. MCP is worth it when several clients share the integration.",
+    "On the API, skills run in a sandboxed code-execution container with no network, so a skill can't call into your backend.",
+    "That data goes stale, grows with your account count, and is sent on every request."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM2-009",
+   "subskill": "D2.5",
+   "difficulty": 1,
+   "stem": "A research agent's news-gathering step has to answer questions about events after the model's training cutoff and cite sources. The team wants the least engineering and maintenance effort. What should they use?",
+   "select": 1,
+   "options": [
+    "A custom `search` tool that calls a third-party search API and parses results in the backend.",
+    "Anthropic's web search server tool (with web fetch if full pages are needed).",
+    "A larger effort setting so the model reasons harder about recent events.",
+    "A nightly job that scrapes news sites into the system prompt."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "This works, but you build and maintain the integration, parsing, and citation handling yourself. It's more effort for the same capability.",
+    "Web search and fetch are server tools. Declare them and Anthropic runs the queries and returns cited results, with no execution code on your side.",
+    "More reasoning can't produce facts the model doesn't have. It needs retrieval.",
+    "This is stale by design, bloats every prompt, and the scraper still has to be maintained."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+   "scenario": "S3"
+  },
+  {
+   "id": "TM2-010",
+   "subskill": "D3.2",
+   "difficulty": 2,
+   "stem": "In the team's Claude Code setup, a project skill `/deploy` runs the production deployment steps. A developer mentioned \"the deploy config looks off\" in chat, and Claude loaded the skill on its own and started deploying. The team still wants to type `/deploy` themselves. What change BEST prevents a repeat?",
+   "select": 1,
+   "options": [
+    "Set `user-invocable: false` in the skill's frontmatter.",
+    "Make the description vaguer so Claude is less likely to match it.",
+    "Set `disable-model-invocation: true` in the skill's frontmatter.",
+    "Move the deployment steps into CLAUDE.md under a \"Deploy\" heading."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "This does the opposite: it hides the skill from users and leaves Claude able to invoke it.",
+    "A vague description is still model-invocable and also makes the skill harder to use intentionally.",
+    "This makes the skill user-only. Claude can't trigger it, and its description stays out of context. The docs recommend it for side-effecting workflows like deploy.",
+    "CLAUDE.md content is always loaded, and Claude can act on it at any time. That makes accidental deploys more likely, not less."
+   ],
+   "ref": "https://code.claude.com/docs/en/skills",
+   "scenario": "S2"
+  },
+  {
+   "id": "TM2-012",
+   "subskill": "D3.2",
+   "difficulty": 3,
+   "stem": "A tech lead on the platform is auditing why the team's Claude Code setup uses so much context. Which THREE statements about when each feature consumes context are correct? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Full JSON schemas for every MCP tool always load at session start, whatever the tool-search setting.",
+    "Everything a subagent reads is appended to the main conversation as it works.",
+    "Hooks add nothing to context unless they return output that is fed back to Claude.",
+    "CLAUDE.md files that load at session start are included in full in every request.",
+    "Setting `disable-model-invocation: true` makes a skill's full body load at session start.",
+    "For model-invocable skills, only names and descriptions are in context each request. Full content loads when a skill is used."
+   ],
+   "answer": [
+    2,
+    3,
+    5
+   ],
+   "explanations": [
+    "MCP tool search is on by default, so only tool names load up front and schemas are deferred until needed.",
+    "Subagents run in an isolated context. The main session receives only their summary.",
+    "Hooks run outside the conversation and cost zero context unless their output is injected.",
+    "CLAUDE.md is always-on context. That's why the docs suggest keeping it under about 200 lines.",
+    "User-only skills load nothing, not even their description, until you invoke them.",
+    "This is skill progressive disclosure. Descriptions cost a little every request, and bodies load on use."
+   ],
+   "ref": "https://code.claude.com/docs/en/features-overview",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM2-014",
+   "subskill": "D2.4",
+   "difficulty": 3,
+   "stem": "An internal Python service on the platform is built on the Claude Agent SDK. It needs three custom tools that query the service's own in-memory cache and database pool. No other application will use them. Which approach BEST fits?",
+   "select": 1,
+   "options": [
+    "Deploy a standalone Streamable HTTP MCP server behind OAuth.",
+    "Write a skill telling Claude to run Python snippets through Bash that import the service's own modules directly.",
+    "Run each tool as its own separate stdio MCP server process so failures are isolated from the main service process.",
+    "Define them with `@tool`, wrap in an in-process SDK MCP server, and pass it via `mcp_servers`."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A remote server adds network hops, auth, and deployment, and it loses direct access to in-memory state. That cost pays off only when other clients reuse the server.",
+    "Shelling out to import app modules is fragile, gives no typed interface, and can't share the running process's cache or pool.",
+    "Separate processes can't share the service's in-memory cache, and this adds process management for no benefit.",
+    "SDK custom tools run in-process in your application, with direct access to its state, and need no separate deployment. They're exposed to Claude as mcp__{server}__{tool}."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/custom-tools",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM2-015",
+   "subskill": "D1.2",
+   "difficulty": 2,
+   "stem": "In the platform's Claude tooling, which TWO situations are BEST handled by delegating to a subagent rather than using a skill, hook, or MCP server? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Sharing the team's API style guide so Claude can consult it in any conversation.",
+    "Running several independent reviews (security, performance, style) in parallel, each as a specialized worker with its own tool restrictions.",
+    "Researching a question that needs dozens of file reads, where only the conclusion matters to the main conversation.",
+    "Making sure a formatter runs after every file edit, without exception.",
+    "Giving Claude read and write access to the company's Slack workspace."
+   ],
+   "answer": [
+    1,
+    2
+   ],
+   "explanations": [
+    "Reusable knowledge across contexts is what a skill is for.",
+    "Parallel, specialized workers with their own prompts and tool limits are a core subagent use case.",
+    "Context isolation is the main benefit of a subagent. Intermediate work stays out of the main window.",
+    "Guaranteed execution on an event is a hook (PostToolUse).",
+    "Connecting to an external service is an MCP server's job."
+   ],
+   "ref": "https://code.claude.com/docs/en/features-overview",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM3-001",
+   "subskill": "D2.4",
+   "difficulty": 2,
+   "stem": "The platform team is designing an incident-management MCP server with three capabilities: (1) Claude should be able to decide on its own to call `create_incident`; (2) a \"postmortem template\" that users explicitly choose from a menu or slash command; (3) the current on-call runbook text, which the client app attaches as context. Which mapping to MCP primitives is correct?",
+   "select": 1,
+   "options": [
+    "(1) Tool, (2) Prompt, (3) Resource",
+    "(1) Tool, (2) Resource, (3) Prompt",
+    "(1) Prompt, (2) Tool, (3) Resource",
+    "(1) Resource, (2) Prompt, (3) Tool"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Tools are model-controlled, prompts are user-controlled templates (e.g. slash commands), and resources are application-controlled context data.",
+    "This swaps prompts and resources. A template the user explicitly picks is a prompt, and attached contextual data is a resource.",
+    "The model-initiated action must be a tool. Prompts are chosen by the user, not called by the model.",
+    "Resources are passive data, not actions the model calls, and a runbook the client attaches isn't a tool."
+   ],
+   "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM3-003",
+   "subskill": "D2.4",
+   "difficulty": 1,
+   "stem": "The platform team is building a new MCP server to be hosted centrally and used by about 2,000 employees from Claude Desktop, Claude Code, and web-based clients, with per-user authentication. Which transport should it use?",
+   "select": 1,
+   "options": [
+    "stdio, with every employee running a local copy that connects to the central database.",
+    "Streamable HTTP, served over HTTPS with OAuth-based authorization.",
+    "The HTTP+SSE transport, for its server-to-client streaming.",
+    "A custom WebSocket transport, so connections stay persistent."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "stdio is for local subprocess servers. Shipping 2,000 local copies with database credentials is a distribution and security problem.",
+    "Streamable HTTP is the standard transport for remote, multi-client servers. It supports streaming over SSE when needed and works with the spec's OAuth flow.",
+    "HTTP+SSE is the deprecated transport from 2024-11-05. Streamable HTTP replaced it and can still stream via SSE.",
+    "Custom transports are allowed but non-standard, so many clients wouldn't support them out of the box."
+   ],
+   "ref": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM3-008",
+   "subskill": "D2.4",
+   "difficulty": 2,
+   "stem": "The platform team wants every developer to get a shared `billing` MCP server automatically when they open the repo in Claude Code. A developer has committed the `.mcp.json` below. What is the BEST correction?",
+   "code": {
+    "lang": "json",
+    "src": "{\n  \"mcpServers\": {\n    \"billing\": {\n      \"type\": \"http\",\n      \"url\": \"https://billing.internal.example.com/mcp\",\n      \"headers\": { \"Authorization\": \"Bearer sk_live_8f2c...\" }\n    }\n  }\n}"
+   },
+   "select": 1,
+   "options": [
+    "Keep it in project `.mcp.json` but use `\"Bearer ${BILLING_TOKEN}\"`; each developer sets the variable.",
+    "Move the server to local scope by running `claude mcp add` on each developer's machine, then delete `.mcp.json`.",
+    "Move the server to user scope.",
+    "Keep the file exactly as it is and add `.mcp.json` to `.gitignore` so that later edits to it aren't committed."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Project scope (.mcp.json) is the shared, committed configuration. Environment-variable expansion keeps each developer's secret out of git while the server definition stays shared.",
+    "Local scope is private to one user and project, so the team loses the automatic shared setup they want.",
+    "User scope is per-developer and not shared through the repo, and it would expose the server in unrelated projects.",
+    "The live key is already committed, so ignoring the file now doesn't remove it from history (rotate it). It would also stop the shared config from being distributed."
+   ],
+   "ref": "https://code.claude.com/docs/en/mcp",
+   "scenario": "S4"
+  },
+  {
+   "id": "TM3-010",
+   "subskill": "D2.2",
+   "difficulty": 3,
+   "stem": "The support agent's MCP `refund_order` tool sometimes can't proceed because the order was already refunded. Right now the handler throws, the server returns a JSON-RPC error, and the client shows Claude only a generic failure, so Claude retries the same call several times. What is the BEST change?",
+   "select": 1,
+   "options": [
+    "Return a successful tool result with empty content so Claude treats the call as done and moves on to the next step.",
+    "Return a tool result with `isError: true` and a specific message; keep JSON-RPC errors for protocol problems.",
+    "Have the HTTP layer return status 500 for this case so the client knows the failure happened on the server side.",
+    "Terminate the MCP session so the client re-initializes the connection and Claude's retry state is cleared."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "An empty \"success\" misleads Claude into thinking the refund went through or returned nothing.",
+    "The MCP spec separates tool execution errors, which go inside the result with isError so the model can see them and adapt, from protocol errors. A specific message stops the blind retries.",
+    "A transport-level 500 is even less informative to the model and suggests a transient server fault worth retrying.",
+    "Killing the session disrupts every in-flight call and still gives Claude no explanation."
+   ],
+   "ref": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools",
+   "scenario": "S1"
+  }
+ ],
+ "archived": [
+  {
+   "id": "TM1-002",
+   "reason": "API tool_result message-ordering mechanics, not an architect design decision"
+  },
+  {
+   "id": "TM1-004",
+   "reason": "tool_choice/model-version trivia; \"forced tool unsupported on newer model\" claim is version-specific and not verifiable as a durable key"
+  },
+  {
+   "id": "TM1-006",
+   "reason": "server-tool block protocol mechanics (no tool_result), API detail"
+  },
+  {
+   "id": "TM1-007",
+   "reason": "pause_turn handling, API mechanics"
+  },
+  {
+   "id": "TM1-008",
+   "reason": "tool-search/defer_loading product details; key conflicts with SPEC D2.3 (scoped tool sets per agent) so doubtful"
+  },
+  {
+   "id": "TM1-014",
+   "reason": "tool_result ordering 400 error, API syntax"
+  },
+  {
+   "id": "TM1-015",
+   "reason": "parallel tool_result batching mechanics, API detail"
+  },
+  {
+   "id": "TM1-017",
+   "reason": "which Anthropic tools are server-executed: product trivia"
+  },
+  {
+   "id": "TM2-003",
+   "reason": "plugin/marketplace packaging, not a CCAR-F task statement"
+  },
+  {
+   "id": "TM2-011",
+   "reason": "Skills API / xlsx pre-built skill and Files API: product details"
+  },
+  {
+   "id": "TM2-013",
+   "reason": "plugin skill namespacing trivia"
+  },
+  {
+   "id": "TM2-016",
+   "reason": "Skills API container network limits: product details"
+  },
+  {
+   "id": "TM3-002",
+   "reason": "MCP server authoring internals (stdout logging in stdio)"
+  },
+  {
+   "id": "TM3-004",
+   "reason": "Messages API MCP connector details"
+  },
+  {
+   "id": "TM3-005",
+   "reason": "Messages API MCP connector mcp_toolset config details"
+  },
+  {
+   "id": "TM3-006",
+   "reason": "Messages API MCP connector toolset allowlist config details"
+  },
+  {
+   "id": "TM3-007",
+   "reason": "OAuth/auth spec and token security (IAM), not on CCAR-F"
+  },
+  {
+   "id": "TM3-009",
+   "reason": "DNS rebinding / transport security, MCP server authoring/security internals"
+  }
+ ],
+ "lessonNotes": [
+  {
+   "task": "D2.1",
+   "note": "TM.1 kp1 (description matters most, enums, unambiguous param names) and kp12 / trap on writing tools for agents (consolidate chains, search over list, high-signal output, readable names over UUIDs) are accurate and reusable"
+  },
+  {
+   "task": "D2.2",
+   "note": "TM.1 kp4 (is_error with actionable message, never empty success) and TM.3 kp7 (isError in result vs JSON-RPC protocol errors) are accurate"
+  },
+  {
+   "task": "D2.3",
+   "note": "TM.1 kp6 tool_choice auto/none vs forced modes and disable_parallel_tool_use; kp11 tool search/defer_loading for large tool sets (but add the SPEC point: scope tool sets per agent)"
+  },
+  {
+   "task": "D2.4",
+   "note": "TM.2 kp2-3 (custom tool vs MCP server) and TM.3 kp1-2 (primitives, stdio vs Streamable HTTP), kp11 (scopes, .mcp.json, ${ENV_VAR}), T6 (no secrets in .mcp.json), TM.2 kp12 / T2"
+  },
+  {
+   "task": "D2.5",
+   "note": "TM.1 kp7 and TM.2 kp1: built-in/server tools like web search/fetch first, don't build scrapers"
+  },
+  {
+   "task": "D1.4",
+   "note": "TM.1 kp9 and T5: approval gates in code, not prompt"
+  },
+  {
+   "task": "D1.5",
+   "note": "TM.2 kp7 and T3: hooks / permission deny rules guarantee behavior; CLAUDE.md/skills do not"
+  },
+  {
+   "task": "D1.2/D1.3",
+   "note": "TM.2 kp6 subagent as isolated context returning a summary; T4 (skills do not isolate context, subagents/context: fork do)"
+  },
+  {
+   "task": "D3.1",
+   "note": "TM.2 kp8: CLAUDE.md loads in full each session, keep to always-true conventions"
+  },
+  {
+   "task": "D3.2",
+   "note": "TM.2 kp4-5, kp10, T1, T5: skill progressive disclosure, skill+MCP pairing, disable-model-invocation vs user-invocable"
+  },
+  {
+   "task": "D4.3",
+   "note": "TM.1 kp5: strict:true constrains structure not business rules; kp6 trap on forced tool_choice (version-specific, verify before use)"
+  },
+  {
+   "task": "D5.4",
+   "note": "TM.2 kp6: subagents keep many-file exploration out of main context"
+  },
+  {
+   "task": "none",
+   "note": "TM.1 kp2-3, kp7-8 (tool_result ordering, server tools, pause_turn), TM.2 kp11, TM.3 kp3-6, kp8-10 (stdio logging, OAuth, MCP connector) are API/MCP-authoring details outside CCAR-F; TM.1 kp11 / TM.3 kp12 tool search is optional background"
+  }
+ ]
+}

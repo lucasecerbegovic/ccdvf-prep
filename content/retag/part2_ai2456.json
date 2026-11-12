@@ -1,0 +1,629 @@
+{
+ "questions": [
+  {
+   "id": "AI2-008",
+   "subskill": "D4.3",
+   "difficulty": 2,
+   "stem": "An invoice-extraction service asks Claude to 'return JSON only'. About 3% of responses fail `JSON.parse` because they're wrapped in Markdown code fences or followed by a short explanation. The downstream system needs a fixed schema. Which approach BEST meets the requirement?",
+   "select": 1,
+   "options": [
+    "Add 'IMPORTANT: output ONLY raw JSON, no prose' in capitals at the start and end of the system prompt.",
+    "Set temperature to 0 so the model produces the same well-formed JSON on every request.",
+    "Use structured outputs with a JSON schema in `output_config`, then validate the parsed object with Zod before using it.",
+    "Strip code fences with a regex and cut the text at the last closing brace before calling `JSON.parse`."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Stronger wording may lower the failure rate, but it guarantees nothing. Constraining the output is the reliable fix.",
+    "Lower randomness doesn't guarantee format compliance, and some newer models reject non-default sampling parameters.",
+    "Correct. Structured outputs constrain the response to valid JSON matching your schema, and validation catches business-rule problems the schema can't express.",
+    "This fixes today's failure pattern but breaks on nested braces or new formats, and it still doesn't guarantee the schema."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+   "scenario": "S6"
+  },
+  {
+   "id": "AI2-013",
+   "subskill": "D4.5",
+   "difficulty": 2,
+   "stem": "A document-processing pipeline categorizes 200,000 customer-submitted product reviews every night. Results only need to be ready within 24 hours, and the team has been asked to cut LLM spend. Which approach BEST meets the requirements?",
+   "select": 1,
+   "options": [
+    "Send each review with `AsyncAnthropic` at high concurrency and stream the responses into the database.",
+    "Submit the reviews through the Message Batches API and collect the results when the batch ends.",
+    "Put all 200,000 reviews into one large prompt so a single request categorizes them together.",
+    "Run a synchronous loop on a cheap model, processing one review at a time overnight."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "This works, but you pay full price and compete with interactive traffic for rate limits. Streaming doesn't help here.",
+    "Correct. Batches handle large asynchronous jobs at 50% of the standard price and normally finish within 24 hours.",
+    "That would exceed the context window, makes per-item results unreliable, and makes failures hard to isolate.",
+    "Sequential processing at 200k scale may not finish, and it misses the batch discount."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+   "scenario": "S6"
+  },
+  {
+   "id": "AI2-018",
+   "subskill": "D3.6",
+   "difficulty": 2,
+   "stem": "In the team's CI pipeline, Claude Code GitHub Action jobs have sometimes run for over an hour and consumed far more tokens than expected. Which TWO changes MOST directly cap runaway cost? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Use `fetch-depth: 0` so Claude has full git history and needs fewer turns to understand changes.",
+    "Set a job-level `timeout-minutes` and a `concurrency` group so jobs can't run indefinitely or pile up.",
+    "Pin the action to `@beta`, which has lower default turn limits than v1.",
+    "Delete the repository's CLAUDE.md so Claude reads less context on each run.",
+    "Add `--max-turns` to `claude_args` to limit how many iterations Claude can take per run."
+   ],
+   "answer": [
+    1,
+    4
+   ],
+   "explanations": [
+    "Full history makes checkout bigger and doesn't limit iterations or runtime.",
+    "Correct. Workflow timeouts and concurrency controls are documented guardrails against runaway jobs.",
+    "The beta version is outdated, and moving back to it isn't a cost control.",
+    "Keeping CLAUDE.md short is good advice, but deleting it removes the team's standards and doesn't cap a runaway loop.",
+    "Correct. This is the documented way to cap the agent loop in the action."
+   ],
+   "ref": "https://code.claude.com/docs/en/github-actions",
+   "scenario": "S5"
+  },
+  {
+   "id": "AI2-020",
+   "subskill": "D3.6",
+   "difficulty": 2,
+   "stem": "In the team's CI pipeline, Claude-assisted PR reviews are meant to catch security problems (injection, missing authz checks) consistently across 30 repos. Today, developers paste diffs and ask 'review this', and the results vary a lot. Which approach BEST improves consistency while keeping appropriate control?",
+   "select": 1,
+   "options": [
+    "Replace the unit test suite with Claude review, since Claude can reason about behavior the tests miss.",
+    "Ask developers to add 'be thorough and check security' to their ad-hoc review requests.",
+    "Let Claude approve and auto-merge any PR where it reports no issues, so human reviewers can spend their time only on the PRs Claude flagged.",
+    "Put explicit review criteria in the committed CLAUDE.md or review prompt, run review on every PR, and keep human approval and tests required."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Review doesn't execute code. Tests are needed to verify behavior, including behavior Claude claims is correct.",
+    "Vague instructions produce vague, inconsistent reviews, and this still depends on each person remembering.",
+    "This removes human control and treats a confident-sounding review as proof. AI review should add to required approvals, not replace them.",
+    "Correct. Specific, shared criteria make reviews consistent. Automation makes them happen every time. Humans and CI stay as the gate."
+   ],
+   "ref": "https://code.claude.com/docs/en/code-review",
+   "scenario": "S5"
+  },
+  {
+   "id": "AI2-021",
+   "subskill": "D3.5",
+   "difficulty": 3,
+   "stem": "A team using Claude Code wants to refactor a 3,000-line billing module that has no automated tests and is business-critical. What should they do FIRST?",
+   "select": 1,
+   "options": [
+    "Have Claude explain the module and document its design, then let a senior engineer refactor by hand.",
+    "Have Claude refactor first, then generate tests against the new code to confirm it works.",
+    "Ask Claude to rewrite the whole module into clean, smaller files in one pass, then review the full diff carefully.",
+    "Have Claude write characterization tests that capture current behavior, get them passing in CI, then refactor in small commits on a branch."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Documentation helps, but this skips the step that makes any refactor safe: tests that pin current behavior.",
+    "Tests written after the refactor describe the new behavior, so they can't catch regressions from the old behavior.",
+    "With no tests, a large diff can't be checked for behavior changes, and one big change is hard to review or revert.",
+    "Correct. Characterization tests lock in existing behavior so each small refactor step can be checked automatically."
+   ],
+   "ref": "https://code.claude.com/docs/en/common-workflows",
+   "scenario": "S2"
+  },
+  {
+   "id": "AI2-023",
+   "subskill": "D3.1",
+   "difficulty": 2,
+   "stem": "In the team's CI pipeline, the Claude Code GitHub Action's PRs keep using `npm install` and default exports, although the team uses pnpm and named exports only. A developer has these rules in `CLAUDE.local.md` in the repo root, and they work fine on his laptop. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Add the rules to the PR description template so Claude reads them when it opens a PR.",
+    "Copy the rules into `~/.claude/CLAUDE.md` on the developer's laptop so they apply in every project.",
+    "Move the rules into the committed project `CLAUDE.md` at the repository root.",
+    "Store the rules in a repository secret and pass them to the action through an environment variable."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A PR template is read after the work is done, and it isn't loaded as standing instructions.",
+    "User-level memory lives only on that machine. The CI runner never sees it.",
+    "Correct. The action checks out the repo, and Claude reads the committed CLAUDE.md. `CLAUDE.local.md` is personal and kept out of git, so it never reaches the runner.",
+    "Secrets are for credentials. Conventions belong in version-controlled CLAUDE.md where people can review them."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory",
+   "scenario": "S5"
+  },
+  {
+   "id": "AI4-001",
+   "subskill": "D3.1",
+   "difficulty": 1,
+   "stem": "An engineer on the internal Claude-powered developer platform wants Claude Code to know their personal sandbox URL and preferred test accounts when working in one specific repository. Teammates shouldn't see these instructions. Where should they go?",
+   "select": 1,
+   "options": [
+    "`./CLAUDE.local.md` in the project root, kept out of version control.",
+    "`./CLAUDE.md` in the project root, under a 'Personal notes' heading.",
+    "`~/.claude/CLAUDE.md`, since user memory is private to the developer.",
+    "The `env` block of the committed `.claude/settings.json`."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. CLAUDE.local.md is for personal instructions in one project and loads alongside the project CLAUDE.md.",
+    "The project CLAUDE.md is committed and shared, so every teammate would get these notes.",
+    "It's private, but it applies to every project, and these notes belong to just one repo.",
+    "That file is shared with the team, and settings aren't the place for instructions to Claude."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory",
+   "scenario": "S4"
+  },
+  {
+   "id": "AI4-005",
+   "subskill": "D1.5",
+   "difficulty": 2,
+   "stem": "A team uses Claude Code to build features in their codebase. The project CLAUDE.md says: 'Never modify files under `db/migrations/` - generate a new migration instead.' Claude still occasionally edits existing migrations during large refactors. The team needs a guarantee. What should they do?",
+   "select": 1,
+   "options": [
+    "Put a copy of the rule in a `db/migrations/CLAUDE.md` file as well as the root CLAUDE.md.",
+    "Rewrite the instruction in capitals with 'CRITICAL' and repeat it at the top and bottom of CLAUDE.md.",
+    "Move the instruction into `~/.claude/CLAUDE.md` so it loads before the project file.",
+    "Add a permission deny rule such as `Edit(./db/migrations/**)`, or a PreToolUse hook that blocks edits to that path."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Nested files help with relevance but are still guidance only. There's no hard guarantee.",
+    "CLAUDE.md is context, not enforcement. Stronger wording may help, but it can't guarantee anything.",
+    "Load order doesn't make an instruction binding, and it would no longer be shared with the team.",
+    "Correct. Permissions and hooks are enforced by the harness no matter what the model decides."
+   ],
+   "ref": "https://code.claude.com/docs/en/hooks",
+   "scenario": "S2"
+  },
+  {
+   "id": "AI4-006",
+   "subskill": "D3.1",
+   "difficulty": 3,
+   "stem": "A team using Claude Code on their codebase has a root CLAUDE.md that has grown to 900 lines, and Claude follows it less reliably. Someone proposes splitting it into ten files pulled in with `@docs/claude/*.md` imports 'to cut context usage'. What is the MOST accurate assessment?",
+   "select": 1,
+   "options": [
+    "Bad plan, because Claude Code ignores `@` imports in project CLAUDE.md files for security reasons.",
+    "Good plan, but use `CLAUDE.local.md` files instead of imports, since local files don't count toward context.",
+    "Good plan. Imported files are read only when Claude decides they're relevant to the current task, so context usage drops sharply across sessions.",
+    "It organizes but doesn't save context: imports load with the parent file. Use path-scoped `.claude/rules/` and skills instead."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Project imports work. Only imports pointing outside the project need a one-time approval.",
+    "Local files load into context just like CLAUDE.md, and they aren't shared with the team.",
+    "That describes skills, not `@imports`. Imports are expanded at load time.",
+    "Correct. The docs say imports don't reduce context cost. Path-scoped rules load only for matching files, and skills load on demand."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory",
+   "scenario": "S2"
+  },
+  {
+   "id": "AI4-007",
+   "subskill": "D3.1",
+   "difficulty": 3,
+   "stem": "An engineer on the developer-platform team is writing `@` imports in a project's `.claude/CLAUDE.md`. Which TWO statements about how imports resolve are correct? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "A relative import path resolves from the file that contains the import, not from the session's working directory.",
+    "Relative import paths always resolve from the directory where the developer launched `claude`.",
+    "Imported files can't contain imports of their own, which keeps loading predictable.",
+    "An import pointing outside the repo (for example into the home directory) loads silently with no prompt.",
+    "Text such as `` `@README` `` inside a Markdown code span isn't treated as an import."
+   ],
+   "answer": [
+    0,
+    4
+   ],
+   "explanations": [
+    "Correct. Relative imports are resolved against the importing file's location.",
+    "They resolve from the importing file. Launching from a subdirectory doesn't change that.",
+    "Recursive imports are supported, up to a limited depth.",
+    "The first time a project uses imports from outside the working directory, Claude Code shows an approval dialog.",
+    "Correct. Import parsing skips code spans and fenced code blocks, so you can mention a path without importing it."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory",
+   "scenario": "S4"
+  },
+  {
+   "id": "AI4-008",
+   "subskill": "D3.3",
+   "difficulty": 2,
+   "stem": "On the developer platform, a monorepo team wants Claude to follow API-specific conventions (validation, error format) only when it works on files under `src/api/`, without adding those lines to every session's context. What is the BEST mechanism?",
+   "select": 1,
+   "options": [
+    "An `env` variable `API_RULES` in `.claude/settings.json` holding the conventions.",
+    "A `.claude/rules/api.md` file with `paths: [\"src/api/**/*.ts\"]` frontmatter.",
+    "An `## API` section near the top of the root CLAUDE.md.",
+    "A user-level `~/.claude/CLAUDE.md` on each API developer's machine."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Environment variables don't put instructions into Claude's context.",
+    "Correct. Path-scoped rules load only when Claude reads or edits matching files.",
+    "The root CLAUDE.md loads in every session, which is the context cost the team wants to avoid.",
+    "This loads for every project on those machines, isn't shared, and doesn't depend on which files Claude touches."
+   ],
+   "ref": "https://code.claude.com/docs/en/memory",
+   "scenario": "S4"
+  },
+  {
+   "id": "AI4-013",
+   "subskill": "D2.4",
+   "difficulty": 1,
+   "stem": "The developer platform team wants every engineer's Claude Code to connect to the same internal Postgres MCP server. The connection string includes a password that must not be committed. What is the BEST setup?",
+   "select": 1,
+   "options": [
+    "Commit `.mcp.json` with the full connection string, since the repository is private.",
+    "Add the connection string to the project CLAUDE.md so Claude can connect when it needs to.",
+    "Commit a project `.mcp.json` that uses `${PG_URL}`; each developer sets `PG_URL` locally.",
+    "Have each developer run `claude mcp add` with the default local scope and paste the connection string."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A private repo is still the wrong place for a credential. Anyone with access, and every clone, gets the password.",
+    "CLAUDE.md is model context. A secret there leaks into prompts, and it doesn't configure MCP.",
+    "Correct. Project scope shares the server definition through git, and `${VAR}` expansion keeps the secret out of the repo.",
+    "This works per person but isn't shared, so the definitions drift between developers."
+   ],
+   "ref": "https://code.claude.com/docs/en/mcp",
+   "scenario": "S4"
+  },
+  {
+   "id": "AI4-014",
+   "subskill": "D2.4",
+   "difficulty": 3,
+   "stem": "On the developer platform, an engineer added an MCP server named `tickets` with local scope (pointing at a staging URL). The repo's committed `.mcp.json` also defines `tickets`, pointing at production with an extra auth header. Which configuration does Claude Code use for `tickets` in that repo?",
+   "select": 1,
+   "options": [
+    "A merge of the two: the staging URL from local scope plus the auth header from the project entry.",
+    "Both servers, connected separately, with tool names automatically prefixed by scope.",
+    "The project entry, because a committed team configuration takes priority over personal settings.",
+    "The local-scope entry, in full: the staging URL without the project's auth header."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Fields aren't merged across scopes. The winning entry is used as a whole.",
+    "When the same name appears in several scopes, Claude Code connects only once.",
+    "For MCP servers, local scope ranks above project scope.",
+    "Correct. Precedence is local > project > user, and the whole entry from the winning scope is used."
+   ],
+   "ref": "https://code.claude.com/docs/en/mcp",
+   "scenario": "S4"
+  },
+  {
+   "id": "AI5-003",
+   "subskill": "D4.5",
+   "difficulty": 2,
+   "stem": "A bank's extraction pipeline must run a quarterly compliance review over 1.2 million archived documents. The same 6,000-token review instructions are sent with every document. Results are due two weeks after the quarter closes, and the budget is tight. Which TWO choices BEST fit the requirements? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Run the job through the Message Batches API instead of real-time requests.",
+    "Use the most capable model tier for every document so no review needs to be redone.",
+    "Put the shared instructions first in the prompt and mark them for prompt caching.",
+    "Raise `max_tokens` to the model maximum on each request to avoid truncated reviews.",
+    "Stream every response so reviewers can watch results arrive."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. No user is waiting, and batches cost 50% less while staying off real-time rate limits.",
+    "Without an eval showing a smaller tier falls short, this ignores the budget requirement.",
+    "Correct. A long, identical prefix repeated across many requests is exactly what prompt caching is for.",
+    "Set `max_tokens` to what the task needs. The maximum adds no value and makes runaway outputs more costly.",
+    "Nobody is watching in real time, and streaming doesn't cut cost."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+   "scenario": "S6"
+  },
+  {
+   "id": "AI5-009",
+   "subskill": "D1.4",
+   "difficulty": 2,
+   "stem": "A lender's regulators require every loan application to go through the same five documented checks in a fixed order (identity, income, debt ratio, sanctions, policy exceptions), with an audit record of each step's input and output. The team wants Claude to help with the checks. Which architecture BEST fits?",
+   "select": 1,
+   "options": [
+    "A deterministic workflow (prompt chain) that runs the five checks in code-defined order, with programmatic gates and logs for each step.",
+    "A single large prompt containing all five check procedures that returns one combined verdict.",
+    "An autonomous agent with tools for all five checks that decides which checks to run and in what order.",
+    "A multi-agent swarm in which specialist agents negotiate a consensus verdict."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. When the steps are known and fixed, a workflow gives predictability and auditability. Use agents for open-ended problems.",
+    "This hides each step's output, making per-check auditing and debugging difficult.",
+    "Agent autonomy adds unpredictability where the process has to be fixed and auditable.",
+    "This over-engineers a fixed sequence and makes audit trails harder to produce."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S6"
+  }
+ ],
+ "archived": [
+  {
+   "id": "AI2-001",
+   "reason": "idempotency of REST endpoints, general SDLC"
+  },
+  {
+   "id": "AI2-002",
+   "reason": "retry/backoff status-code mechanics, not an architecture task"
+  },
+  {
+   "id": "AI2-003",
+   "reason": "429 rate-limit handling mechanics"
+  },
+  {
+   "id": "AI2-004",
+   "reason": "HTTP 413 request-size handling, API mechanics"
+  },
+  {
+   "id": "AI2-005",
+   "reason": "stacked retry layers, general reliability engineering"
+  },
+  {
+   "id": "AI2-006",
+   "reason": "API list pagination SDK mechanics"
+  },
+  {
+   "id": "AI2-007",
+   "reason": "general REST cursor vs offset pagination"
+  },
+  {
+   "id": "AI2-009",
+   "reason": "SDK syntax detail (tool_use input already parsed), not a design decision"
+  },
+  {
+   "id": "AI2-010",
+   "reason": "Python async/sync client in FastAPI, general engineering"
+  },
+  {
+   "id": "AI2-011",
+   "reason": "rate-limit arithmetic and concurrency control"
+  },
+  {
+   "id": "AI2-012",
+   "reason": "rate-limit concurrency mechanics (batch option alone is covered by AI2-013)"
+  },
+  {
+   "id": "AI2-014",
+   "reason": "SDK client lifecycle, general engineering"
+  },
+  {
+   "id": "AI2-015",
+   "reason": "GitHub Action setup via /install-github-app, product setup detail"
+  },
+  {
+   "id": "AI2-016",
+   "reason": "claude-code-action input-name trivia (prompt vs direct_prompt), version-specific"
+  },
+  {
+   "id": "AI2-017",
+   "reason": "GitHub GITHUB_TOKEN workflow-trigger behavior, CI platform trivia not Claude architecture"
+  },
+  {
+   "id": "AI2-019",
+   "reason": "GitHub permissions/secrets/OIDC hygiene, secrets/IAM"
+  },
+  {
+   "id": "AI2-022",
+   "reason": "git worktrees for parallel sessions, not a CCAR-F task statement"
+  },
+  {
+   "id": "AI2-024",
+   "reason": "HTTP status mapping for own microservice, general REST"
+  },
+  {
+   "id": "AI2-025",
+   "reason": "queue idempotency/dedupe, general software engineering"
+  },
+  {
+   "id": "AI2-026",
+   "reason": "JSON number precision for IDs, general engineering"
+  },
+  {
+   "id": "AI2-027",
+   "reason": "asyncio.gather error handling, general engineering"
+  },
+  {
+   "id": "AI2-028",
+   "reason": "async 202 job pattern, general REST"
+  },
+  {
+   "id": "AI4-002",
+   "reason": "settings.json scalar precedence, config trivia not in any task statement"
+  },
+  {
+   "id": "AI4-003",
+   "reason": "managed deny vs allow precedence, settings trivia (permissions only loosely D3.6)"
+  },
+  {
+   "id": "AI4-004",
+   "reason": "permissions.allow merging across scopes, settings trivia"
+  },
+  {
+   "id": "AI4-009",
+   "reason": "model alias pinning in CI, model/version ops"
+  },
+  {
+   "id": "AI4-010",
+   "reason": "model ID management in production apps, lifecycle/ops"
+  },
+  {
+   "id": "AI4-011",
+   "reason": "prompt versioning and change control, lifecycle/ops"
+  },
+  {
+   "id": "AI4-012",
+   "reason": "prompt change control, lifecycle/ops"
+  },
+  {
+   "id": "AI4-015",
+   "reason": "plugin marketplace rollout, not a CCAR-F task statement"
+  },
+  {
+   "id": "AI4-016",
+   "reason": "/status debugging of settings, trivia"
+  },
+  {
+   "id": "AI5-001",
+   "reason": "streaming for perceived latency, not on CCAR-F"
+  },
+  {
+   "id": "AI5-002",
+   "reason": "requirements gathering"
+  },
+  {
+   "id": "AI5-004",
+   "reason": "data residency/Bedrock deployment choice, cloud/IAM"
+  },
+  {
+   "id": "AI5-005",
+   "reason": "Zero Data Retention eligibility, compliance/product detail"
+  },
+  {
+   "id": "AI5-006",
+   "reason": "capacity planning and rate limits, ops"
+  },
+  {
+   "id": "AI5-007",
+   "reason": "cost arithmetic"
+  },
+  {
+   "id": "AI5-008",
+   "reason": "functional vs non-functional requirements, requirements gathering"
+  },
+  {
+   "id": "AI5-010",
+   "reason": "requirements trade-off negotiation, not architecture of Claude systems"
+  },
+  {
+   "id": "AI5-011",
+   "reason": "model tier selection for cost/latency, model trivia"
+  },
+  {
+   "id": "AI5-012",
+   "reason": "PII redaction/compliance, loosely related"
+  },
+  {
+   "id": "AI5-013",
+   "reason": "requirements gathering"
+  },
+  {
+   "id": "AI6-001",
+   "reason": "model deprecation migration, lifecycle/ops"
+  },
+  {
+   "id": "AI6-002",
+   "reason": "regression evals when switching models, lifecycle/ops"
+  },
+  {
+   "id": "AI6-003",
+   "reason": "token-count cost change after model switch, cost/model trivia"
+  },
+  {
+   "id": "AI6-004",
+   "reason": "canary rollout, lifecycle/ops"
+  },
+  {
+   "id": "AI6-005",
+   "reason": "per-request logging fields, ops"
+  },
+  {
+   "id": "AI6-006",
+   "reason": "OpenTelemetry managed settings, ops"
+  },
+  {
+   "id": "AI6-007",
+   "reason": "OTel prompt logging, ops"
+  },
+  {
+   "id": "AI6-008",
+   "reason": "production quality monitoring, ops"
+  },
+  {
+   "id": "AI6-009",
+   "reason": "stop_reason max_tokens truncation, API trivia"
+  },
+  {
+   "id": "AI6-010",
+   "reason": "support ticket info, ops"
+  },
+  {
+   "id": "AI6-011",
+   "reason": "prompt re-baselining after model migration, model/lifecycle"
+  }
+ ],
+ "lessonNotes": [
+  {
+   "task": "D1.5",
+   "note": "AI.4 keyPoint 'CLAUDE.md is context, not enforcement; use permission deny or PreToolUse hook' and trap on 'NEVER edit migrations/' are accurate and reusable."
+  },
+  {
+   "task": "D3.1",
+   "note": "AI.4 keyPoints on CLAUDE.md scopes (managed/user/project/local), loading by concatenation, @import resolution from importing file, code spans not imports; traps on personal items in shared CLAUDE.md and splitting into imports. AI.2 trap: CLAUDE.local.md and ~/.claude/CLAUDE.md don't exist on CI runner."
+  },
+  {
+   "task": "D3.3",
+   "note": "AI.4 trap 'splitting 900-line CLAUDE.md into @imports saves nothing; use path-scoped rules or skills' is reusable."
+  },
+  {
+   "task": "D3.6",
+   "note": "AI.2 GitHub Actions keyPoints (--max-turns, timeout-minutes, concurrency, prompt input, committed CLAUDE.md as CI context) and the review-criteria/human-approval point are reusable; skip GITHUB_TOKEN trigger trivia."
+  },
+  {
+   "task": "D2.4",
+   "note": "AI.4 MCP scope keyPoints (local/project/user, .mcp.json needs approval, local wins on name clash) and trap on hard-coded credentials vs ${VAR} expansion are reusable."
+  },
+  {
+   "task": "D4.3",
+   "note": "AI.2 JSON keyPoint (structured outputs/schema + validate in code instead of prompt-only 'JSON only') is reusable."
+  },
+  {
+   "task": "D4.5",
+   "note": "AI.2 and AI.5 keyPoints/traps on Message Batches (24h, 50% cheaper, offline jobs vs real-time) are accurate; the combination with prompt caching on shared prefix is reusable."
+  },
+  {
+   "task": "D1.1",
+   "note": "AI.5 'Architecture choice' keyPoint and trap (workflow over agent for fixed regulated process) usable for workflow vs agent / D1.4."
+  },
+  {
+   "task": "D3.5",
+   "note": "AI.2 code-review/refactoring keyPoint (characterization tests before refactor) reusable."
+  },
+  {
+   "task": "general",
+   "note": "AI.5 (requirements, cost, ZDR, residency) and AI.6 (lifecycle, observability, OTel, deprecations) have little CCAR-F source material."
+  }
+ ]
+}
