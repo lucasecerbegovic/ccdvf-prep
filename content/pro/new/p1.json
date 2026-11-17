@@ -1,0 +1,847 @@
+{
+  "lessons": [
+    {
+      "subskill": "P1.1",
+      "title": "Translate business problems into Claude solutions",
+      "summary": "The exam gives you a vague business ask and checks that you turn it into a measurable problem before choosing technology: who has the pain, what success looks like in numbers, which part is genuinely language work for Claude, and which parts belong to deterministic code or people.",
+      "keyPoints": [
+        "Start from the **business outcome and baseline**, not the model: what is slow, costly or error-prone today, how it is measured now (handle time, backlog, error rate, cost per case), and what change would count as success.",
+        "Good success criteria are **specific, measurable, achievable and relevant** (Anthropic's \"Define success criteria\" guide). Most use cases need several dimensions at once: task fidelity, consistency, tone, privacy handling, context use, latency and price.",
+        "Find the **Claude-shaped part** of the problem: reading, classifying, extracting, summarising, drafting or reasoning over unstructured language. Exact arithmetic, lookups, policy rules and transactions stay in deterministic systems that Claude calls or feeds.",
+        "Decide **who decides**. Where errors are costly, irreversible or regulated, Claude drafts or recommends and a person approves; autonomy is earned with measured accuracy, not granted up front.",
+        "Choose the **simplest shape that meets the criteria**: one well-prompted call, then a workflow, and only then an agent (\"Building effective agents\"). Agentic systems trade latency and cost for task performance, so the value of the task must pay for it.",
+        "Check the **inputs exist**: the documents, records and tools Claude will need, their quality, access rights and residency constraints. A great prompt can't compensate for missing or wrong source data.",
+        "**Prove feasibility cheaply**: a small eval set from real historical cases (with known outcomes) and a prototype measured against it, before committing to a platform or a large build.",
+        "Pick the surface from the users and the integration need: a team with no developers may need only claude.ai Projects; output that must flow into a system of record needs an API integration with structured output and validation."
+      ],
+      "traps": [
+        "Jumping to an architecture (\"build a multi-agent platform\") before the problem, baseline and success metric are agreed.",
+        "Using Claude for a step that has a correct deterministic answer (tax rules, totals, eligibility thresholds) instead of calling code.",
+        "Accepting \"fully autonomous\" as a requirement when the action is irreversible and there is no way to catch errors.",
+        "Success defined as adoption or number of AI calls rather than a business outcome against a baseline.",
+        "Assuming the data needed is available and clean without checking."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "Problem framing card\n  Pain today:   claims adjusters spend ~35 min/claim reading attachments\n  Baseline:     35 min, 4.1% rework rate, 2-day backlog\n  Claude part:  read attachments, extract facts, draft summary with citations\n  Code part:    policy lookup, coverage rules, payout calculation\n  Human part:   coverage decision, payout approval\n  Success:      <=15 min/claim, rework <=4.1%, 0 uncited facts in 200-case eval\n  Constraint:   PII stays in-region; decisions auditable"
+      },
+      "docs": [
+        {
+          "title": "Define your success criteria",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+        },
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        },
+        {
+          "title": "Choosing the right model",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+        }
+      ],
+      "drill": "Take one vague request you've heard (\"use AI for onboarding\"). In 15 minutes fill the framing card above: pain, baseline numbers, which steps are language work, which are code, who approves, and three measurable success criteria. Then list the data sources you'd need and who owns them."
+    },
+    {
+      "subskill": "P1.2",
+      "title": "Design end-to-end architectures",
+      "summary": "Questions follow a request from input to output and back: how data enters and is validated, where state lives, how long jobs are handled, how outputs are checked before they reach users or systems, and how real-world feedback flows back into evals and prompts.",
+      "keyPoints": [
+        "**Input**: validate and normalise before the model sees it (file type, size, required fields, PII handling); attach the identifiers you'll need to trace the request end to end.",
+        "**State**: the Messages API is stateless; the application owns conversation history and job state. With several stateless servers, keep history in a shared store and rebuild `messages` per request.",
+        "**Processing**: match the call style to the latency need: interactive requests stream; long jobs run asynchronously (`202 Accepted` + job ID + polling or callback); bulk, non-urgent work goes to the Batch API.",
+        "**Reliability**: at-least-once delivery and client retries mean duplicates; use idempotency keys, dedupe tables and upserts. Persist results as they finish so one failure doesn't discard completed work.",
+        "**Output**: validate in code before anything is written or sent: schema validation, business-rule checks (totals add up, IDs exist), and a routing rule to human review on failure.",
+        "**Handoffs between stages** use typed contracts (fields, units, nulls, source references), not prose summaries.",
+        "**Feedback loop**: capture user ratings, reviewer corrections and downstream outcomes with the inputs and versions that produced them; turn them into new eval cases and use them to drive prompt, retrieval or model changes, re-run evals before releasing.",
+        "Version prompts, models and retrieval indexes together and log them per request, so a quality change can be traced to a specific release."
+      ],
+      "traps": [
+        "Treating reviewer corrections as a one-off fix instead of a data source for the eval set.",
+        "Holding long model calls inside a synchronous HTTP request behind a load balancer timeout.",
+        "Retrying non-idempotent side effects (emails, payments) without a deduplication key.",
+        "Relying on sticky sessions or server memory for conversation state.",
+        "Writing model output straight to a system of record with no validation step."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "input -> validate/normalise -> enqueue(job_id, idempotency_key)\n      -> worker: retrieve context -> Claude (structured output)\n      -> code checks (schema, business rules) -- fail --> human review queue\n      -> write (upsert) -> notify user\nfeedback: user rating + reviewer edits + outcome\n      -> stored with prompt/model/index versions -> new eval cases\n      -> change prompt/retrieval -> re-run evals -> staged release"
+      },
+      "docs": [
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        },
+        {
+          "title": "Batch processing",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+        },
+        {
+          "title": "Define your success criteria",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+        }
+      ],
+      "drill": "Draw the pipeline for one feature you run (or would build) as boxes: input, validation, state store, model call, output checks, write, feedback capture. For each box write its failure mode and the control that handles it. Mark where a reviewer correction becomes an eval case."
+    },
+    {
+      "subskill": "P1.3",
+      "title": "Select architectural patterns",
+      "summary": "The exam names the patterns from \"Building effective agents\" (augmented LLM, prompt chaining, routing, parallelization, orchestrator-workers, evaluator-optimizer, agents) and asks which fits a scenario. The default right answer is the simplest pattern that meets the requirement; autonomy must be justified.",
+      "keyPoints": [
+        "**Workflow vs agent**: workflows run LLMs and tools through predefined code paths; agents let the LLM direct its own process and tool use. Workflows give predictability and auditability; agents give flexibility when the path can't be known in advance.",
+        "**Augmented LLM**: the building block, a model with retrieval, tools and memory. Many business problems need nothing more than one augmented call.",
+        "**Prompt chaining**: fixed sequence of steps with programmatic gates between them; trades latency for accuracy by making each step easier. Retry the failing step, not the whole chain.",
+        "**Routing**: classify, then dispatch to a specialised prompt, tool set or model (including cheaper models for simple cases). Known categories mean routing, not a coordinator agent.",
+        "**Parallelization**: *sectioning* runs independent subtasks at once (e.g. a guardrail check alongside the response); *voting* runs the same task several times for confidence or recall.",
+        "**Orchestrator-workers**: a central model decides subtasks at runtime (unknown number of files or sources), delegates and synthesises. **Evaluator-optimizer**: a generator plus an evaluator with explicit criteria and an iteration cap, used when feedback measurably improves output.",
+        "**Agents** fit open-ended tasks with ground truth from the environment (tests, tool results), clear success criteria and a way to catch errors (tests, review, rollback). Regulated fixed processes with audit needs stay workflows.",
+        "Frameworks can help, but keep the actual prompts and tool calls visible; start with direct API use and add abstraction only when it earns its place."
+      ],
+      "traps": [
+        "An agent or multi-agent design for a fixed, well-specified, high-volume process.",
+        "Calling parallel voting \"orchestrator-workers\" (or vice versa): the orchestrator decides subtasks dynamically.",
+        "Evaluator-optimizer with a vague rubric or no cap.",
+        "Picking a framework whose abstractions hide the prompts you need to debug."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "Can the steps be fixed in advance?  yes -> workflow\n   one step enough?                yes -> single augmented call\n   ordered steps w/ checks?        -> prompt chaining + gates\n   known input categories?         -> routing\n   independent parts / need votes? -> parallelization\n   subtasks known only at runtime? -> orchestrator-workers\n   clear rubric, feedback helps?   -> evaluator-optimizer (capped)\nOpen-ended, verifiable, errors recoverable -> agent (with caps)"
+      },
+      "docs": [
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        },
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        }
+      ],
+      "drill": "List five Claude features you know of (yours or public examples). For each, name the pattern, say what would break if you used the next more autonomous pattern, and what would break with the next simpler one."
+    },
+    {
+      "subskill": "P1.4",
+      "title": "Design multi-agent systems and orchestration",
+      "summary": "Expect coordinator/subagent scenarios: when multiple agents pay off, what the coordinator owns, how to brief workers, how results and failures flow back, and how to keep cost and runtime bounded.",
+      "keyPoints": [
+        "Multi-agent systems help most on **breadth-first, parallelizable** work that exceeds one context window. Anthropic reports agents use about 4x the tokens of chat and multi-agent systems about 15x, so the task's value must justify the spend.",
+        "Poor fits: tasks needing **shared context** or with many dependencies between agents; most coding tasks have fewer truly parallel parts than research.",
+        "The **coordinator** owns decomposition, dependency ordering, routing, and synthesis (including resolving contradictions). Workers do narrow execution. Information between workers flows through the coordinator.",
+        "A non-fork subagent starts with a **fresh context**: the brief must carry the objective, scope boundaries, sources/tools to use, exclusions and the output format. Only its final message returns.",
+        "Ask workers for **condensed, structured returns** (findings with sources, gaps, errors with category and partial results), not transcripts.",
+        "Run independent subtasks in **parallel**; run dependent ones in sequence and pass outputs in the next brief.",
+        "**Scale effort to the query** in the coordinator's prompt and enforce turn and spend caps in the harness. Use cheaper models for reading-heavy workers and capable ones for planning and synthesis.",
+        "**Resilience**: transient errors retried locally in the worker's tool layer; persistent failures reported with context; checkpoint the plan and completed results so a crash resumes instead of restarting."
+      ],
+      "traps": [
+        "Spawning many subagents for a small, coupled change; one agent is faster and cheaper.",
+        "Letting workers message each other to share intermediate results.",
+        "Briefs that reference \"what we discussed\": the subagent never saw it.",
+        "Treating any worker failure as fatal instead of synthesising with a coverage note.",
+        "Restricting a worker's tools by instruction rather than by its tool list."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "Brief to worker 3 of 5\n  Objective: EU lithium-refining capacity announced since 2024\n  Scope: commercial plants only; exclude pilots; EU-27\n  Sources: company filings, government statistics; no vendor blogs\n  Return JSON: {claims:[{text, source_url, pub_date}], gaps:[], errors:[{category, retryable}]}\n  Budget: <= 15 tool calls"
+      },
+      "docs": [
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        },
+        {
+          "title": "Agent SDK subagents",
+          "url": "https://code.claude.com/docs/en/agent-sdk/subagents"
+        },
+        {
+          "title": "Optimizing for cost and intelligence",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+        }
+      ],
+      "drill": "Write the coordinator plan and one worker brief for \"Compare the five largest cloud providers' EU data-residency options\". Mark which stages run in parallel, what each worker returns, the caps, and what the coordinator does if one worker fails."
+    },
+    {
+      "subskill": "P1.5",
+      "title": "Apply decomposition techniques",
+      "summary": "Questions ask how to split a hard problem so each piece is reliable and the pieces still add up: fixed chains versus dynamic plans, per-item then cross-item passes, moving deterministic parts to code, choosing granularity, and making each unit verifiable.",
+      "keyPoints": [
+        "**Fixed decomposition** (prompt chain) when the steps are known; **dynamic decomposition** (orchestrator plans per input) when they depend on the input. Example decompositions for each question type teach the planner better than \"be complete\".",
+        "Map the problem's **dimensions first**, then check subtasks against the map: non-overlapping scope and full coverage.",
+        "**Per-item then cross-item**: extract or review each document/file separately, then run a cross-item pass for contradictions, precedence (later amendments win) and interfaces between modules.",
+        "**Split by kind of work**: let Claude extract and interpret; let code do arithmetic, lookups, joins and rule checks; feed computed results back for explanation.",
+        "**Granularity**: too coarse misses detail; too fine breaks coherence (fields that must agree, like line items and totals, belong in one call) and multiplies cost. Group things that are checked together.",
+        "**Map the territory before deep dives**: on large codebases or corpora, survey structure first (search, indexes), then explore subsystems in isolated contexts and synthesise.",
+        "**Make each unit verifiable**: small units with their own acceptance check (test, schema, reconciliation) and a progress record, so failures are retried locally and long jobs can resume.",
+        "Sequence dependencies: settle the shared contract (schema, interface) first, then fan out the independent work."
+      ],
+      "traps": [
+        "One call over everything because \"the context window is big enough\".",
+        "One call per field, which loses cross-field consistency.",
+        "Independent per-document passes with no reconciliation step.",
+        "Asking the model to compute totals that code can compute exactly.",
+        "A long single agent run with no checkpoints or per-unit checks."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "Financial ratio review, 200 line items\n 1. Claude: extract line items -> JSON (schema-validated)\n 2. Code:   compute ratios, flag thresholds (exact)\n 3. Claude: explain flagged ratios with citations to source pages\n 4. Code:   check every cited figure exists in step-1 output"
+      },
+      "docs": [
+        {
+          "title": "Building effective agents",
+          "url": "https://www.anthropic.com/engineering/building-effective-agents"
+        },
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        },
+        {
+          "title": "Chain complex prompts",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/chain-prompts"
+        }
+      ],
+      "drill": "Take a task that currently fails in one big prompt. Split it into units, label each unit Claude / code / human, write the acceptance check for each unit, and identify the one cross-unit pass you need."
+    },
+    {
+      "subskill": "P1.6",
+      "title": "Align solutions to business value pillars",
+      "summary": "The exam checks that you can tie an architecture to the value it is supposed to deliver (efficiency, transformation, productivity, cost, performance SLAs), measure that value against a baseline, and choose cost and latency levers that keep quality above the agreed bar.",
+      "keyPoints": [
+        "**Efficiency** does the existing process faster or cheaper; **productivity** raises output per person (time saved, cases per hour); **transformation** changes what the business can offer or how it works (a new service, a process that wasn't feasible before). Name which pillar a proposal targets and measure that.",
+        "**Baseline first**: capture today's handle time, error rate, backlog and cost per case before the pilot, otherwise no value can be shown.",
+        "Measure **cost per business outcome** (per resolved ticket, per processed claim) including retries, escalations and human review, not just cost per token or per call.",
+        "**Cost levers** that keep the model's answers the same: prompt caching for a repeated static prefix (cache reads are billed at a fraction of base input, 0.1x on most models), the Batch API for non-urgent bulk work (50% off input and output), shorter prompts and outputs.",
+        "**Cost levers that need evals**: routing easy cases to a smaller tier, lowering effort, an orchestrator with cheaper workers. Tuning effort is often a better lever than switching models. Adopt only if the change beats the single model across the cost-quality curve on your evals.",
+        "**Multi-agent cost**: about 15x the tokens of chat in Anthropic's research system, so reserve it for high-value tasks where it measurably helps.",
+        "**Performance SLAs** come from measured evals and load tests: percentile latency (p95/p99, and time to first token for streamed chat), a quality threshold on a fixed eval set, availability and the behaviour on overload or failure (fallback, queueing, human handoff). Never promise 100% accuracy.",
+        "Engineer for correctness first, then reduce latency (Anthropic's latency guide): model choice, shorter prompts/outputs, streaming. Streaming improves perceived latency, not total generation time."
+      ],
+      "traps": [
+        "Promising an SLA (latency or accuracy) before measuring it on representative traffic.",
+        "Using average latency in an SLA; tails matter to users.",
+        "Choosing the cheapest model by price per token without checking cost per resolved outcome.",
+        "Reporting adoption or call volume as business value.",
+        "Using the Batch API for an interactive feature, or a frontier model for every trivial request."
+      ],
+      "code": {
+        "lang": "text",
+        "src": "Value scorecard: invoice exceptions (productivity pillar)\n  Baseline:  12 min/exception, 3.0% error, $6.10/exception (labour)\n  Pilot:     5 min/exception, 2.6% error, $2.40 labour + $0.35 model\n  SLA:       p95 draft <= 20 s; eval accuracy >= 97% on 400 cases;\n             on API overload -> queue, notify, no silent drop\n  Review:    monthly, eval re-run on each prompt/model change"
+      },
+      "docs": [
+        {
+          "title": "Pricing (caching, batch)",
+          "url": "https://platform.claude.com/docs/en/about-claude/pricing"
+        },
+        {
+          "title": "Reducing latency",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+        },
+        {
+          "title": "Optimizing for cost and intelligence",
+          "url": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+        },
+        {
+          "title": "Define your success criteria",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+        }
+      ],
+      "drill": "For one Claude feature, write a value scorecard: pillar, baseline metrics, target metrics, cost per outcome (model + human review), and a draft SLA. Then list which two cost levers you'd try first and which eval would prove they don't hurt quality."
+    }
+  ],
+  "questions": [
+    {
+      "id": "P1-1-001",
+      "subskill": "P1.1",
+      "difficulty": 1,
+      "stem": "The COO of a regional insurer tells the architect: \"We want to use AI to speed up claims.\" No one has yet said which part of claims handling is slow, how it is measured today, or what result would justify the investment. What should the architect do FIRST?",
+      "select": 1,
+      "options": [
+        "Build a prototype agent on the most capable Claude model, connected to the claims system, so stakeholders can see what is possible before scoping",
+        "Run a comparison of agent frameworks and pick the platform the claims department will standardise on for all AI work",
+        "Work with claims leaders to find where time is lost today, capture baseline metrics and agree measurable success criteria",
+        "Ask the data team to export all historical claims so a retrieval index is ready before the scoping workshops begin"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Building before the problem and success measure are known risks a polished demo that solves the wrong problem, and it fixes an architecture too early.",
+        "A platform decision is premature; nothing yet says which problem the platform must solve or what it must achieve.",
+        "Correct. Translating a vague ask starts with the business pain, a baseline and specific, measurable success criteria; architecture choices follow from them.",
+        "Moving all claims data before knowing what problem is being solved is costly, may break data-minimisation rules, and may index the wrong data."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P1-1-002",
+      "subskill": "P1.1",
+      "difficulty": 2,
+      "stem": "A payroll SaaS company is piloting a Claude assistant that answers employees' questions about their payslips. Employees often ask \"what if\" questions (\"What would my net pay be if I raised my pension contribution to 8%?\"). In the pilot, about 3% of these answers contain arithmetic or deduction-rule errors. The company already has a tested payroll calculation engine. Which design BEST addresses this?",
+      "select": 1,
+      "options": [
+        "Instruct Claude to show its working step by step before giving the final figure so that the arithmetic is easier to check",
+        "Expose the payroll engine as a tool that Claude calls with the employee's inputs, then have Claude explain the result",
+        "Move the assistant to the largest available model, which makes fewer arithmetic mistakes than the pilot model",
+        "Add a disclaimer to every answer saying the figures are estimates and should be confirmed with the payroll team"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Showing working may reduce some errors but still leaves an exact, rule-based computation to a probabilistic model when a correct deterministic engine exists.",
+        "Correct. The language part (understanding the question, explaining the result) is Claude's job; the exact deduction rules and arithmetic belong to the tested engine.",
+        "A bigger model may make fewer mistakes, but it doesn't guarantee correct payroll figures and adds cost; the root cause is using the model for deterministic computation.",
+        "A disclaimer is a compensating control that shifts risk to employees; the wrong numbers are still produced."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "P1-1-003",
+      "subskill": "P1.1",
+      "difficulty": 2,
+      "stem": "An online retailer receives about 8,000 customer emails a day. The business need is to put each email in the right one of six existing queues (returns, delivery, payments, product questions, account, other) with at least 95% accuracy, so human teams can work them faster. An engineer proposes an autonomous agent that reads each email, looks up the order, decides what to do and drafts a reply. Which solution BEST matches the stated need?",
+      "select": 1,
+      "options": [
+        "The proposed autonomous agent, because it can also resolve simple emails and will reduce queue volume over time without further design work",
+        "A coordinator agent that spawns a specialist subagent for each queue and lets them agree on the right destination for each email",
+        "A larger human triage team supported by keyword rules, since 95% accuracy is too demanding for a language model classifier",
+        "One classification call per email that returns one of the six labels, checked on a labelled sample, with `other` sent to manual triage"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "The agent solves a bigger problem than the one stated, adding cost, latency and risk (order lookups, drafted replies) the business hasn't asked for or validated.",
+        "Multiple agents for a classification task with known categories is over-engineering; this is a routing/classification problem.",
+        "Dismissing the model without measuring it ignores a well-suited language task; the accuracy target should be checked on a labelled sample.",
+        "Correct. Known categories and a clear accuracy target call for the simplest fit: one classification call, verified against labelled data, with an explicit fallback queue."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "P1-1-004",
+      "subskill": "P1.1",
+      "difficulty": 2,
+      "stem": "A commercial insurer wants to cut the time underwriters spend on small-business applications, which currently average 50 minutes each. The regulator requires that a licensed underwriter makes and records each underwriting decision. Applications arrive as PDFs with financial statements, inspection reports and prior-loss histories. Which solution BEST fits the business problem and the constraint?",
+      "select": 1,
+      "options": [
+        "Claude summarises each application and flags risk factors with page citations; the underwriter reviews, decides and is timed",
+        "Claude makes the underwriting decision for each application, and underwriters audit a random 5% sample each week to confirm quality",
+        "Claude decides low-risk applications automatically and routes only high-risk ones to underwriters, based on a risk score it assigns itself",
+        "Claude generates a decision letter for each application that the underwriter signs, so the underwriter remains the named decision-maker"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Claude takes the reading and summarising work, which is where the time goes, while the licensed underwriter makes the decision; citations make review fast and auditable.",
+        "Letting Claude decide with a sample audit breaks the regulatory requirement that a licensed underwriter makes each decision.",
+        "Auto-deciding any band still removes the underwriter from those decisions, and gating on the model's own self-assigned score is not a reliable control.",
+        "Signing a pre-written decision makes the underwriter a rubber stamp; the decision is effectively the model's, which defeats the intent of the rule."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "P1-1-005",
+      "subskill": "P1.1",
+      "difficulty": 2,
+      "stem": "At a telecom operator, contact-centre agents spend about 40% of handle time searching a knowledge base of 12,000 articles that changes weekly. Leadership wants shorter calls without reducing answer quality, and agents must stay in control of what is said to customers. Which solution BEST addresses the problem?",
+      "select": 1,
+      "options": [
+        "Place the full knowledge base in the system prompt of every request so that Claude always has every article available when answering",
+        "Deploy a customer-facing chatbot that answers callers directly from the knowledge base and transfers them to an agent only when it is unsure",
+        "Add retrieval over the knowledge base to an assistant in the agent desktop that returns grounded answers with links to the source articles",
+        "Pause the AI project until the knowledge base is rewritten into shorter, cleaner articles that agents can search more easily themselves"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "12,000 changing articles are far too much to send with every request; it is costly, slow and hard to keep current.",
+        "This changes the operating model and removes agents from the loop, which contradicts the stated requirement, and relies on the model knowing when it is unsure.",
+        "Correct. The pain is search time; a retrieval-augmented assistant with source links shortens it while agents decide what to tell customers.",
+        "Cleaning content may help, but it delays the value and doesn't address the search burden the business asked to reduce."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P1-1-006",
+      "subskill": "P1.1",
+      "difficulty": 2,
+      "stem": "A public benefits agency is deciding whether to fund a nine-month programme to have Claude extract eligibility facts from scanned application forms, many of them partly handwritten. Nobody knows yet whether extraction quality on these scans will be good enough, and the funding decision is due in six weeks. What should the architect do FIRST?",
+      "select": 1,
+      "options": [
+        "Begin the full programme behind a feature flag so engineering can start on integrations while quality is studied in parallel",
+        "Build a small eval set from 150 to 200 real historical forms with verified values, prototype the extraction call and measure it",
+        "Survey caseworkers about how useful they expect automated extraction would be and use the results as the funding case",
+        "Select the model with the largest available context window so that whole application bundles can be sent in a single extraction request"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Starting the build commits funds before the key feasibility risk is resolved.",
+        "Correct. A quick prototype measured against real cases with known answers answers the feasibility question with evidence, inside the decision window.",
+        "Expected usefulness doesn't show whether the model can read these scans accurately; the open question is technical feasibility.",
+        "Context size isn't the unknown here; handwriting and scan quality are, and only measurement on real forms answers that."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "P1-1-007",
+      "subskill": "P1.1",
+      "difficulty": 3,
+      "stem": "A law firm asks for a Claude assistant that reviews supplier contracts against the firm's playbook and flags deviations. Before proposing an architecture, the architect is planning the discovery sessions. Which THREE things should the architect establish before choosing an architecture? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "Which agent framework the firm's competitors are rumoured to be using for contract review",
+        "Measurable success criteria with a baseline, such as review time per contract and the rate of missed deviations today",
+        "The consequence of a missed or wrong flag and who must approve the assistant's output before it is relied on",
+        "How many subagents the review system should have and which model tier each one should run on",
+        "The maximum context window the solution will need, so the model and its pricing can be fixed in the statement of work",
+        "Where the contracts and playbook live, their formats and quality, and any access or data-residency constraints"
+      ],
+      "answer": [
+        1,
+        2,
+        5
+      ],
+      "explanations": [
+        "Competitors' tools say nothing about this firm's problem, data or success criteria.",
+        "Correct. Without a baseline and measurable criteria the architecture can't be chosen or its value shown.",
+        "Correct. Error cost and approval responsibilities decide how much autonomy is acceptable and where human review sits.",
+        "Subagent counts and tiers are design outputs, decided after the problem and constraints are known, if multiple agents are needed at all.",
+        "Fixing a context size up front is a premature implementation detail; it follows from document sizes and the chosen design.",
+        "Correct. Data availability, quality and access/residency constraints determine what is feasible and how the solution must be built."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P1-1-008",
+      "subskill": "P1.1",
+      "difficulty": 3,
+      "stem": "A fintech's VP of product wants a \"fully autonomous\" Claude agent that decides card-dispute chargebacks and issues refunds up to $5,000. Refunds cannot be reversed once issued. The company has no history of agent decisions to measure against, though it has three years of human analysts' decisions and evidence files. Which approach should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Launch the autonomous agent with a detailed system prompt that lists the dispute rules and tells it to escalate whenever it is uncertain",
+        "Launch the autonomous agent and have analysts audit all of the previous day's refunds each morning, correcting the policy and prompt wherever they find mistakes",
+        "Decline the project, because LLM-based systems should not be involved in decisions that move customer money",
+        "Measure it on historical cases, launch it as a recommender that analysts approve, and widen autonomy only where agreement meets an agreed bar"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Prompt rules and self-reported uncertainty are not adequate controls for irreversible payouts, and nothing has been measured.",
+        "A next-day audit finds errors after irreversible refunds are already issued; it is a compensating control, not prevention.",
+        "Refusing ignores a legitimate business goal; the risk can be managed with measurement and staged autonomy.",
+        "Correct. Historical cases provide an eval set, the recommender phase produces measured agreement, and autonomy is extended only where evidence supports it."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "P1-1-009",
+      "subskill": "P1.1",
+      "difficulty": 2,
+      "stem": "A hospital network wants Claude to read free-text discharge summaries and fill structured fields in the electronic health record: each medication, its dose and unit, and the follow-up appointment date. Clinicians must confirm the values before they are saved. Which solution BEST fits?",
+      "select": 1,
+      "options": [
+        "A claude.ai Project with the extraction instructions, into which clinicians paste each summary and then copy the returned values into the record by hand",
+        "An agent with direct write access to the health record so that it can save extracted fields as soon as it has read each discharge summary",
+        "An API integration that returns schema-conforming JSON, validates units, dates and drug names in code, and shows the values to a clinician to confirm before saving",
+        "A nightly job that emails each clinician a free-text summary of the medications found so they can update the record the next morning"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Copy-paste works for a pilot but adds manual steps and transcription risk where the output must flow into a system of record.",
+        "Direct writes skip the required clinician confirmation and code validation.",
+        "Correct. Output feeding a system of record calls for structured output, deterministic validation and the required human confirmation in the flow.",
+        "Free-text emails make clinicians re-key data, which adds work and error instead of removing it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    },
+    {
+      "id": "P1-1-010",
+      "subskill": "P1.1",
+      "difficulty": 3,
+      "stem": "The CEO of a B2B software company asks for \"Claude to reduce churn.\" Exit interviews show most churned customers cite unresolved onboarding problems. Tickets from accounts in their first 30 days make up 30% of volume, and first response currently takes two days. Which framing of the solution BEST translates this into a Claude-based project?",
+      "select": 1,
+      "options": [
+        "Use Claude to predict which accounts will churn by reading all CRM records and usage data, then give account managers a ranked list of at-risk accounts every week",
+        "Target the onboarding bottleneck: Claude drafts grounded replies to new accounts' tickets, measured by first-response time and 90-day retention",
+        "Add a Claude chatbot to the public marketing site that answers prospects' pricing and feature questions around the clock",
+        "Use Claude to write personalised win-back emails to every customer who cancelled in the past year, offering a discount to return"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Churn prediction from structured CRM and usage data is a tabular modelling problem, and it doesn't fix the onboarding cause the interviews point to.",
+        "Correct. It targets the evidenced root cause with work Claude is suited to (reading tickets, drafting from docs) and ties success to measurable business outcomes.",
+        "Prospect questions are a different funnel stage; this doesn't address why existing customers leave.",
+        "Win-back emails act after customers have left and don't remove the onboarding problem that drives churn."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P1-1-011",
+      "subskill": "P1.1",
+      "difficulty": 3,
+      "stem": "During portfolio planning, a bank's architecture board reviews five proposed AI use cases. Which TWO characteristics make a task a POOR fit for a Claude-based component and better served by conventional software? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "The output is an exact computation from structured data using an established algorithm, such as daily interest accrual on loan balances",
+        "The inputs are free-text documents in many layouts, such as customer letters, scanned forms and emails",
+        "Output quality can be checked automatically by tests or by a reviewer before the result is used",
+        "Every input is a structured field and the decision is fully specified by a published rule table with no room for interpretation",
+        "The task needs judgment to apply written policy to unusual customer situations that the policy authors didn't anticipate when drafting it"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Exact, algorithmic computation on structured data has one right answer that code produces deterministically and cheaply.",
+        "Unstructured, varied text is where language models add the most value over rules.",
+        "Verifiable output makes a task a better fit for an LLM, because errors can be caught.",
+        "Correct. A fully specified rule table over structured fields is deterministic logic; a model adds cost and variance without benefit.",
+        "Applying policy to novel cases needs language understanding and judgment, a good fit for Claude, typically with human review."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "P1-2-001",
+      "subskill": "P1.2",
+      "difficulty": 2,
+      "stem": "A retail bank's complaint team uses a Claude assistant that drafts replies to customer complaints; agents edit each draft before sending. The team changes the prompt every few weeks based on anecdotes from team leads, and after each release some kinds of complaint get better while others get worse, with no one able to say why. Which change to the architecture BEST closes the loop?",
+      "select": 1,
+      "options": [
+        "Add a thumbs-up/down button to each draft and treat a weekly approval rate above 80% as the release criterion for prompt changes",
+        "Automatically append the ten most recently edited drafts to the prompt as examples, so the assistant keeps learning from the agents",
+        "Hold a quarterly review meeting where team leads read a sample of drafts and agree which prompt changes to make next quarter",
+        "Store each draft with the sent version, edit reason codes and the prompt/model version; turn sampled cases into a versioned eval set and gate every prompt change on it"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A thumbs rating is a coarse signal and doesn't show which complaint types regressed; it can't catch a regression before release.",
+        "Unfiltered recent examples drift the prompt toward whatever was edited last, including mistakes, and make behaviour harder to trace to a version.",
+        "A quarterly anecdotal review is the same weak loop, just slower; it still has no measurement or regression gate.",
+        "Correct. Capturing corrections with versions turns real-world feedback into eval cases, so each change is measured across complaint types before it ships."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "P1-5-001",
+      "subskill": "P1.5",
+      "difficulty": 2,
+      "stem": "An equity-research team uses one Claude call to read a company's annual filing, compute 14 financial ratios from about 200 line items, and write commentary on the ratios that breach thresholds. Reviewers find a wrong ratio in roughly one report in ten, usually from an arithmetic slip or a misread subtotal, and the commentary then discusses the wrong numbers. Which decomposition BEST fixes this?",
+      "select": 1,
+      "options": [
+        "Split the job into 14 parallel calls, one per ratio, each reading the full filing and computing and explaining a single ratio",
+        "Keep one call but ask Claude to compute every ratio twice and to report a discrepancy whenever the two results disagree",
+        "Claude extracts the line items to a validated schema, code computes the ratios and thresholds, and Claude writes commentary on the computed values with page citations",
+        "Keep one call and add few-shot examples of correctly computed ratios from other companies' filings to the prompt"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Per-ratio calls multiply cost and still leave arithmetic to the model; ratios that share line items may also be read inconsistently.",
+        "Self-consistency in the same call can repeat the same misread and still relies on the model for exact arithmetic.",
+        "Correct. Each part goes to what does it reliably: Claude reads and explains, code computes exactly, and the commentary is grounded in verified numbers.",
+        "Examples may improve format but don't make the model's arithmetic exact; the deterministic step should move to code."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/chain-prompts"
+    },
+    {
+      "id": "P1-5-002",
+      "subskill": "P1.5",
+      "difficulty": 3,
+      "stem": "A logistics company asks a coding agent to migrate 300 stored procedures to a new SQL dialect in one long session. After about 60 procedures the quality of conversions drops, the agent sometimes redoes procedures it already converted, and when the session crashed at procedure 140 nobody could tell which conversions were finished and correct. What is the BEST redesign?",
+      "select": 1,
+      "options": [
+        "Move to a model with a larger context window so the whole migration fits in one session without the agent losing track",
+        "Make each procedure a unit with an equivalence test, track status in a progress file, and run units in fresh sessions, retrying failures one by one",
+        "Compact the conversation more often and instruct the agent to keep a running list in its messages of which procedures it has already converted and checked",
+        "Split the 300 procedures into three batches of 100 and run three long agent sessions in parallel to finish sooner"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "A bigger window delays the degradation but keeps one fragile, unverifiable run with no recovery point.",
+        "Correct. Small, independently verifiable units with an external progress record make quality checkable per unit and let the job resume after a crash.",
+        "A list kept in the conversation is lost with the session and still unverified; compaction doesn't add any correctness check.",
+        "Parallel long sessions keep every original problem (drift, no tests, no progress record), just three times over."
+      ],
+      "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+      "id": "P1-6-001",
+      "subskill": "P1.6",
+      "difficulty": 1,
+      "stem": "A regional bank proposes a Claude assistant that lets small-business customers get a same-day explanation of their credit application's status and a tailored document checklist. Today the bank can't offer this at all, because underwriters only review open applications once a week. Which business value pillar does this proposal PRIMARILY target?",
+      "select": 1,
+      "options": [
+        "Cost reduction, because fewer underwriter hours are spent reviewing each small-business credit application",
+        "Transformation, because it creates a customer service the bank could not offer before",
+        "Performance SLAs, because it guarantees a response time to every customer",
+        "Efficiency, because it makes the existing weekly review process faster"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The proposal doesn't remove underwriter work; it adds a new customer-facing capability.",
+        "Correct. A new service the business couldn't offer before is transformation; it should be measured on that (adoption, conversion, customer outcomes).",
+        "Response time may be part of the design, but the SLA is a means, not the value the proposal is built around.",
+        "The weekly review is unchanged; the value comes from a capability that didn't exist."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P1-6-002",
+      "subskill": "P1.6",
+      "difficulty": 1,
+      "stem": "A manufacturer's procurement team will pilot a Claude assistant that drafts supplier-query responses. The CFO says that after three months she wants to know whether the pilot delivered value. The pilot starts in two weeks. What should the architect make sure happens FIRST?",
+      "select": 1,
+      "options": [
+        "Configure usage dashboards that count prompts, active users and tokens consumed per week",
+        "Prepare a survey asking the team, at the end of the pilot, how much time they think the assistant saved",
+        "Choose the most capable model tier so the pilot shows the best possible quality",
+        "Record baseline metrics for the current process, such as time per query, backlog and error rate"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Usage counts show activity, not business value.",
+        "Recalled estimates after the fact are unreliable and can't replace a measured baseline.",
+        "Model choice doesn't answer the CFO's question; without a baseline no improvement can be shown at any quality level.",
+        "Correct. Value is the difference from a baseline; it must be captured before the process changes."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P1-6-003",
+      "subskill": "P1.6",
+      "difficulty": 2,
+      "stem": "An insurer summarises 40,000 claim notes every night for adjusters to read the next morning. Each request has about 3,000 input tokens (a 200-token instruction plus the note itself, which is unique) and about 400 output tokens. The model's rates are $3 per million input tokens and $15 per million output tokens, and the Batch API gives 50% off input and output. Which change cuts the nightly bill most without changing the model or the summaries, and what is the new nightly cost?",
+      "select": 1,
+      "options": [
+        "Cache the prompt prefix, because every request starts with the same instruction; the nightly cost falls to about $360",
+        "Stream every response so that requests finish sooner; the nightly cost falls to about $300",
+        "Submit the nightly run through the Batch API; the nightly cost falls from about $600 to about $300",
+        "Halve the summary length to 200 tokens; the nightly cost falls from about $600 to about $480"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Only the 200-token instruction repeats, which is below the minimum cacheable prompt length, and the notes are unique, so caching saves essentially nothing; $360 is not a figure caching would produce here.",
+        "Streaming changes how output is delivered, not what it costs; the bill stays about $600.",
+        "Correct. Input is 120M tokens x $3 = $360 and output 16M x $15 = $240, so $600; the overnight job tolerates async results, and 50% off gives $300 with identical summaries.",
+        "Shorter summaries do save money ($480) but change the output adjusters receive, which the constraint rules out, and save less than batching."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    {
+      "id": "P1-6-004",
+      "subskill": "P1.6",
+      "difficulty": 2,
+      "stem": "A corporate legal-operations team deployed Claude to pre-review incoming NDAs against the firm's playbook, aiming at the productivity pillar. The general counsel asks for evidence of value at the quarterly review. Which TWO metrics BEST show productivity value? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "The number of prompts sent to the assistant each week, broken down by lawyer",
+        "NDAs fully reviewed per lawyer-hour, compared with the baseline before the assistant was introduced",
+        "The total number of tokens the deployment consumed during the quarter",
+        "The percentage of lawyers in the department who logged in to the assistant at least once during the quarter under review",
+        "The rate of reviews later escalated or reworked for missed issues, compared with the pre-assistant baseline"
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "Prompt counts measure activity, not output or quality.",
+        "Correct. Output per person against a baseline is the direct productivity measure.",
+        "Token volume is a cost input, not a measure of value.",
+        "Adoption is a leading indicator at best; it says nothing about work completed or its quality.",
+        "Correct. A productivity gain counts only if quality holds; rework and escalation rates versus baseline show that it did."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P1-6-005",
+      "subskill": "P1.6",
+      "difficulty": 3,
+      "stem": "A telecom company compares two model tiers for its support chatbot. Tier S costs $0.02 per conversation and resolves 62% of conversations; tier L costs $0.06 per conversation and resolves 71%. Every unresolved conversation goes to a human agent at a fully loaded cost of $4.00. Evals show the quality of resolved conversations is the same for both. Which conclusion is correct?",
+      "select": 1,
+      "options": [
+        "Tier S is the better choice, because its cost per conversation is one third of tier L's",
+        "The tiers are roughly equivalent, because the higher resolution rate of L only offsets its higher model price",
+        "No decision can be made until the token counts of each conversation are known for both tiers",
+        "Tier L is cheaper overall: about $1.22 per conversation against $1.54 for tier S, counting escalations"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Comparing model cost alone ignores the human escalations that dominate total cost.",
+        "The resolution gain more than offsets the price: 9 fewer escalations per 100 conversations save $36 against $4 of extra model cost.",
+        "Per-conversation model costs are already given; token counts add nothing to the decision.",
+        "Correct. S: $0.02 + 0.38 x $4 = $1.54; L: $0.06 + 0.29 x $4 = $1.22. Cost per resolved outcome, not per call, decides it."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+    },
+    {
+      "id": "P1-6-006",
+      "subskill": "P1.6",
+      "difficulty": 2,
+      "stem": "An internal IT helpdesk handles about 50,000 questions a month, mostly password resets, VPN set-up and software requests with short answers. A prototype single Claude call with retrieval over the IT knowledge base scores 94% on the team's eval set. A multi-agent research design scores 95% but uses about ten times the tokens and takes much longer per answer. What should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Ship the single retrieval-augmented call; keep multi-agent designs for high-value, broad research work",
+        "Ship the multi-agent design, because one more point of accuracy across 50,000 questions a month justifies any extra cost",
+        "Ship the multi-agent design for every question but move all subagents to the smallest model tier to bring cost back down",
+        "Delay the launch until the multi-agent design matches the single call's cost and speed, so users get the best accuracy"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. For short, high-volume, low-value answers, a 1-point gain doesn't justify 10x tokens and slower responses; multi-agent fits valuable, parallelizable work.",
+        "The extra point has to be weighed against ten times the spend and slower answers; for password resets the value isn't there.",
+        "Changing worker tiers alters accuracy and still keeps a complex design the task doesn't need; it would need new evals and still adds latency.",
+        "Holding back a solution that already meets the bar delays value for a marginal gain."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "P1-6-007",
+      "subskill": "P1.6",
+      "difficulty": 3,
+      "stem": "A retailer's product director wants a contractual SLA that \"every answer from the shopping assistant arrives in under 2 seconds.\" The assistant is an agent that makes two to four tool calls (catalogue search, stock check, delivery estimate) per answer. A load test with streaming shows time to first token p95 of 1.4 s, and total completion p50 of 5 s and p95 of 11 s. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Accept the 2-second SLA and move every request to the smallest model tier, which will bring completion times under the target",
+        "Agree an SLA stated as a 2-second average completion time, since tail latencies will improve as the system is tuned",
+        "Propose SLAs grounded in the measurements (p95 first token within 2 s, a completion p95 from the load test) and cut tool round trips, then re-measure before tightening them",
+        "Set `max_tokens` very low so every answer is short enough to be generated within 2 seconds of the request"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Switching tiers without evals risks quality, and tool calls, not just generation, drive the completion time, so the target may still be missed.",
+        "Averages hide the tail users actually experience, and promising a figure not yet measured is setting up a breach.",
+        "Correct. SLAs should come from measured performance and use percentiles; streaming makes first-token latency the user-facing metric, and design changes like running tool calls in parallel or prefetching context reduce total time.",
+        "A hard token cap truncates answers mid-sentence and doesn't remove the tool-call latency."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "P1-6-008",
+      "subskill": "P1.6",
+      "difficulty": 2,
+      "stem": "A marketplace generates product descriptions with the most capable Claude tier. About 70% of listings are simple (clothing, home goods) and 30% are technical (electronics, tools) and need careful accuracy. The feature is now 40% over its cost budget, and quality must not drop. What is the BEST next step?",
+      "select": 1,
+      "options": [
+        "Move every listing to the smallest model tier immediately, since most listings are simple and the cost overrun has to be fixed within this quarter",
+        "Cut the prompt's examples and instructions in half for all listings to reduce input tokens without further testing",
+        "Cap the output length of every description so that each request is cheaper regardless of its category",
+        "Test a smaller tier or lower effort on simple listings against an eval slice, route them only if they meet the bar, and shadow-test first"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Moving technical listings to the smallest tier without evals risks exactly the accuracy the business said it can't lose.",
+        "Untested prompt cuts can degrade quality across all categories.",
+        "A blanket length cap changes the product for every category and may truncate technical details.",
+        "Correct. Routing by complexity targets the cost where quality risk is lowest, and evals plus a shadow run prove the change keeps quality before it ships."
+      ],
+      "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    },
+    {
+      "id": "P1-6-009",
+      "subskill": "P1.6",
+      "difficulty": 2,
+      "stem": "An HR policy assistant sends the same 20,000-token policy handbook as a fixed prefix on every interactive question, followed by the employee's short question. Separately, a nightly compliance job re-checks 5,000 of the day's answers, and its results are read the next day. Which TWO changes reduce cost without changing the model's answers? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Send the interactive questions through the Batch API as well, so that every request in the system gets the batch discount",
+        "Remove the handbook from the prompt and rely on the model's general knowledge of common HR policies",
+        "Use prompt caching for the fixed handbook prefix on interactive requests, so repeated reads are billed at the cache rate",
+        "Move the interactive assistant to a smaller model tier because the questions are usually short",
+        "Run the nightly compliance re-check through the Batch API, since its results aren't needed until the next day"
+      ],
+      "answer": [
+        2,
+        4
+      ],
+      "explanations": [
+        "Batch processing is asynchronous and unsuitable for interactive questions that need an answer right away.",
+        "Dropping the handbook removes the grounding and changes answers, likely for the worse.",
+        "Correct. A large identical prefix on every request is the textbook case for prompt caching; the outputs don't change.",
+        "A different model tier can change answers and would need evals; it isn't a cost-only change.",
+        "Correct. Non-urgent bulk work suits the Batch API, which gives a 50% discount without changing outputs."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "P1-6-010",
+      "subskill": "P1.6",
+      "difficulty": 1,
+      "stem": "An online tutoring platform's Claude assistant gives good answers, but analytics show students leave the chat when the screen stays blank for about 8 seconds while a full explanation is generated. Answer quality must stay the same. Which change BEST addresses this?",
+      "select": 1,
+      "options": [
+        "Process student questions through the Batch API and notify each student by email or in-app message when their full answer is ready",
+        "Stream responses so text appears as it is generated, and track time to first token as the user-facing latency metric",
+        "Switch the assistant to the smallest model tier, which generates complete answers much faster",
+        "Lower `max_tokens` sharply so explanations finish within a couple of seconds"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Batch processing is asynchronous and would make the wait far longer for an interactive tutor.",
+        "Correct. Streaming improves perceived responsiveness without changing the answer, and time to first token measures what students experience.",
+        "A smaller tier may lower quality, which the stem rules out, and still needs evals.",
+        "A hard cap cuts explanations off mid-sentence and changes the answers."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "P1-6-011",
+      "subskill": "P1.6",
+      "difficulty": 3,
+      "stem": "A national agency is contracting an internal platform team to provide a Claude-based document-summarisation service to several departments. The agency asks the architect to draft the performance SLA. Which THREE elements belong in it? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "A p95 latency target for a defined document size, set from load tests on representative documents",
+        "A guarantee that summaries will contain no hallucinated statements of any kind",
+        "An average latency target only, since percentile figures are too hard for the departments' non-technical managers to interpret",
+        "A minimum quality score on a fixed, versioned eval set, re-run whenever the prompt or model changes",
+        "An availability target plus defined behaviour on overload or outage, such as queuing with status updates and notification",
+        "A fixed number of output tokens per summary, used as the measure of summary quality"
+      ],
+      "answer": [
+        0,
+        3,
+        4
+      ],
+      "explanations": [
+        "Correct. Percentile latency for a defined workload, grounded in measurement, is a promise the team can meet and monitor.",
+        "No LLM system can guarantee zero errors; an SLA should commit to a measured quality threshold and the controls around it.",
+        "Averages hide the tail that users experience; SLAs should use percentiles.",
+        "Correct. Quality needs an objective, repeatable measure, re-checked on each change so regressions are caught.",
+        "Correct. Departments need to know availability and what happens on failure, not just the happy path.",
+        "Length is not quality; a token count says nothing about faithfulness or usefulness."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    }
+  ]
+}

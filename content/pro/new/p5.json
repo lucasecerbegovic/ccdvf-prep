@@ -1,0 +1,564 @@
+{
+ "lessons": [
+  {
+   "subskill": "P5.1",
+   "title": "Implement guardrails and safety controls",
+   "summary": "The exam asks where a control must live so that it holds when the model is wrong or manipulated. Expect scenarios where a stronger prompt is tempting but the professional answer is a deterministic control at the execution layer (tool handler, hook, permission rule, egress allowlist) with the prompt kept as one layer among several.",
+   "keyPoints": [
+    "**Layered guardrails**: input screening (often a fast, low-cost tier as a classifier) → system-prompt policy → least-privilege tools with checks in code → output filtering (DLP/regex for account numbers and similar) → monitoring and audit. Design assuming any single layer can fail.",
+    "**Prompts guide, code enforces.** Ordering rules (verify identity before refund), limits (refund caps) and forbidden paths belong in the tool handler, an Agent SDK or Claude Code **hook** (a `PreToolUse` hook can block a call), or permission rules, not only in instructions the model may skip.",
+    "**Least privilege**: give each agent only the narrow tools its job needs (`get_order_status(order_id)` rather than `run_sql` or a general shell), with scoped, read-only credentials where possible. Removing a capability beats guarding it.",
+    "**Untrusted content is data.** Tool results, retrieved chunks, emails and web pages can carry indirect prompt injection. Delimit them (XML tags) and say they are data, but rely on structural limits on what a fooled model can do.",
+    "Break the **lethal trifecta** in any single step: untrusted input + access to private data + an outbound channel (email, HTTP, rendered Markdown images).",
+    "**Authorisation from the session, never from model input**: the handler derives user or tenant from the authenticated request and checks ownership. An ID the model passes is a claim, not a credential.",
+    "Handle `stop_reason: \"refusal\"` explicitly: don't parse the turn as success, don't run its tool calls, show a safe message and log it.",
+    "**Claude Code**: permission rules are evaluated deny → ask → allow; Bash rules match command text only, so pair them with the **sandbox** (OS-level filesystem and network isolation). Admins enforce policy through managed settings.",
+    "Tune an over-blocking screen with clearer policy definitions and borderline few-shot examples, and route uncertain cases to a stronger model or a human rather than loosening the screen blindly."
+   ],
+   "traps": [
+    "Choosing 'make the system prompt more emphatic' as the fix for a rule the agent sometimes skips.",
+    "Putting `tenant_id` in a tool's input schema and calling it authorisation.",
+    "Treating logging or after-the-fact review as prevention.",
+    "Believing a `curl`/`wget` deny rule is network isolation.",
+    "Assuming a more capable model is a security boundary."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "def issue_refund(order_id: str, amount: float, session) -> dict:\n    if not session.identity_verified:            # ordering enforced in code\n        return {\"is_error\": True, \"content\": \"Verify identity first\"}\n    order = orders.get(order_id)\n    if order is None or order.customer_id != session.customer_id:\n        return {\"is_error\": True, \"content\": \"Order not found\"}\n    if amount > 500:                               # cap enforced, not prompted\n        return approvals.request(order_id, amount)  # pending human approval\n    return payments.refund(order_id, amount)"
+   },
+   "docs": [
+    {
+     "title": "Mitigate jailbreaks and prompt injections",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks"
+    },
+    {
+     "title": "Handling stop reasons",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+     "title": "Claude Code hooks",
+     "url": "https://code.claude.com/docs/en/hooks"
+    },
+    {
+     "title": "Claude Code permissions",
+     "url": "https://code.claude.com/docs/en/permissions"
+    }
+   ],
+   "drill": "Take one agent you run (or a toy with `read_notes`, `fetch_url` and `issue_refund`). List every rule that currently lives only in the prompt. For each, write where it should be enforced (handler, hook, permission rule, egress allowlist) and implement the two riskiest. Then plant an injected instruction in a note and confirm the code-level controls hold even when the model follows it."
+  },
+  {
+   "subskill": "P5.2",
+   "title": "Identify risks, limitations and failure modes",
+   "summary": "This objective tests whether you can name how an LLM system actually fails in production and trace a symptom to its root cause. The professional answer usually makes a hidden failure visible (typed errors, explicit statuses, stopping conditions) instead of masking it with retries, a bigger model or a softer prompt.",
+   "keyPoints": [
+    "**Model-level limits**: hallucination (fluent but unsupported claims), knowledge cut-off and stale facts, run-to-run variation, poorly calibrated self-reported confidence, and susceptibility to injected instructions.",
+    "**System-level failure modes** cause more incidents than the model: tools that swallow errors and return success, `null` meaning both 'no match' and 'service down', timeouts reported as empty results, and truncated outputs (`stop_reason: \"max_tokens\"`) parsed as complete.",
+    "**Silent failure is the worst failure.** Make tools return typed errors (transient vs permanent, retryable or not) and make 'could not check' a first-class result, distinct from 'checked and found nothing'.",
+    "**Agents compound errors**: a wrong early step propagates. Add stopping conditions (iteration and cost caps), detect repeated identical failing calls, and checkpoint for human input when blocked.",
+    "**Hallucination mitigations** from the docs: allow the model to say it doesn't know, ground answers in extracted quotes from supplied sources, and verify claims with citations; retract claims without support.",
+    "**Refusals** (`stop_reason: \"refusal\"`) and **ambiguous inputs** are expected outcomes: handle them as states in the workflow, not crashes, and ask rather than guess when a lookup returns several matches.",
+    "**Distribution shift**: new document layouts, suppliers, languages or product lines arrive after launch. Schemas need an escape value (`other` plus detail) and evals need refreshing from production samples.",
+    "Run a **pre-mortem / failure-mode table** per component: failure, detection signal, blast radius, mitigation, owner. Prioritise by impact × likelihood, not by what is easiest to fix."
+   ],
+   "traps": [
+    "Treating a confident tone or self-reported confidence as evidence of correctness.",
+    "Adding blind retries to a permanent error (bad credentials, lapsed licence).",
+    "Reporting 'no results found' when the search tool actually timed out.",
+    "Upgrading the model to fix a failure caused by a tool contract or missing data.",
+    "Letting an agent loop without iteration or spend limits."
+   ],
+   "code": {
+    "lang": "json",
+    "src": "{\n  \"status\": \"error\",\n  \"error_type\": \"upstream_unavailable\",\n  \"retryable\": true,\n  \"checked\": false,\n  \"message\": \"Vendor DB timed out after 10s; vendor match NOT evaluated\"\n}"
+   },
+   "docs": [
+    {
+     "title": "Reduce hallucinations",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+    },
+    {
+     "title": "Building effective agents",
+     "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+     "title": "Handling stop reasons",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+     "title": "Writing tools for agents",
+     "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    }
+   ],
+   "drill": "Draw your system's pipeline and, for each tool and model call, fill in a failure-mode table: how it fails, what the caller currently sees, whether that is distinguishable from success, and the blast radius. Fix the top row by changing the contract (typed error or explicit status), then write one eval case that would have caught it."
+  },
+  {
+   "subskill": "P5.3",
+   "title": "Apply human-in-the-loop validation",
+   "summary": "The exam tests where human review adds value, how it is enforced, and how it is targeted. Strong answers put the approval gate in code at the point of execution, route by observable risk rather than the model's self-rated confidence, give reviewers the evidence they need, and keep sampling what is auto-accepted.",
+   "keyPoints": [
+    "**Gate at execution**: for irreversible or high-impact actions (payments over a threshold, deletes, deploys, external messages) the tool returns 'pending approval' and acts only after an authorised person approves. A prompt saying 'ask the user first' is not a gate.",
+    "**Meaningful review**: the reviewer needs authority to change or reject the output and the information to judge it. A one-click approve screen with no evidence invites rubber-stamping (automation bias).",
+    "**Structured handoff**: give the human a summary (who, issue, facts established, what was tried, why escalated, recommended next step) rather than a raw transcript.",
+    "**Route on observable signals**: validation failures, computed-vs-stated mismatches, policy gaps, explicit requests for a human, high-impact fields. Self-reported confidence is poorly calibrated; calibrate any score against labelled data first.",
+    "**Field-level routing** beats document-level averages: one wrong amount can hide inside a high average confidence.",
+    "**Sample the auto-accepted stream** (stratified by segment) so confidently wrong outputs are measured; keep a sampling floor even when a segment looks good.",
+    "Prioritise review queues by **risk and impact**, and size human capacity to the volume the routing rule actually produces.",
+    "**Close the loop**: reviewer corrections become labelled data for recalibrating thresholds, few-shot examples and new eval cases.",
+    "In unattended runs (CI, batch) there is nobody to ask: make 'needs human decision' an explicit output status instead of letting the agent pick an interpretation."
+   ],
+   "traps": [
+    "Implementing approval as a system-prompt instruction.",
+    "Escalating on sentiment or on the model's own confidence score.",
+    "Reviewing only low-confidence items, so confident errors are never seen.",
+    "Replacing a required human approver with an LLM judge.",
+    "Removing review because overall accuracy is high without a per-segment breakdown."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "def route(item):\n    if item.validation_errors or item.stated_total != sum(item.lines):\n        return \"review\", \"validation\"\n    risky = [f for f, c in item.conf.items() if c < CALIBRATED[f]]\n    if risky or item.amount > 10_000:\n        return \"review\", risky or \"high_value\"\n    if sampler.pick(stratum=item.segment, rate=0.03):\n        return \"review\", \"audit_sample\"\n    return \"accept\", None"
+   },
+   "docs": [
+    {
+     "title": "Building effective agents",
+     "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+     "title": "Define success criteria and build evaluations",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+     "title": "Anthropic Usage Policy",
+     "url": "https://www.anthropic.com/legal/aup"
+    }
+   ],
+   "drill": "Pick one workflow with a human step. Write down: which actions are gated in code, what the reviewer sees, what triggers review, and what sample of auto-accepted items is checked. Simulate a week of volume and compute queue size per reviewer. Change one trigger from a self-rated score to an observable signal and re-estimate."
+  },
+  {
+   "subskill": "P5.4",
+   "title": "Ensure regulatory compliance",
+   "summary": "Compliance questions test the architect's controls, not vendor paperwork trivia: data minimisation, residency, retention, access control, audit trails, DPIAs, human review and due diligence on every processor in the data path. Expect distractors that move responsibility into a prompt or assume a vendor arrangement covers everything.",
+   "keyPoints": [
+    "**Map the data flow first**: every place personal or regulated data goes (prompts, logs, caches you run, vector indexes, eval sets, third-party tools and MCP servers) and who processes it. Each processor in the path needs its own review.",
+    "**Data minimisation**: send only the fields the task needs; redact or pseudonymise before the prompt is built and re-link results in your own system. Enforce it in code with a pre-send check, not with an instruction.",
+    "**Residency** is set by platform and region choice and by the API's data residency controls (per-request inference geography plus workspace-level allowed and default geos), never by a prompt. On Amazon Bedrock and Google-managed Vertex AI the cloud provider is the data processor and its own controls apply.",
+    "**Zero Data Retention** is enabled per organisation and covers **eligible** features only; features that store files, jobs or container state are typically not eligible. Under ZDR the API does **not** block an ineligible feature, so the architect must restrict which features the application uses.",
+    "**HIPAA readiness** on the Claude API (with a signed BAA) blocks non-eligible features with a 400 error. The docs warn not to put PHI in JSON schema definitions used by structured outputs or `strict: true` tools, because compiled schemas are cached separately from message content.",
+    "Third-party integrations (tools, websites, external MCP servers) are outside Anthropic's data arrangements: do vendor due diligence, sign the appropriate agreements, minimise what they receive, or host the capability yourself.",
+    "**Retention and erasure**: set TTLs for every store you own, and tag derived artefacts (chunks, embeddings, eval samples, logs) with a subject key so deletion requests reach all of them.",
+    "**Audit trail** for regulated decisions: request ID, pinned model ID, prompt/template version, retrieved document IDs and versions, tool calls, output, and the human reviewer's action, in an access-controlled, append-only store with a defined retention.",
+    "**GDPR DPIA**: high-risk processing (for example, automated assessment of people or large-scale special-category data) requires a data protection impact assessment **before** processing starts; involve the DPO early."
+   ],
+   "traps": [
+    "Writing 'do not store data' or 'keep data in the EU' into the system prompt.",
+    "Assuming an organisation-level ZDR or BAA covers every feature and every third-party tool.",
+    "Encrypting a store and calling that erasure.",
+    "Logging full prompts forever 'for audit' in conflict with minimisation and retention rules.",
+    "Answering with a claim about which certifications a vendor holds instead of the architect's own controls."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "ALLOWED_FEATURES = {\"messages\", \"prompt_caching\", \"citations\"}  # reviewed vs eligibility table\n\ndef pre_send(req):\n    used = detect_features(req)\n    if not used <= ALLOWED_FEATURES:\n        raise ComplianceError(f\"not approved: {used - ALLOWED_FEATURES}\")\n    if PAN_RE.search(req.text) and luhn_ok(req.text):\n        raise ComplianceError(\"card number in prompt\")\n    audit.write(req.id, model=req.model, prompt_ver=req.template_version,\n                doc_ids=req.retrieved_ids)  # no raw content"
+   },
+   "docs": [
+    {
+     "title": "API and data retention",
+     "url": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+    },
+    {
+     "title": "Data residency",
+     "url": "https://platform.claude.com/docs/en/manage-claude/data-residency"
+    },
+    {
+     "title": "Anthropic Trust Center",
+     "url": "https://trust.anthropic.com"
+    },
+    {
+     "title": "GDPR (Regulation (EU) 2016/679)",
+     "url": "https://eur-lex.europa.eu/eli/reg/2016/679/oj"
+    }
+   ],
+   "drill": "Draw the data-flow diagram for one Claude feature you own. Mark every store and every processor. For each, write: which personal data enters, the lawful purpose, retention TTL, who can read it, and how an erasure request reaches it. Then list the API features the app uses and check each one against the eligibility table for your data arrangement."
+  },
+  {
+   "subskill": "P5.5",
+   "title": "Address ethical AI: bias, fairness, transparency",
+   "summary": "This objective tests whether you can measure and reduce unfair outcomes and be honest with the people affected by a system. Expect scenarios on counterfactual bias testing, disaggregated evaluation, AI disclosure, meaningful human review of high-stakes recommendations, and traceable explanations rather than post-hoc rationalisation.",
+   "keyPoints": [
+    "**Measure before you fix.** Anthropic's discrimination research generated many decision prompts and **systematically varied demographic information** in otherwise identical cases to expose outcome differences; careful prompting reduced both positive and negative discrimination. Use the same counterfactual pattern, including proxies (names, postcodes, language).",
+    "**Disaggregate evaluations**: report quality per language, region, user group and document type. A strong aggregate score can hide a segment the system fails.",
+    "**Minimise sensitive inputs**: remove protected attributes and close proxies the decision doesn't need, then re-run the counterfactual suite; keep it as a regression gate on every prompt or model change.",
+    "**High-risk uses** under Anthropic's Usage Policy (for example legal, medical, finance, credit, insurance, housing, employment, education, public benefits): a qualified person must meaningfully review the AI recommendation with authority to change it, and the affected person must be told AI was used.",
+    "**AI disclosure**: consumer-facing chatbots and agents must disclose that users are interacting with AI, at least at the start of each session or in the interface.",
+    "**Transparency in agents**: show planning steps and sources. Explanations should be generated **with** the decision and tied to published criteria and cited evidence, not asked for after the fact.",
+    "**Honest claims**: report measured performance with its scope (dataset size, segments covered, date), label AI-generated content, and provide a path to a human and to contest a decision.",
+    "Bias work is lifecycle work: diverse eval data at design, counterfactual tests before launch, segment monitoring and complaint review in production."
+   ],
+   "traps": [
+    "Deleting the protected attribute and declaring the system fair without testing proxies.",
+    "Publishing one aggregate accuracy figure as proof of fairness.",
+    "Giving an AI persona a human name without telling users it is AI.",
+    "Treating a reviewer who can only click 'approve' as meaningful human review.",
+    "Asking the model afterwards 'why did you decide this?' and presenting that as the explanation."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "base = load_cases(\"tenant_screening_eval.jsonl\")\nvariants = {\"name\": NAMES_BY_GROUP, \"postcode\": POSTCODES_BY_AREA}\nfor case in base:\n    for attr, values in variants.items():\n        outs = [score(case.with_(attr, v)) for v in values]\n        gaps[attr].append(max(outs) - min(outs))\nreport({a: (mean(g), pct_over(g, 0.05)) for a, g in gaps.items()})\nassert all(mean(g) < 0.02 for g in gaps.values())  # CI regression gate"
+   },
+   "docs": [
+    {
+     "title": "Evaluating and mitigating discrimination in LM decisions",
+     "url": "https://www.anthropic.com/research/evaluating-and-mitigating-discrimination-in-language-model-decisions"
+    },
+    {
+     "title": "Anthropic Usage Policy",
+     "url": "https://www.anthropic.com/legal/aup"
+    },
+    {
+     "title": "Building effective agents",
+     "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+     "title": "Define success criteria",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    }
+   ],
+   "drill": "Take 30 cases from a decision-support prompt you own. Create variants that change only a name, a postcode or the writing style. Run them, compute the score gap per attribute, and pick the largest. Change the prompt (explicit criteria, remove the unnecessary attribute) and re-run to see whether the gap shrinks without hurting overall accuracy."
+  }
+ ],
+ "questions": [
+  {
+   "id": "P5-4-001",
+   "subskill": "P5.4",
+   "difficulty": 3,
+   "stem": "A US hospital network has HIPAA readiness enabled on its Claude API organisation under a signed BAA. A developer building a discharge-summary extractor uses structured outputs and, to improve matching, generates the JSON schema per request with an `enum` of the patient's full name and the names of their listed caregivers. Prompts and responses are otherwise handled as PHI. What should the architect require?",
+   "select": 1,
+   "options": [
+    "Keep the per-request schema but hash the names inside the `enum`, so the schema no longer contains readable identifiers.",
+    "Use a fixed, generic schema with no patient-specific values, and pass the names in the message content instead.",
+    "Move the extractor to a separate organisation without HIPAA readiness so that schema caching rules no longer apply to it.",
+    "Leave the design as is, since the BAA covers every part of a request sent to a HIPAA-ready organisation, including schemas."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Hashed names of a specific patient are still patient-specific data in the schema, and the hashing also defeats the matching the developer wanted.",
+    "Correct. The docs say compiled schemas are cached separately from message content without the same PHI protections, so PHI must stay out of property names, `enum`, `const` and `pattern` values.",
+    "That removes the HIPAA safeguards from a workload that processes PHI; it moves the problem rather than fixing it.",
+    "The docs explicitly exclude JSON schema definitions from the protections given to prompts and responses."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P5-4-002",
+   "subskill": "P5.4",
+   "difficulty": 1,
+   "stem": "An EU insurer plans a Claude-based assistant that reads medical reports attached to claims and recommends whether each claim should go to fast-track payment or manual investigation. The project is in design; no customer data has been processed yet. The data protection officer has not been involved. What should the architect do FIRST on the compliance side?",
+   "select": 1,
+   "options": [
+    "Build the pilot on production claims so that the DPO can review a working system with real outputs.",
+    "Add a system-prompt instruction that the assistant must process health data in line with GDPR.",
+    "Start a data protection impact assessment with the DPO before any claim data is processed.",
+    "Wait for the first data subject complaint, then assess whether the processing was high-risk."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Processing real health data before assessing the risk is exactly what the DPIA requirement is meant to prevent.",
+    "A prompt cannot make processing lawful or assess its risks; it changes nothing about the organisation's obligations.",
+    "Correct. Large-scale processing of health data to assess people is high-risk, and GDPR requires the DPIA before the processing starts, which also shapes minimisation, review and retention decisions.",
+    "A DPIA is a prior assessment; waiting for complaints inverts the obligation and exposes the insurer."
+   ],
+   "ref": "https://eur-lex.europa.eu/eli/reg/2016/679/oj"
+  },
+  {
+   "id": "P5-4-003",
+   "subskill": "P5.4",
+   "difficulty": 2,
+   "stem": "An HR SaaS platform stores employee chat transcripts with its Claude assistant, chunks and embeds them into a vector index for long-term 'memory', and copies some conversations into an evaluation dataset. When an employee exercised the right to erasure, the platform deleted the transcript rows, but a later audit found the person's details still being retrieved into prompts. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Add a retrieval filter that hides chunks whose source transcript no longer exists, leaving the chunks stored until the index is next rebuilt.",
+    "Tag every derived copy (chunks, embeddings, eval samples, logs) with a subject key, and run erasure and retention TTLs across all of them.",
+    "Add a system-prompt rule telling the assistant to ignore any information about employees who have asked to be forgotten.",
+    "Encrypt the vector index and evaluation dataset at rest so the remaining personal data is protected even though it was not removed."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Hiding is not erasure; the personal data is still held in the index and eval copies.",
+    "Correct. The root cause is missing lineage from source to derived stores; a subject key on every copy lets erasure and retention reach all of them.",
+    "The data still sits in the stores and still enters the context; a prompt cannot erase anything and may not be followed.",
+    "Encryption protects data that you are allowed to keep; it does not satisfy a request to delete it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P5-4-004",
+   "subskill": "P5.4",
+   "difficulty": 3,
+   "stem": "A fintech has a Zero Data Retention arrangement for its Claude API organisation, and its legal team requires that no customer content is retained by the model provider. A developer adds an API feature that the published eligibility table marks as not ZDR-eligible, because it stores uploaded files server-side until they are deleted. Integration tests pass and nothing in the API responses signals a problem. What should the architect put in place?",
+   "select": 1,
+   "options": [
+    "Nothing extra: under ZDR the API rejects any request that uses an ineligible feature, so passing tests confirm compliance.",
+    "Enable HIPAA readiness on the same organisation, because it blocks ineligible features with an error and will catch the problem.",
+    "An approved-feature allowlist enforced in the app's API gateway, checked against the eligibility table during design review.",
+    "A nightly job that deletes uploaded files, which brings the feature back inside the ZDR arrangement for future requests."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The docs state the opposite: under ZDR the API does not block ineligible features; using one is a choice to step outside the arrangement for that data.",
+    "HIPAA readiness is a different arrangement for PHI with a BAA and is permanent once enabled; it is not a feature-linting tool for a fintech.",
+    "Correct. Because ZDR does not block ineligible features, the architect has to control which features the application may use and review them against the eligibility table.",
+    "Your own cleanup schedule is not zero retention; the feature's own retention policy still applied while the files existed."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P5-4-005",
+   "subskill": "P5.4",
+   "difficulty": 2,
+   "stem": "A lender uses Claude to draft affordability assessments that underwriters approve or amend. The regulator requires that, for any decision, the lender can show what information the AI used and who signed off. Today the app logs only the final text. A proposal is to 'log everything': full prompts and responses kept indefinitely in the application database, readable by all engineers. Which approach BEST meets the requirement?",
+   "select": 1,
+   "options": [
+    "Adopt the proposal, since full prompts and responses kept indefinitely give the most complete record and avoid any later gaps in evidence.",
+    "Re-run the original request at temperature 0 when an audit arrives, and use the regenerated output as the record of what happened.",
+    "Ask the model to append a short summary of its reasoning to each draft and store that summary as the audit record.",
+    "Log per decision the model ID, prompt version, document IDs, tool calls, output and reviewer action, in restricted append-only storage with set retention."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Unbounded retention of full personal data with broad access conflicts with minimisation and access control, and makes the logs a new risk.",
+    "Outputs are not guaranteed identical on re-run, and models are retired; reproduction is not a record of what actually happened.",
+    "A model-written summary is not evidence of the inputs and versions used, and it says nothing about the human sign-off.",
+    "Correct. It records what was used and who approved it, with references rather than copies where possible, restricted access, and a defined retention."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P5-4-006",
+   "subskill": "P5.4",
+   "difficulty": 3,
+   "stem": "A telehealth company processes PHI through the Claude API under a BAA with HIPAA readiness enabled. Product wants to connect a third-party SaaS clinical-search service as an MCP server so the agent can send symptom descriptions and patient history to it during a consult. The vendor's marketing site says it is 'healthcare-grade'. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Treat the vendor as a separate processor: due diligence, its own BAA, and only the minimum fields it needs, or host the capability internally.",
+    "Connect it, since the BAA with the model provider extends to tools the model calls during a request covered by HIPAA readiness.",
+    "Connect it, but add a system-prompt instruction that the agent must never include patient names in calls to the clinical-search tool.",
+    "Connect it through a separate workspace of the same organisation so that the vendor's traffic is logically isolated from the other PHI workloads."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The docs exclude third-party integrations from Anthropic's data arrangements, so the vendor needs its own review and agreement, and minimisation limits what it receives.",
+    "Data processed by external tools or services is explicitly outside HIPAA readiness; the agreement does not extend to them.",
+    "A prompt rule is not a control for PHI flowing to an unvetted processor, and history and symptoms are PHI even without names.",
+    "Workspace separation inside your own organisation does nothing about PHI leaving to a vendor that has not been assessed."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P5-4-007",
+   "subskill": "P5.4",
+   "difficulty": 2,
+   "stem": "A European retail bank is launching a Claude-based assistant that drafts replies to customer complaints. The prototype passes the whole customer record (including date of birth, national ID and full transaction history) into every prompt, stores prompts and drafts in an unrestricted analytics table with no expiry, and plans to reuse them for marketing segmentation. Which THREE changes BEST address the bank's GDPR obligations? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Pass only the fields needed to answer the complaint, enforced by the code that builds the prompt.",
+    "Set and enforce a retention period for stored prompts and drafts tied to the complaint-handling purpose.",
+    "Add a line to the system prompt instructing the assistant to comply with GDPR when writing replies.",
+    "Restrict access to the stored data by role, and log who accesses it.",
+    "Keep the marketing reuse, since the customer gave the data to the bank and the complaint log already holds it.",
+    "Switch to the most capable model tier so that fewer drafts contain mistakes about the customer."
+   ],
+   "answer": [
+    0,
+    1,
+    3
+   ],
+   "explanations": [
+    "Correct. Data minimisation, enforced where the prompt is built.",
+    "Correct. Storage limitation needs a defined, enforced retention tied to the purpose.",
+    "A prompt line cannot implement minimisation, retention or access control.",
+    "Correct. Access control and an access log protect the stored personal data and support accountability.",
+    "Reusing complaint data for marketing is a new purpose that needs its own lawful basis; it is not automatically allowed.",
+    "Model quality does not address minimisation, retention, purpose limitation or access."
+   ],
+   "ref": "https://eur-lex.europa.eu/eli/reg/2016/679/oj"
+  },
+  {
+   "id": "P5-5-001",
+   "subskill": "P5.5",
+   "difficulty": 2,
+   "stem": "A property-management company uses Claude to summarise rental applications and recommend 'proceed' or 'decline' to leasing agents. A tenant advocacy group alleges that applicants from certain neighbourhoods are declined more often. The application form does not ask for ethnicity. What should the architect do FIRST?",
+   "select": 1,
+   "options": [
+    "Remove the postcode field from the input and announce that the recommender no longer uses location.",
+    "Build a counterfactual test set where cases differ only in name, postcode or language, and measure the recommendation gap.",
+    "Ask the model to explain each past decline and check whether those explanations mention a neighbourhood.",
+    "Report the overall approval rate, which matches the regional average, to show that the system is fair."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Removing one field without measuring may miss other proxies (names, writing style) and gives no evidence the gap closed.",
+    "Correct. Varying only the demographic signals in otherwise identical cases, as in Anthropic's discrimination research, shows whether and where a gap exists before you change anything.",
+    "Post-hoc explanations are not reliable evidence of which factors drove the decision.",
+    "An overall rate that matches the average can hide large differences between neighbourhoods."
+   ],
+   "ref": "https://www.anthropic.com/research/evaluating-and-mitigating-discrimination-in-language-model-decisions"
+  },
+  {
+   "id": "P5-5-002",
+   "subskill": "P5.5",
+   "difficulty": 1,
+   "stem": "An online furniture retailer launches a support chat with a friendly persona named 'Emma', powered by Claude. Survey comments show many customers believe they are chatting with a human employee, and some share sensitive information on that basis. What should the product team do?",
+   "select": 1,
+   "options": [
+    "Mention in the terms of service that some support conversations may be handled by automated systems.",
+    "Clearly disclose in the chat interface, at least at the start of each session, that users are talking to AI.",
+    "Rename the persona to 'Emma (Support)' so that it sounds more like a team account than a person.",
+    "Tell the persona to reveal that it is an AI only if a customer asks directly whether they are talking to a bot."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A clause buried in the terms is not a clear disclosure in the conversation itself.",
+    "Correct. Anthropic's Usage Policy requires consumer-facing chatbots to disclose they are AI, at minimum at the start of each chat session or in the product interface.",
+    "A different label still does not tell users they are talking to AI.",
+    "Disclosure on request leaves most users misled; the policy requires proactive disclosure."
+   ],
+   "ref": "https://www.anthropic.com/legal/aup"
+  },
+  {
+   "id": "P5-5-003",
+   "subskill": "P5.5",
+   "difficulty": 2,
+   "stem": "A health insurer's claims system uses Claude to recommend whether to deny claims. To hit throughput targets, adjusters see only the recommendation and an 'Approve' button, and approve 99.6% of recommendations in under ten seconds. Members are not told AI was involved. Which TWO changes BEST address the ethical and policy concerns? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Give adjusters the evidence and criteria behind each recommendation and the authority and time to change or reject it.",
+    "Replace the adjuster step with a second model that reviews each recommendation, to reduce cost.",
+    "Tell members whose claim decision used an AI recommendation that AI was used to produce it.",
+    "Auto-deny only when the model reports confidence above 0.95, and send all remaining recommendations to adjusters for review.",
+    "Add a disclaimer to the internal adjuster tool that recommendations may contain errors."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. The Usage Policy requires a qualified person to meaningfully review high-risk recommendations with authority to modify them; a one-button screen invites rubber-stamping.",
+    "A model reviewing a model is not the qualified human review the policy requires for insurance decisions.",
+    "Correct. For high-risk uses, people who are the subject of a decision based on an AI recommendation must be clearly told that AI was used.",
+    "Self-reported confidence is poorly calibrated, and auto-denial removes human review from the highest-impact outcome.",
+    "An internal disclaimer changes neither the quality of review nor what members are told."
+   ],
+   "ref": "https://www.anthropic.com/legal/aup"
+  },
+  {
+   "id": "P5-5-004",
+   "subskill": "P5.5",
+   "difficulty": 1,
+   "stem": "A city government's benefits assistant, built on Claude, scores 94% on its evaluation set, and the programme director wants to announce that it 'works for all residents'. Complaints from Spanish-speaking and Vietnamese-speaking residents report wrong eligibility guidance. The evaluation set was written by the English-speaking project team. What should the architect recommend?",
+   "select": 1,
+   "options": [
+    "Announce the 94% result, since it was measured on a held-out set, and track complaints after launch.",
+    "Add 'answer accurately in the user's language' to the system prompt and re-run the existing evaluation set.",
+    "Add Spanish and Vietnamese cases to the eval set, report results per language, and fix gaps before launch.",
+    "Switch the assistant to answer only in English so that every resident gets the quality the eval measured."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The 94% only describes English queries; claiming it for all residents is not supported by the evidence.",
+    "Re-running an English-only set cannot show whether the change helped other languages.",
+    "Correct. Disaggregated evaluation exposes the segments the aggregate hides, and the claim should match what was measured.",
+    "Restricting the language excludes the residents who are already poorly served; it removes them rather than fixing the gap."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+  },
+  {
+   "id": "P5-5-005",
+   "subskill": "P5.5",
+   "difficulty": 3,
+   "stem": "A recruiting platform uses Claude to score résumés against a role's published criteria for a recruiter to review. Candidates may ask why they were not shortlisted. The current plan is that, when a candidate asks, an engineer sends the résumé back to the model with 'Explain why this candidate scored 4/10'. Which design BEST supports transparent, accurate explanations?",
+   "select": 1,
+   "options": [
+    "Keep the on-request approach but use a more capable model tier so that the generated explanations are more detailed and convincing.",
+    "Return only the numeric score to candidates, since any explanation risks revealing how the screening model works.",
+    "Have the model output, with each score, a per-criterion rating citing résumé evidence; store it and give it to the recruiter.",
+    "Show candidates the model's full raw reasoning text from the original scoring call, unedited, as the explanation."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A later, separate call produces a fresh rationalisation that may not match what drove the original score; a more persuasive one is worse, not better.",
+    "Withholding explanations undermines transparency and leaves candidates no basis to contest an error.",
+    "Correct. An explanation produced with the decision, structured by the published criteria and tied to evidence, can be checked by the recruiter and shared with the candidate.",
+    "Raw intermediate text is not a reviewed, criteria-based explanation and may confuse or mislead the candidate."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "P5-5-006",
+   "subskill": "P5.5",
+   "difficulty": 2,
+   "stem": "Counterfactual testing of a small-business credit pre-screening assistant shows that applications differing only in the owner's first name receive 'refer to underwriter' scores up to 0.08 lower for one group of names. Underwriters make the final decision. Which TWO actions BEST address the finding? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Remove the owner's name and other unneeded personal details from the input, and tell the model to score only on the stated criteria.",
+    "Add a calibration offset of +0.08 to applications from the affected group of names so that the average scores across groups match exactly.",
+    "Run the counterfactual suite as a release gate on every prompt or model change and monitor score gaps in production.",
+    "Rely on the underwriters to correct any unfair scores, since they make the final decision anyway.",
+    "Switch to the most capable model tier, which can be assumed to be free of name-based bias."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Removing an input the decision doesn't need and stating explicit criteria addresses the cause; Anthropic's research found careful prompting reduced discrimination.",
+    "A group-based offset treats people differently by inferred demographic, hides the cause and can create new unfairness.",
+    "Correct. A regression gate and production monitoring stop the gap from returning silently after later changes.",
+    "Underwriters see a biased score and may anchor on it; human review complements a fix but does not remove the bias.",
+    "No model tier can be assumed bias-free; the fix must be measured, not assumed."
+   ],
+   "ref": "https://www.anthropic.com/research/evaluating-and-mitigating-discrimination-in-language-model-decisions"
+  },
+  {
+   "id": "P5-5-007",
+   "subskill": "P5.5",
+   "difficulty": 2,
+   "stem": "A legal-tech SaaS company's contract-review tool uses Claude to flag risky clauses. It was evaluated on 200 US software licence agreements with 97% recall on the team's labelled clauses. Marketing wants to tell law firms the tool 'catches 99% of risky clauses in any contract' and to present flags without marking them as AI-generated. What should the architect advise?",
+   "select": 1,
+   "options": [
+    "Use the 99% claim, since recall on licence agreements is close enough and law firms will review outputs anyway.",
+    "State the measured result with its scope (contract type, sample size), label flags as AI-generated, and link each flag to its clause.",
+    "Avoid publishing any performance figures, so that customers cannot hold the company to a specific number.",
+    "Re-run the same 200-contract evaluation several times until a 99% result appears, then publish that best figure together with its scope."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "The claim overstates both the number and the scope; other contract types and jurisdictions were never measured.",
+    "Correct. Honest claims match what was measured, and labelled, traceable flags let lawyers judge each one.",
+    "Saying nothing deprives customers of the information they need to rely on the tool appropriately.",
+    "Selecting the best of repeated runs misrepresents expected performance and still overstates the scope."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+  }
+ ]
+}

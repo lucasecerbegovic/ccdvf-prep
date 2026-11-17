@@ -1,0 +1,1386 @@
+{
+ "lessons": [
+  {
+   "subskill": "P6.1",
+   "title": "Structured discovery and requirement gathering",
+   "summary": "The exam checks that you can turn a vague business ask into measurable success criteria, real data, named stakeholders and hard constraints before you choose a model or pattern. The right answer usually means asking a sharper question or getting a baseline, not building something.",
+   "keyPoints": [
+    "**Start with the problem, not the model.** Find out the business outcome, who owns it, today's process and what it costs. 'Build an agent' is a proposed solution. The requirement is something like 'cut refund handling time without raising wrong refunds'.",
+    "**Success criteria must be specific, measurable, achievable and relevant** (Anthropic's eval guidance). 'Accurate' becomes something like '>= 0.85 F1 on a held-out labelled set'. Most systems need several criteria at once: task fidelity, consistency, tone, privacy, latency and price.",
+    "**Baseline the current process** (handle time, error rate, cost per case, backlog) before you design. Without a baseline nobody can show ROI later, and 'is it better?' turns into a matter of opinion.",
+    "**Collect real, representative samples early**, including messy edge cases, ambiguous inputs and cases where experts disagree. Curated 'happy path' examples hide the hard part of the problem and inflate feasibility estimates.",
+    "**Map the stakeholders**: the business owner, end users, people who consume the output downstream, compliance, legal, privacy and security approvers, and the operations team that will run it. Approvers who show up late are the most common cause of late redesigns.",
+    "**Surface hard constraints up front**: data residency and the platform choice (Claude API vs Bedrock, Vertex AI or Foundry), retention and ZDR eligibility of the features you plan to use, throughput against rate limits, cost ceiling, audit needs, and which actions can't be reversed.",
+    "**Quantify asymmetric error costs.** Ask what a false negative costs compared with a false positive, and which actions need human approval. The answers set thresholds, review rules and how much autonomy the system gets.",
+    "**Check feasibility with a time-boxed spike** against a small labelled set before committing to targets. Achievable targets come from your own measurements, not public benchmarks.",
+    "**Prefer the simplest solution that meets the criteria.** Discovery may show that a single call, a deterministic rule or no LLM at all is enough. Agents are for steps you can't predict in advance."
+   ],
+   "traps": [
+    "Building a prototype first and asking stakeholders whether it 'feels good enough'. That is not an acceptance criterion.",
+    "Treating compliance or the operations team as sign-off steps at the end instead of discovery participants.",
+    "Taking a feasibility target from a vendor benchmark or leaderboard instead of a spike on the customer's own data.",
+    "Asking which model or framework the stakeholder prefers as a discovery question. That is a design choice, not a requirement.",
+    "Accepting curated sample data that leaves out the edge cases production will be full of."
+   ],
+   "docs": [
+    {
+     "title": "Define success criteria and build evaluations",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+     "title": "Building effective agents",
+     "url": "https://www.anthropic.com/engineering/building-effective-agents"
+    },
+    {
+     "title": "Rate limits",
+     "url": "https://platform.claude.com/docs/en/api/rate-limits"
+    }
+   ],
+   "drill": "Take the request 'Use Claude to speed up our supplier-onboarding reviews.' Write a one-page discovery plan: 6 questions for the business owner, the 4 stakeholder groups you would interview and why, the baseline metrics you would collect, the sample data you would ask for (how many items, which edge cases), and three measurable success criteria with numbers. Mark which answers could change the architecture."
+  },
+  {
+   "subskill": "P6.2",
+   "title": "Communicating architectural decisions and trade-offs",
+   "summary": "You present the same decision differently to executives, compliance and engineering, but always with measured evidence and honest residual risk. Expect questions where the right option frames a trade-off in the audience's units (cost per outcome, risk, effort) and the distractors overpromise, bury the bad news or argue from benchmarks.",
+   "keyPoints": [
+    "**Translate to the audience's units.** Executives want cost per resolved case, time saved and risk compared with the baseline. Compliance wants data flows, controls, residual risk and audit evidence. Engineers want interfaces, failure modes and operational load. Tokens and per-token prices are inputs to the numbers, not the message.",
+    "**Present options, not a single answer.** Give 2–3 viable options with quantified trade-offs (quality on your eval, p95 latency, cost per task at projected volume, operational complexity) and a clear recommendation with its reasoning.",
+    "**Compare on cost per completed task**, including retries and human rework. A cheaper tier that fails more often can cost more overall. Show the whole cost, not the token price.",
+    "**Be honest about residual error.** LLM systems have a measured, non-zero error rate. Say what it is, how it was measured (sample size, how representative), and which controls limit the impact (grounding with citations, validation, human review on high-risk paths). Never promise 'zero hallucinations'.",
+    "**Explain mechanisms in plain terms**: streaming improves *perceived* latency (time to first token), not total time. The Batches API halves cost but gives up immediacy (most batches finish within an hour, up to 24 h). A bigger context window adds cost and latency and doesn't guarantee better answers.",
+    "**Tie every claim to evidence**: your eval results, load tests and pilot data. Public benchmarks are context, not proof for this workload.",
+    "**Deliver bad news early, with options**: if the eval misses the target, say so with the data and offer choices (narrow the scope, add human review, extend the timeline). Don't quietly lower the bar.",
+    "**Record the decision and the alternatives you rejected** (an ADR) so the reasoning survives staff changes and can be revisited when the facts change."
+   ],
+   "traps": [
+    "Leading an executive briefing with per-million-token prices or model names instead of business outcomes.",
+    "Telling compliance that a system-prompt instruction 'prevents' a risk. Explain the deterministic controls instead.",
+    "Citing leaderboard rankings as the reason to pick a model for this workload.",
+    "Presenting one option as inevitable, which hides the trade-offs the stakeholder is entitled to choose between.",
+    "Reporting a point estimate from 40 eval items as if it were a guarantee."
+   ],
+   "docs": [
+    {
+     "title": "Choosing a model",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+    },
+    {
+     "title": "Reducing latency",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+     "title": "Batch processing",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    },
+    {
+     "title": "Reduce hallucinations",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+    }
+   ],
+   "drill": "For one of your Claude features, write three 5-sentence briefs on the same decision (for example routing to a smaller tier): one for a CFO (cost per outcome, risk), one for a compliance lead (data flow, controls, residual risk) and one for the engineering team (interfaces, failure modes, on-call impact). Every number must trace back to an eval or a load test."
+  },
+  {
+   "subskill": "P6.3",
+   "title": "Feedback loops, expectation alignment and SLAs",
+   "summary": "This objective checks that you agree measurable targets before launch, set SLAs from measured distributions with headroom and with dependencies taken into account, and turn stakeholder and user feedback into eval cases and controlled changes instead of reacting to anecdotes.",
+   "keyPoints": [
+    "**Agree success and exit criteria before a pilot**: the metrics, thresholds, sample size, duration and who decides. Then a single bad demo output is a data point you triage, not a reason to roll back.",
+    "**Set SLAs from measurement**: load-test at the projected peak, read the p50/p95/p99 distribution, add headroom, and state the measurement window and method. Never set an SLA from a demo or a vendor's typical speeds.",
+    "**Quality SLOs are statistical**: 'at least 95% of sampled responses pass the rubric each week', measured with a defined grader. 'The model will never be wrong' is not a target you can commit to.",
+    "**Account for dependencies.** Your availability can't exceed your upstream's unless you design fallbacks (queueing, retry with backoff, a degraded mode, a cached answer or human handoff). Write down what is excluded and what degraded behaviour looks like.",
+    "**Match the latency promise to the need**: if consumers can wait a day, agree an asynchronous SLA and use the Message Batches API (50% cheaper, results within 24 h). Don't build real-time capacity nobody needs.",
+    "**Close the feedback loop**: capture explicit feedback (ratings, corrections) and implicit signals (escalations, edits, retries), triage and label them, add failures to the regression eval set, fix, re-evaluate, and release behind a flag.",
+    "**Explicit feedback is biased and sparse.** Complement it with randomly sampled grading of production traffic, and segment by cohort, intent and prompt version.",
+    "**Manage scope changes through change control**: estimate the impact of every new request on evals, cost, latency and timeline, then let the owner prioritise.",
+    "**Set user expectations in the product**: say what the assistant can and can't do (no live browsing, no memory between sessions unless built in), where it may be wrong, and how to escalate."
+   ],
+   "traps": [
+    "Promising a p95 latency from a few demo calls on an idle system.",
+    "Committing to 99.99% availability with a single upstream model dependency and no fallback.",
+    "Rolling back a launch because an executive saw one bad answer, when the agreed metrics are within threshold.",
+    "Collecting thumbs-down ratings into a dashboard that nobody turns into eval cases.",
+    "Accepting 'just add three more languages' without re-running evals and re-estimating cost."
+   ],
+   "docs": [
+    {
+     "title": "Define success criteria and build evaluations",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+     "title": "Rate limits",
+     "url": "https://platform.claude.com/docs/en/api/rate-limits"
+    },
+    {
+     "title": "Errors (429, 529, retries)",
+     "url": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+     "title": "Batch processing",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+    }
+   ],
+   "drill": "Draft an SLO sheet for a Claude summarisation service: one latency SLO (percentile, window, how it's measured), one quality SLO (rubric, grader, weekly sample size), one availability SLO with exclusions and degraded-mode behaviour, plus an error budget and an escalation path. Then design the feedback loop that turns a user correction into a regression eval case."
+  },
+  {
+   "subskill": "P6.4",
+   "title": "Architecture documentation and implementation guidance",
+   "summary": "You're tested on writing documentation that keeps decisions auditable and makes teams self-sufficient: ADRs with context, alternatives and consequences; data-flow views for compliance; runbooks for operators; and short reference implementations that encode the platform's conventions.",
+   "keyPoints": [
+    "**An ADR records context, the decision, the alternatives considered and the consequences** (good and bad), plus a status and a date. 'We use Sonnet' is not an ADR. 'Sonnet-tier for drafting because it met the 92% rubric target at a third of the Opus-tier cost per task; trade-off: weaker on X; revisit if Y' is.",
+    "**ADRs are append-only.** When a decision changes, write a new ADR that supersedes the old one and mark the old one 'Superseded by ADR-NNN'. Don't rewrite history.",
+    "**Document the 'why' with evidence**: link the eval run, the load test or the cost model that justified each threshold (for example a human-review confidence cutoff). Auditors and future maintainers need the reasoning, not just the setting.",
+    "**For compliance reviews, draw the data flow**: the source systems, what is redacted, which platform and region processes the request (Claude API, Bedrock, Vertex AI, Foundry), what is logged and for how long, which tools can read or write what, and where the trust boundaries are.",
+    "**Platform choice has documented consequences**: partner-operated platforms such as Amazon Bedrock set their own model retirement schedules, and feature availability can differ between platforms. Record these in the ADR.",
+    "**Implementation guidance is code, not prose**: a reference client or gateway that pins the model ID in configuration, logs `request_id`, model, prompt version, `usage`, `stop_reason` and latency, retries 429/529 with backoff, and uses structured outputs for JSON. Teams copy what works.",
+    "**Tool and MCP contracts are documentation the model reads.** Clear names, parameter descriptions, examples and actionable error messages improve agent behaviour as well as human understanding.",
+    "**Runbooks map symptoms to actions**: 429 or 529 spikes, a rise in `stop_reason: max_tokens`, more refusals, cost anomalies, and model deprecation notices. Each entry names the owner and the rollback step.",
+    "**Tailor the view to the audience**: a context diagram for executives, component and sequence views for engineers, data flow and controls for compliance. It is one model of the system with several views."
+   ],
+   "traps": [
+    "Editing an old ADR in place when the decision changes, which loses the audit trail.",
+    "A 60-page wiki as the only implementation guidance, with no runnable reference code.",
+    "Documenting 'the system prompt tells the model not to send data outside the EU' as a residency control.",
+    "Telling teams to set `temperature` to 0 everywhere: current models reject sampling parameters with a 400 error.",
+    "Leaving the model ID, the prompt version and the eval evidence out of the architecture record."
+   ],
+   "code": {
+    "lang": "markdown",
+    "src": "# ADR-014: Route ticket summarisation to the Haiku tier\nStatus: Accepted (supersedes ADR-009) | Date: 2026-10-02\nContext: 1.2M tickets/month; ADR-009 used the Sonnet tier at $X/month.\nDecision: Haiku tier, pinned ID in config `SUMMARY_MODEL`.\nAlternatives: Sonnet tier (baseline); Batches API (rejected: agents need it live).\nEvidence: eval run #318: 94.1% vs 95.0% rubric pass; p95 1.1 s vs 2.4 s.\nConsequences: -61% cost per ticket; weaker on multi-thread tickets ->\n  route those to Sonnet tier. Revisit if pass rate < 93% for 2 weeks."
+   },
+   "docs": [
+    {
+     "title": "Writing effective tools for agents",
+     "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+     "title": "Model deprecations (partner platform schedules)",
+     "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+     "title": "Errors",
+     "url": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+     "title": "Structured outputs",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    }
+   ],
+   "drill": "Write two ADRs for a Claude system you know: the original platform choice (Claude API vs a cloud platform) and a later one that supersedes a model-tier decision. Each needs context, decision, at least two alternatives, the evidence, consequences and a revisit trigger. Then write a 10-line runbook entry for 'stop_reason max_tokens rate tripled overnight'."
+  },
+  {
+   "subskill": "P6.5",
+   "title": "Supporting lifecycle phases",
+   "summary": "The exam treats a Claude system as a product with a life cycle: discovery, design, handoff to an operating team, monitoring, iteration and eventually migration or retirement. Expect questions on handoff packages, change control for prompts and models, and planned model migrations.",
+   "keyPoints": [
+    "**Handoff is a deliverable**: named owners, an on-call runbook, dashboards and alerts, the eval suite with its thresholds, prompt and model version history, rollback steps, and known limitations. Run a period of shadowing or joint on-call before the transfer.",
+    "**Every change is a deploy**: a prompt, the model ID, a tool schema, effort or `max_tokens`. Version it, gate it with regression evals, release it behind a flag or a percentage split, and keep a one-step rollback.",
+    "**Model lifecycle**: Active, then Legacy, then Deprecated (still works, has a retirement date and a recommended replacement), then Retired, after which **requests fail** and are not redirected. Anthropic gives at least 60 days' notice before retiring publicly released models.",
+    "**Find every place a model is used**: the Claude Console Usage page can export a CSV broken down by API key and model. Pair it with a code search for model IDs and assign each use an owner.",
+    "**Platform schedules differ**: dates on Anthropic's deprecations page apply to Anthropic-operated platforms. Partner-operated platforms (Amazon Bedrock, Google-managed Vertex AI) set their own retirement schedules, so check theirs.",
+    "**Migrate early, with evals**: test the replacement well before the retirement date. Compare quality, format compliance, refusals, latency and token usage and cost per task. Re-tune the prompts (remove workarounds written for the old model), then canary with rollback triggers.",
+    "**Iteration loop**: production failures feed the eval set, prompts or tools change, the change goes through the regression gate and a staged release, then you monitor. Watch quality drift that still returns HTTP 200 (`stop_reason` mix, refusals, rubric scores).",
+    "**Decommissioning is a phase too**: tell users and give them a timeline, remove traffic, revoke API keys and tool or MCP credentials, apply the retention policy to logs and stored outputs, and archive the ADRs and eval results."
+   ],
+   "traps": [
+    "Assuming a retired model ID is routed automatically to its successor.",
+    "Using the dates on Anthropic's deprecations page for a workload that runs on Amazon Bedrock.",
+    "Handing the system over as 'the repo plus a README' with no eval suite, alerts or owners.",
+    "Moving 100% of traffic to a new model the day it is announced, without a canary.",
+    "Leaving API keys and MCP server credentials active after a feature is shut down."
+   ],
+   "docs": [
+    {
+     "title": "Model deprecations",
+     "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+     "title": "Migration guide",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+    },
+    {
+     "title": "Usage and Cost API",
+     "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"
+    },
+    {
+     "title": "Define success criteria and build evaluations",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    }
+   ],
+   "drill": "Pretend the model your service uses was just deprecated. Within 15 minutes, write the migration plan: how you find every use (Console usage export plus code search), the owner of each use, the eval comparison table you'll fill in (quality, schema-valid rate, refusals, p95 latency, cost per task), the canary percentage and rollback triggers, and the date by which 100% of traffic is moved, well before retirement."
+  }
+ ],
+ "questions": [
+  {
+   "id": "P6-1-001",
+   "subskill": "P6.1",
+   "difficulty": 2,
+   "stem": "A hospital network asks an architect to build a Claude-based assistant that drafts discharge summaries from clinician notes. In the first two workshops only the CIO's office and two physicians took part. The architect wants to avoid a redesign late in the project. Which TWO groups should be added to discovery now? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "The privacy and compliance office, which must approve how patient data is processed, logged and retained.",
+    "The model vendor's sales team, who can confirm which model tier will meet the clinical accuracy target.",
+    "Nurses and care coordinators who consume discharge summaries downstream and know which omissions cause harm.",
+    "A wider panel of physicians from other hospitals, so the assistant reflects every specialty's writing style from day one.",
+    "The marketing team, so the launch announcement can be drafted in parallel with the design work."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Privacy and compliance approve PHI handling (minimisation, retention, audit, platform and region). Bringing them in late is a classic cause of redesign.",
+    "Model fit for this workload comes from a spike on the hospital's own data, not from a vendor's sales claims. The vendor is not a requirements stakeholder.",
+    "Correct. The people downstream who rely on the summary define what 'complete' and 'safe' mean, and they supply the edge cases the success criteria must cover.",
+    "More physicians repeats a stakeholder group that is already represented and adds style preferences, not missing constraints or approvers.",
+    "Launch communications don't shape requirements or constraints, and drafting them before success criteria exist is premature."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-1-002",
+   "subskill": "P6.1",
+   "difficulty": 2,
+   "stem": "A logistics company wants to 'use Claude to decide which shipments get expedited'. In discovery the architect finds that today's decision is a written policy: expedite when the delivery promise is under 48 hours and the carrier's capacity flag is green, with no judgment involved. What should the architect recommend?",
+   "select": 1,
+   "options": [
+    "Implement the policy as a deterministic rule in code; reserve Claude for any genuinely unstructured part of the process, if one exists.",
+    "An agent with read and write tools for the shipment and carrier systems, so it can reason about each shipment individually and adapt automatically as the expedite policy evolves over time.",
+    "A Claude prompt that contains the written policy, with few-shot examples to make sure it applies the 48-hour rule consistently.",
+    "Fine-tune expectations by running Claude and the policy side by side for a quarter before deciding on the architecture."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Discovery showed a fixed, fully specified rule. The simplest solution that meets the requirement is code. Use an LLM only where there is real ambiguity.",
+    "An agent adds cost, latency and unpredictability to a decision that has no open-ended steps. Agents are for tasks whose steps can't be predicted in advance.",
+    "Asking a model to apply a deterministic rule is less reliable and harder to audit than code that applies it exactly.",
+    "A quarter-long side-by-side test spends time proving what the policy already defines. Nothing about the decision needs a model."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "P6-1-003",
+   "subskill": "P6.1",
+   "difficulty": 1,
+   "stem": "A retail bank's operations director wants a Claude assistant to help agents answer card-dispute emails and expects it to 'pay for itself within a year'. No one has measured the current process. What should the architect do FIRST to make that goal testable?",
+   "select": 1,
+   "options": [
+    "Estimate token costs for the expected email volume and present them as the business case for funding the project.",
+    "Run a two-week pilot with the assistant on live dispute emails and survey the agents at the end about whether they feel faster and would recommend it.",
+    "Measure the current baseline (emails per day, handle time, rework or error rate, cost per case) and agree the target improvement.",
+    "Choose the cheapest model tier so the payback period is as short as possible."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Token cost is only one side of the ROI equation. Without the baseline benefit there is nothing to compare it with.",
+    "A pilot without a baseline produces subjective impressions, so the payback can't be shown either way.",
+    "Correct. A measured baseline turns 'pays for itself' into a measurable success criterion and lets you compare the pilot with today's process.",
+    "Choosing a tier before success criteria exist puts the design ahead of discovery, and cheaper tokens don't help if quality causes rework."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-1-004",
+   "subskill": "P6.1",
+   "difficulty": 2,
+   "stem": "An insurer's claims team supplies 25 hand-picked example claims so the architect can scope a Claude-based triage feature. All 25 are clean, single-incident claims with typed forms. Production volume is 4,000 claims a week, many with scanned handwriting, multiple incidents or missing fields. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Proceed with the 25 examples because they represent the intended input format; scanned, multi-incident and incomplete claims can be scoped as a separate later phase once the clean path works.",
+    "Request a random sample of a few hundred recent claims, de-identified as policy requires, including the messy cases and claims that adjusters disagreed on.",
+    "Generate several hundred synthetic claims with Claude based on the 25 examples to reach a statistically useful sample size.",
+    "Ask the claims team to rewrite the messy claims into clean form so the feature can be evaluated on consistent inputs."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Curated happy-path samples hide the hard part of the problem and inflate feasibility. The messy claims are the production workload, not a later phase.",
+    "Correct. Success criteria and feasibility have to be measured on data that reflects the real distribution, including edge cases and cases where experts disagree, handled under the data policy.",
+    "Synthetic data generated from 25 clean claims inherits their bias. It can supplement real samples, but it can't replace them.",
+    "Cleaning the inputs by hand changes the task being measured. Production won't arrive pre-cleaned."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-1-005",
+   "subskill": "P6.1",
+   "difficulty": 3,
+   "stem": "A SaaS company wants a Claude agent that can issue account credits, change subscription plans and close accounts on behalf of support staff. The architect is preparing the discovery questions that most directly determine the agent's autonomy and controls. Which THREE should be on the list? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Which of these actions are irreversible or hard to reverse, and what does a wrong action cost the business and the customer?",
+    "Which model tier and agent framework the support leadership team would prefer to standardise on.",
+    "Above what monetary amount, or for which account types, must a human approve the action before it executes?",
+    "What tone of voice the agent should use when it explains plan changes to customers.",
+    "Which systems of record hold credits, plans and account status, and what audit trail must each action leave?",
+    "How many words the system prompt can contain before it becomes hard to maintain."
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. Reversibility and the cost of errors decide which actions can run autonomously and which need gates.",
+    "Model and framework are design decisions the architect makes against measured criteria. Stakeholder preference doesn't set autonomy.",
+    "Correct. Approval thresholds define where human-in-the-loop sits, which is a core control requirement.",
+    "Tone matters for user experience, but it doesn't determine autonomy or controls for actions that change accounts.",
+    "Correct. Systems of record define the tool surface and permissions, and audit needs define what has to be logged for each action.",
+    "Prompt length is an implementation detail, not a requirement that governs autonomy."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "P6-1-006",
+   "subskill": "P6.1",
+   "difficulty": 3,
+   "stem": "At a regional tax authority, the operations lead wants Claude to approve routine refund claims automatically, while the compliance lead insists a human reviews every decision. Both positions are firm, and the project is stalled. What should the architect do in discovery to move the decision forward?",
+   "select": 1,
+   "options": [
+    "Side with compliance and design for 100% human review, since regulated decisions should always default to the most conservative option.",
+    "Escalate to the agency head and ask for a ruling on whether automation is allowed before any further discovery.",
+    "Build the fully automated version as a working demo on last quarter's claims so the compliance lead can see how well it performs before the two leads decide whether human review is needed.",
+    "Break claims into risk tiers with both leads (amount, flags, claimant history), measure volume and error cost per tier, and propose review rules per tier."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Defaulting to full review ignores the operations requirement and may make the system pointless. The disagreement is about risk, which can be quantified.",
+    "Escalating before the trade-off has been quantified hands leadership an all-or-nothing choice without the data needed to make it.",
+    "A demo doesn't resolve a disagreement about where risk is acceptable, and building before agreement wastes effort.",
+    "Correct. Splitting the decision by risk turns opposing positions into a quantified trade-off: automate low-risk tiers, review high-risk ones, with thresholds both sides can accept."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-1-007",
+   "subskill": "P6.1",
+   "difficulty": 2,
+   "stem": "A university's admissions office wants Claude to flag incomplete applications. In discovery, the director says missing a genuinely incomplete application is 'a minor nuisance', but wrongly flagging a complete one delays an offer and has led to formal complaints. How should this finding shape the requirements?",
+   "select": 1,
+   "options": [
+    "State separate targets that weight false positives more heavily (for example a precision floor), and route borderline flags to a human before applicants are contacted.",
+    "Record it as a soft preference and keep a single overall accuracy target, since accuracy captures both kinds of error.",
+    "Move to the most capable model tier available, because a model with higher overall accuracy will reduce false flags and missed applications by roughly equal amounts, which addresses the director's concern.",
+    "Add an instruction to the prompt asking Claude to be cautious about flagging applications."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Asymmetric error costs should become explicit metrics and thresholds, with human review where a mistake reaches the applicant.",
+    "One accuracy number hides the asymmetry. A system can score well overall and still produce the costly false flags.",
+    "A bigger model isn't guaranteed to shift the error balance the way the business needs. Requirements should state the target first and measure tiers against it.",
+    "A vague prompt instruction isn't a measurable requirement. It might be part of the implementation later, but it isn't how the requirement is captured."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-1-008",
+   "subskill": "P6.1",
+   "difficulty": 3,
+   "stem": "A legal-services firm wants to commit to clients that a Claude-based clause extractor will reach 98% field-level accuracy, citing a public benchmark where a frontier model scored highly on contract tasks. The firm's contracts include scanned PDFs and bespoke clause wording. What should the architect advise before any target goes into a client agreement?",
+   "select": 1,
+   "options": [
+    "Run a time-boxed feasibility spike on a few hundred labelled firm contracts, measure per-field accuracy, and set the commitment from those results.",
+    "Accept the 98% target, since public benchmark results on contract tasks are a reasonable proxy for the firm's documents.",
+    "Lower the commitment to 90% as a safety margin below the benchmark and proceed with the design.",
+    "Ask the client what accuracy level it actually requires, write that number into the agreement, and then iterate on the prompts and few-shot examples until the extractor reaches it."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Achievable targets come from measurements on your own data. A spike shows where the model struggles (scans, bespoke wording) before anything is promised.",
+    "Public benchmarks don't reflect this firm's documents, so they aren't evidence that 98% is achievable here.",
+    "An arbitrary discount from a benchmark is still guesswork. It could be too optimistic or too pessimistic.",
+    "The client's need matters, but committing to a number before testing feasibility risks a promise the system can't keep."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-2-001",
+   "subskill": "P6.2",
+   "difficulty": 1,
+   "stem": "An architect has 10 minutes with a retailer's executive committee to get approval for scaling a Claude-based returns assistant from one region to all regions. Which framing is MOST appropriate for this audience?",
+   "select": 1,
+   "options": [
+    "A walkthrough of the prompt chain, tool schemas and model tier, so executives understand how the system works internally.",
+    "Cost per million input and output tokens for each model tier under consideration, with a month-by-month projection of total token spend once every region is live at the new request volume.",
+    "Cost per resolved return and resolution time versus the pre-pilot baseline, the measured error rate and its controls, and the projected impact at full volume.",
+    "Public benchmark scores showing the chosen model ranks highly, to build confidence that the technology is mature."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Internal mechanics matter to engineers. Executives deciding on scale need outcomes, cost and risk.",
+    "Token prices are inputs, not outcomes. On their own they don't show value or compare against the current process.",
+    "Correct. Business outcomes measured against a baseline, honest residual risk with controls, and the impact at scale put the trade-off in the executives' units.",
+    "Benchmarks say nothing about this workload's measured results, which is the evidence the committee needs."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-2-002",
+   "subskill": "P6.2",
+   "difficulty": 2,
+   "stem": "A CFO asks why the architect recommends a Sonnet-tier model for invoice exception handling when a Haiku-tier model costs much less per token. On the team's 400-case eval, the Haiku tier resolved 81% of exceptions without human rework and the Sonnet tier 95%; each rework costs about $6 of analyst time. How should the architect explain the recommendation?",
+   "select": 1,
+   "options": [
+    "Explain that more capable models are generally worth the premium for finance workloads because errors are costly.",
+    "Show the total cost per resolved exception, token cost plus expected rework at each tier's measured failure rate, at projected volume.",
+    "Agree to switch to the Haiku tier to satisfy the CFO's concern about cost, then monitor rework.",
+    "Offer to run both tiers side by side in production for a full quarter, so the finance team can see the difference in rework for itself before committing to the more expensive option."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A general claim without numbers won't persuade a CFO and doesn't show that the premium is justified here.",
+    "Correct. Comparing cost per completed task, including the human cost of failures, is the right unit. Rework at a 19% failure rate can outweigh the token savings.",
+    "Switching without analysing the eval evidence the team already has trades a visible saving for a hidden rework cost.",
+    "A quarter of parallel production running is slow and costly when the existing eval data can already answer the question."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+  },
+  {
+   "id": "P6-2-003",
+   "subskill": "P6.2",
+   "difficulty": 2,
+   "stem": "During a review of a Claude-based policy Q&A assistant at a pension fund, the chief compliance officer asks: 'Can you guarantee it will never make up an answer?' The assistant answers from retrieved policy documents with citations, and 3 of 500 eval answers contained an unsupported statement. What is the BEST response?",
+   "select": 1,
+   "options": [
+    "Yes. Grounding answers in retrieved documents with citations eliminates fabrication, so the risk can be recorded as closed.",
+    "Explain that the system prompt instructs Claude to answer only from the documents, which prevents it from making up answers.",
+    "Recommend delaying the launch until the eval shows zero unsupported statements across all 500 cases, since a compliance function needs certainty before it can sign off on a member-facing assistant.",
+    "No. The measured rate is 0.6% on 500 cases; explain the controls (citations, a no-answer path, human review of flagged answers) and how the rate is monitored."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Grounding and citations reduce hallucinations but don't eliminate them. Claiming a guarantee misleads the compliance officer.",
+    "A prompt instruction is a behavioural nudge, not a guarantee, and presenting it as a control overstates its effect.",
+    "Zero on a finite eval isn't proof of zero in production, and the target is unrealistic. The decision should rest on residual risk plus controls.",
+    "Correct. Honest residual risk, measured with a stated sample size, plus the controls that limit its impact is what a compliance stakeholder needs to make a decision."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+  },
+  {
+   "id": "P6-2-004",
+   "subskill": "P6.2",
+   "difficulty": 3,
+   "stem": "A telecom's engineering team pushes for a multi-agent design with an orchestrator and five specialist subagents for order-change requests. The architect chose a fixed prompt chain with a routing step: on the eval it matched the multi-agent prototype's accuracy at lower latency and cost per task, and every request follows one of four known paths. How should the architect communicate the decision to the engineering team?",
+   "select": 1,
+   "options": [
+    "Share the eval comparison and the predictability argument, record the multi-agent option as a rejected alternative in an ADR, and state what evidence would reopen the decision.",
+    "Approve the multi-agent design to keep the team motivated: both options met the accuracy target, and engineering morale has a measurable effect on delivery speed and on retaining the people who will run the system.",
+    "Explain that Anthropic's guidance says multi-agent systems should never be used for production customer workflows.",
+    "Tell the team the decision is final and redirect them to implementation, since revisiting architecture slows delivery."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Evidence plus a recorded decision with a revisit trigger respects the engineers and keeps the reasoning auditable. Known, fixed paths favour a workflow.",
+    "Choosing the more complex design for morale adds latency, cost and failure modes the eval showed you don't need.",
+    "Anthropic's guidance favours the simplest solution that works and describes when multi-agent systems help. It doesn't ban them, so this misstates the source.",
+    "Shutting down the discussion without sharing evidence loses buy-in and leaves the reasoning undocumented."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "P6-2-005",
+   "subskill": "P6.2",
+   "difficulty": 1,
+   "stem": "A product owner at an e-learning company asks the architect to 'just pick the best option' for generating course quizzes. There are three viable configurations with different quality, latency and cost profiles. What should the architect bring to the decision meeting?",
+   "select": 1,
+   "options": [
+    "Only the recommended configuration, so the product owner isn't overwhelmed by technical detail.",
+    "All three configurations with their full technical specifications (model tier, prompt design, effort, caching), and let the product owner choose freely without a recommendation that might bias the decision.",
+    "The configuration with the highest eval score, since quality is the safest choice for an education product.",
+    "The three options compared on eval quality, latency and cost per quiz, with a clear recommendation and the reason for it."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Hiding the alternatives removes the stakeholder's ability to weigh trade-offs they may value differently from the architect.",
+    "Options without a recommendation push technical judgment onto the product owner, which is the architect's job.",
+    "The highest score may cost more or respond more slowly than the product can afford. Quality alone isn't the decision.",
+    "Correct. Quantified options in business-relevant units plus a reasoned recommendation is the standard way to present an architectural trade-off."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+  },
+  {
+   "id": "P6-2-006",
+   "subskill": "P6.2",
+   "difficulty": 3,
+   "stem": "Two weeks before go-live, a regional health insurer's Claude-based prior-authorisation summariser scores 88% on the agreed rubric against a contractual target of 93%. The sponsor is under pressure to launch on schedule. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Launch on schedule and keep improving the prompts in production, since an 88% score is close to target and real traffic will provide better data.",
+    "Re-grade the eval set with a more lenient rubric so the score reflects what reviewers would actually accept in practice.",
+    "Raise the gap with the sponsor now, with the failure analysis and options: narrower scope, human review on low-confidence cases, or a revised date.",
+    "Hold the result until the final week before go-live and report it then, in case another round of prompt tuning closes the gap and the problem never needs to be escalated to the sponsor at all."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Launching below a contractual target without the sponsor's informed decision shifts risk onto members and the business.",
+    "Moving the goalposts after the fact undermines the eval and hides the real quality from stakeholders.",
+    "Correct. Bad news delivered early, with data and concrete options, lets the sponsor make an informed trade-off between scope, controls and timeline.",
+    "Delaying the news removes options and erodes trust if the gap persists."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-2-007",
+   "subskill": "P6.2",
+   "difficulty": 2,
+   "stem": "A bank's security team objects to a Claude agent that connects to an internal MCP server exposing 22 tools, including payment initiation. The agent's use case is answering balance and transaction-history questions. How should the architect address the objection?",
+   "select": 1,
+   "options": [
+    "Propose a scoped tool set with only the read-only tools the use case needs, show the permission matrix and blast radius, and document it.",
+    "Reassure the team that the system prompt tells Claude never to call payment tools, so the exposure is theoretical.",
+    "Explain that Claude models are trained to be helpful, honest and harmless, so having extra tools available carries minimal practical risk as long as the use case itself is a read-only one.",
+    "Offer to log every payment-tool call so the security team can review them after the fact."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The objection points to a real root cause, capability bloat. Removing the tools the use case doesn't need, and presenting it in security's terms, fixes it.",
+    "Prompt instructions don't enforce permissions. Security teams rightly reject that as a control.",
+    "Model safety training doesn't replace least privilege. It doesn't stop a prompt injection or a mistaken call from reaching a payment tool.",
+    "After-the-fact logging is a compensating control. It doesn't prevent an unauthorised payment from being initiated."
+   ],
+   "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+  },
+  {
+   "id": "P6-2-008",
+   "subskill": "P6.2",
+   "difficulty": 2,
+   "stem": "A media company runs a nightly job that generates 80,000 article summaries with the Messages API. The architect proposes moving it to the Message Batches API and must explain the trade-off to the head of content operations, who is not technical. Which TWO points belong in that explanation? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Batch processing costs about half as much as the current approach for the same requests.",
+    "Summaries will be noticeably higher quality because batch requests use a more capable model.",
+    "Results arrive asynchronously, usually within an hour but up to 24 hours, so this suits an overnight job, not anything a user is waiting on.",
+    "Batches guarantee that summaries come back in the same order the articles were submitted.",
+    "Batches remove the need for any monitoring because failed items are retried automatically until they succeed."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. The Batches API is priced at a 50% discount, which is the main benefit to communicate.",
+    "Batch requests use whatever model you specify. Batching changes cost and timing, not quality.",
+    "Correct. The trade-off is immediacy: most batches finish within an hour, but processing can take up to 24 hours, which fits a nightly workload.",
+    "Batch results can come back in any order. Requests are matched by `custom_id`.",
+    "Individual requests can error or expire, so results still need checking and failures need handling."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "P6-2-009",
+   "subskill": "P6.2",
+   "difficulty": 2,
+   "stem": "A pharmaceutical company's head of R&D asks the architect to load every study report (about 3,000 documents) into each request 'since Claude has a huge context window', instead of using the retrieval pipeline the team has built. How should the architect respond?",
+   "select": 1,
+   "options": [
+    "Agree, since a long context window removes the need for retrieval and simplifies the architecture for this corpus.",
+    "Explain that the corpus is far larger than any context window, so the request is technically impossible and needs no further discussion.",
+    "Explain the trade-off in measured terms: per-request cost and latency at that context size, retrieval's eval results, and that more context doesn't guarantee better answers.",
+    "Agree to try it on the most capable model available, because a larger model with stronger long-context reasoning will make good use of all 3,000 documents and outperform the retrieval pipeline."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Even where content fits, stuffing it all in raises cost and latency on every call and can dilute attention. It isn't a free simplification.",
+    "Brushing the idea off without engaging misses the chance to explain the underlying trade-off the stakeholder cares about, which applies even to corpora that would fit.",
+    "Correct. Putting the stakeholder's idea in quantified cost, latency and quality terms, backed by eval evidence, is how to communicate the trade-off.",
+    "A bigger model doesn't fix the cost, latency and relevance trade-offs of putting the whole corpus in context."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+  },
+  {
+   "id": "P6-2-010",
+   "subskill": "P6.2",
+   "difficulty": 1,
+   "stem": "Users of an internal HR assistant complain that it 'feels slow', and the product manager asks whether switching to the smallest model tier will fix it. Responses are currently returned only once complete, and the total response time is acceptable to HR. What should the architect explain?",
+   "select": 1,
+   "options": [
+    "Streaming the response will make it feel faster because text appears as soon as the first tokens are generated, without changing model or quality.",
+    "Switching to the smallest tier is the only reliable way to make the assistant feel faster, so the team should accept some loss of answer quality as an unavoidable cost of fixing the complaint.",
+    "Raising `max_tokens` will make responses arrive sooner because the model won't need to plan for a length limit.",
+    "Moving to the Message Batches API will reduce wait times because requests are processed in parallel."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The complaint is about perceived latency. Streaming reduces time to first visible output while total time and quality stay the same.",
+    "A smaller tier may help raw speed but trades away quality, and it isn't the only option. Streaming targets the perceived-latency complaint directly.",
+    "`max_tokens` is a ceiling on output length. Raising it doesn't make responses arrive sooner.",
+    "Batches are asynchronous and can take hours. They're unsuitable for an interactive assistant."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+  },
+  {
+   "id": "P6-2-011",
+   "subskill": "P6.2",
+   "difficulty": 3,
+   "stem": "A fintech architect reports to the risk committee that a new Claude-based KYC document checker scored 96% on a 50-document eval. The committee plans to approve it for all 20 document types the business handles. The eval covered 6 document types. What should the architect communicate?",
+   "select": 1,
+   "options": [
+    "That 96% is a strong result and the committee can approve all 20 document types, with monitoring after launch.",
+    "That the eval's small size and coverage of only 6 types limit what it shows; recommend approval for the tested types and expanding the eval before the rest.",
+    "That the score should be rounded down to 90% as a conservative estimate for all 20 document types.",
+    "That the model's general capabilities make per-document-type testing unnecessary for standard KYC documents such as passports, utility bills and bank statements."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Approving untested document types based on a small eval overstates the evidence. Monitoring after launch isn't a substitute for pre-launch evaluation in a regulated process.",
+    "Correct. Being explicit about sample size and coverage, and scoping the approval to what was tested, is honest communication of uncertainty.",
+    "An arbitrary discount says nothing about the 14 untested types, which could perform much worse.",
+    "General capability doesn't replace task-specific evaluation. Different document types have different failure modes."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-2-012",
+   "subskill": "P6.2",
+   "difficulty": 3,
+   "stem": "A government benefits agency's steering committee must choose between routing all eligibility-letter drafting to an Opus-tier model or a Haiku-tier model with escalation of complex cases to the Opus tier. The architect is writing a two-page decision brief. Which THREE items should it contain? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Each option's pass rate on the agency's own labelled eval set, including the complex-case subset.",
+    "The public leaderboard rank of each model, as an independent third-party view of general capability that the committee can trust.",
+    "Cost per completed letter at projected volume, including expected human corrections.",
+    "The per-token price of each tier, as the primary basis for comparing options.",
+    "p95 latency per option and its effect on caseworker workflow.",
+    "A statement that both options will produce error-free letters once prompts are tuned."
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. Quality measured on the agency's own data, including the hard subset, is the core evidence.",
+    "Leaderboards don't reflect this workload, so they shouldn't drive a steering-committee decision.",
+    "Correct. Cost per completed outcome, including rework, is the right unit for comparing the options.",
+    "Per-token price alone ignores token volume, escalation rates and rework, so it misleads the comparison.",
+    "Correct. Latency in the users' workflow is a real operational trade-off the committee should see.",
+    "Promising error-free output is false, and it sets an expectation the system can't meet."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+  },
+  {
+   "id": "P6-3-001",
+   "subskill": "P6.3",
+   "difficulty": 2,
+   "stem": "An airline's customer-service team wants a contractual p95 response-time SLA for a Claude-based rebooking assistant. The only data so far comes from about 30 demo calls on an idle staging system, all under 3 seconds. Peak production load is expected at 600 requests per minute. How should the architect set the SLA?",
+   "select": 1,
+   "options": [
+    "Commit to p95 under 3 seconds, since every demo call met that bar and production hardware will be the same as staging.",
+    "Take the model provider's typical published output speed, multiply by the expected response length to calculate an expected response time, and commit to that figure plus a small safety margin.",
+    "Load-test at projected peak with realistic prompts, then set the SLA from the measured distribution with headroom and a defined window.",
+    "Avoid committing to any latency figure, since LLM response times are inherently unpredictable and can't be meaningfully bounded in a contract."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Thirty calls on an idle system don't represent behaviour at peak, so the SLA would rest on an unrepresentative sample.",
+    "Generic speed figures ignore your prompt sizes, output lengths, tool calls and load, so they can't support a contractual commitment.",
+    "Correct. SLAs should come from the latency distribution measured under realistic load, with headroom and a clear measurement method.",
+    "Latency can be measured and bounded statistically. Refusing to commit to anything fails the stakeholder's legitimate need."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+  },
+  {
+   "id": "P6-3-002",
+   "subskill": "P6.3",
+   "difficulty": 3,
+   "stem": "An e-commerce platform's business unit asks for 99.99% availability on a Claude-powered product-description generator used by merchants in its admin portal. The service makes a synchronous call to a single model endpoint and has no fallback path. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Design degraded modes (queue and notify, merchant-written fallback) and set an SLA that reflects the dependency, with exclusions written down.",
+    "Accept the 99.99% target and rely on SDK retries with exponential backoff to cover transient upstream errors.",
+    "Accept the 99.99% target and provision a second API key in the same organisation, so that requests can automatically fail over to the other key whenever the first one returns errors during an incident.",
+    "Refuse to define any availability target because the upstream dependency is outside the team's control and any number would be misleading to the business unit."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Your SLA can't exceed your dependency's unless you design fallbacks. Pair realistic targets with defined degraded behaviour and exclusions.",
+    "Retries absorb brief blips but can't deliver availability higher than the single dependency provides during a real incident.",
+    "A second key on the same service and organisation doesn't add independent capacity or redundancy against a service-side incident.",
+    "Dependencies outside your control are normal. The answer is to account for them in the target and the design, not to refuse a target."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "P6-3-003",
+   "subskill": "P6.3",
+   "difficulty": 2,
+   "stem": "A wealth-management firm wants to include a quality commitment in the internal service agreement for a Claude-based meeting-notes summariser used by advisers. Which commitment is BEST?",
+   "select": 1,
+   "options": [
+    "Summaries will be accurate and will never omit material client instructions.",
+    "At least 95% of a weekly random sample of 200 summaries pass the agreed rubric under a defined grading method.",
+    "The summariser will always use the most capable model tier, guaranteeing the best available quality at any given time.",
+    "Every summary will be reviewed and signed off by an adviser before it is filed to the client record, so the quality guarantee rests with the adviser instead of with the system itself."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "'Never' can't be measured or met by a probabilistic system. It sets an expectation that will be broken.",
+    "Correct. A quality SLO should be statistical, measurable and tied to a defined rubric, grader and sample, with a feedback loop for misses.",
+    "Committing to a model tier specifies an input, not an outcome. It promises nothing measurable about summary quality.",
+    "Mandatory review may be a valid control, but it doesn't define a quality target for the system itself."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-3-004",
+   "subskill": "P6.3",
+   "difficulty": 1,
+   "stem": "A software company's Claude-based in-app help assistant has a thumbs-up/down widget. Over three months it has collected 4,200 thumbs-down ratings with comments, which appear on a dashboard. The answer quality hasn't measurably improved. What is the MOST effective change?",
+   "select": 1,
+   "options": [
+    "Triage and label the negative feedback, add representative failures to the regression eval set, fix the causes, and release changes through the eval gate.",
+    "Make the feedback widget more prominent so more users rate their answers and the dashboard has more data.",
+    "Add a line to the system prompt telling Claude that users have been unhappy and it should try harder.",
+    "Switch to a more capable model tier, since 4,200 negative ratings in three months show clearly that the current model isn't good enough for in-app help and further prompt work won't close the gap."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Feedback only improves quality when it is turned into eval cases and fixes that go through a controlled release.",
+    "More data that nobody acts on doesn't improve anything. The loop isn't closed.",
+    "A vague exhortation doesn't address specific failure causes and can't be verified.",
+    "Without triage you don't know whether the failures come from retrieval, missing docs, prompt design or the model, so changing tier is a guess."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-3-005",
+   "subskill": "P6.3",
+   "difficulty": 3,
+   "stem": "Week two of a pilot of a Claude-based contract-redlining assistant at a manufacturing company. The agreed pilot criteria (rubric pass rate at least 90% over 300 sampled outputs, reviewed weekly) are being met at 93%. During a demo, the general counsel sees one badly wrong redline and asks for the pilot to be halted. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Halt the pilot immediately as requested, since the general counsel's confidence in the tool matters more than aggregate metrics and the pilot can resume once the team has investigated the failure.",
+    "Ignore the incident, since it is a single case and the agreed metrics are within threshold.",
+    "Add a rule to the system prompt that specifically forbids the type of change seen in the bad redline.",
+    "Triage the case with the general counsel, add it to the eval set, and decide against the agreed thresholds and severity rules."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Halting on one anecdote abandons the criteria everyone agreed. If the case is severe, the agreed severity rules should trigger the halt instead.",
+    "Dismissing a senior stakeholder's concern damages trust, and the case could be a severe error class the aggregate rate hides.",
+    "Patching the prompt for one example without root-cause analysis or evaluation risks regressions elsewhere.",
+    "Correct. Pre-agreed criteria turn an anecdote into a data point: take it seriously, triage it, feed it into the evals, and decide on agreed rules."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-3-006",
+   "subskill": "P6.3",
+   "difficulty": 1,
+   "stem": "A public-sector agency is about to start an 8-week pilot of a Claude assistant that drafts responses to freedom-of-information requests. What should the architect agree with stakeholders BEFORE the pilot starts?",
+   "select": 1,
+   "options": [
+    "Measurable success and exit criteria, sample size, review cadence and who decides whether to scale, extend or stop.",
+    "The list of model tiers to try during the pilot, so stakeholders can compare them informally as they go.",
+    "A commitment that the pilot will scale to full production if users like it.",
+    "A launch date for full rollout, so the team has a fixed deadline to work towards throughout the pilot and stakeholders can plan resourcing."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Agreeing criteria, measurement and decision rights in advance keeps expectations aligned and makes the pilot's outcome decidable.",
+    "Informal tier comparisons don't produce a decision. The criteria for judging the pilot have to come first.",
+    "'Users like it' isn't a measurable criterion, and pre-committing to scale defeats the purpose of a pilot.",
+    "Fixing the rollout date before the pilot produces evidence sets an expectation that may not be supported."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-3-007",
+   "subskill": "P6.3",
+   "difficulty": 3,
+   "stem": "A travel company's Claude-based trip-planning chat shows a 92% thumbs-up rate among users who rated answers, but only 3% of conversations are rated, and complaints from the corporate-travel segment are rising. Which TWO actions give stakeholders a more reliable view of quality? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Grade a random sample of production conversations against a rubric each week, not only the rated ones.",
+    "Report the 92% thumbs-up rate as the headline quality KPI, since it reflects real user sentiment.",
+    "Segment quality metrics by customer segment, intent and prompt version to expose where failures concentrate.",
+    "Offer users an incentive to rate more conversations so the thumbs-up rate becomes statistically representative of all users.",
+    "Remove the thumbs-down button so negative ratings don't skew the KPI."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Random-sample grading removes the self-selection bias of voluntary ratings.",
+    "A 3% self-selected sample is biased. The headline number can hide a failing segment.",
+    "Correct. Segmenting shows that a failure is concentrated (here, corporate travel) where an aggregate number hides it.",
+    "Incentives change who rates and why, adding new bias rather than producing a representative sample.",
+    "Suppressing negative signals hides real problems and destroys the feedback loop."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-3-008",
+   "subskill": "P6.3",
+   "difficulty": 2,
+   "stem": "A bank's finance team asks for its Claude-based month-end reconciliation commentary (about 50,000 items) to be 'real-time'. In discovery, the architect learns the commentary is reviewed the next business morning and nobody reads it sooner. What should the architect propose?",
+   "select": 1,
+   "options": [
+    "Build real-time capacity anyway, with a large rate-limit increase, because the stakeholder explicitly asked for real-time processing and changing the requirement risks the relationship.",
+    "Agree a next-morning SLA and run the job with the Message Batches API, which costs half as much and returns results within 24 hours.",
+    "Process the items with streaming responses so that commentary appears as quickly as possible for every item.",
+    "Use the smallest model tier to make real-time processing affordable at month-end volume."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Building for a stated requirement that discovery shows isn't real wastes money. The expectation should be realigned with evidence.",
+    "Correct. Aligning the SLA with the real need makes asynchronous batch processing possible, at a 50% discount and with results within the 24-hour window.",
+    "Streaming improves perceived latency for a waiting user. Nobody is waiting here.",
+    "Changing tier to afford a requirement that doesn't exist may cost quality for no benefit."
+   ],
+   "ref": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+  },
+  {
+   "id": "P6-3-009",
+   "subskill": "P6.3",
+   "difficulty": 2,
+   "stem": "A utility company launches a Claude-based customer assistant on its website. In early sessions many customers ask it to look up their latest bill or remember details from yesterday's chat, which it can't do, and satisfaction scores drop. What is the BEST response?",
+   "select": 1,
+   "options": [
+    "Add an instruction to the system prompt telling Claude to pretend it has access to billing data so customers feel helped.",
+    "Take the assistant offline until it can handle every kind of request customers send through the website, including account lookups, to avoid any further damage to satisfaction scores.",
+    "Switch to a more capable model so it can infer the customer's billing details from the conversation.",
+    "Set expectations in the product: state what the assistant can and can't do, offer escalation for account-specific requests, and track whether those capabilities should be built."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Pretending to have data the assistant doesn't have creates fabricated answers and serious trust and compliance problems.",
+    "Waiting for full coverage throws away value the assistant already delivers and isn't a realistic bar.",
+    "No model can infer data it has no access to. Billing lookup needs an integration, not a different tier.",
+    "Correct. The gap is between expectations and capability. In-product disclosure and escalation fix the experience, and the demand data feeds the roadmap."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+  },
+  {
+   "id": "P6-3-010",
+   "subskill": "P6.3",
+   "difficulty": 2,
+   "stem": "Midway through delivery of a Claude-based English-language support assistant for a hardware retailer, the sales director asks to 'just add French, German and Spanish' before launch next month. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Agree, since Claude handles those languages well and the change is only a matter of adjusting the prompts and retesting the English flows.",
+    "Decline the request outright, since any scope change after design approval puts the launch date at risk.",
+    "Agree, and translate the existing English eval set automatically after launch to confirm the new languages work.",
+    "Treat it as a change request: estimate the impact on evals, cost, latency and timeline, and let the product owner prioritise."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Multilingual capability doesn't remove the need for language-specific evaluation, content and support processes. The impact is bigger than a prompt tweak.",
+    "Declining without analysis ignores what might be a legitimate business need. The owner should weigh the trade-off.",
+    "Evaluating after launch means unverified quality reaches customers, and machine-translated evals can miss language-specific failures.",
+    "Correct. Running scope changes through change control with a quantified impact keeps expectations aligned and the decision with the owner."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-3-011",
+   "subskill": "P6.3",
+   "difficulty": 3,
+   "stem": "A healthcare SaaS vendor is drafting the service-level section for a Claude-based clinical-note summarisation API that hospital customers will integrate with. Which THREE elements should the section include? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "A latency target stated as a percentile over a defined measurement window, with how it's measured.",
+    "A guarantee that the underlying model version will never change for the full duration of the contract term, whatever the provider does.",
+    "A quality target measured on sampled outputs against a named rubric, with the grading method.",
+    "A commitment that every summary will be free of errors.",
+    "Exclusions and defined degraded-mode behaviour when the upstream model service is unavailable.",
+    "A fixed number of output tokens per summary regardless of note length."
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. Percentile latency with a window and method is measurable and enforceable.",
+    "Models are deprecated and retired on a published lifecycle. The vendor should instead commit to how model changes are evaluated and communicated.",
+    "Correct. A statistical quality target with a defined rubric and grader turns 'quality' into something both sides can verify.",
+    "Error-free output can't be guaranteed by a probabilistic system. The commitment would be broken.",
+    "Correct. Stating exclusions and degraded behaviour sets realistic expectations about the upstream dependency.",
+    "Output length should follow the content. A fixed token count isn't a meaningful service level."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "P6-4-001",
+   "subskill": "P6.4",
+   "difficulty": 1,
+   "stem": "A logistics company's architecture repository has an ADR titled 'Model choice' whose entire body is: 'We use a Sonnet-tier model for delivery-exception summaries.' A new tech lead can't tell whether the choice still makes sense. What is the ADR MISSING?",
+   "select": 1,
+   "options": [
+    "The full system prompt and every tool schema the summariser uses, so the record is a complete technical specification of the summariser.",
+    "The context, the alternatives considered, the evidence behind the choice and its consequences, including when to revisit it.",
+    "A list of everyone who attended the meeting where the model was chosen, with their roles and sign-off dates.",
+    "A link to the model provider's marketing announcement for the chosen model, as the source for its capabilities."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Prompts and schemas belong in versioned code. Putting them in the ADR bloats it without explaining why the choice was made.",
+    "Correct. An ADR records why: context, the options weighed, the evidence, and the trade-offs accepted. That lets a successor judge whether the decision still holds.",
+    "Attendance doesn't explain the reasoning. A status and date are useful, but the substance is context, alternatives and consequences.",
+    "Marketing material isn't evidence for this workload. The ADR should link the team's own eval results."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+  },
+  {
+   "id": "P6-4-002",
+   "subskill": "P6.4",
+   "difficulty": 2,
+   "stem": "An insurer's ADR-007 (accepted last year) chose the Claude API directly. The company has now decided to move the workload to Amazon Bedrock to consolidate on its AWS agreement and IAM. How should the architecture record be updated?",
+   "select": 1,
+   "options": [
+    "Edit ADR-007 in place to say Bedrock, so the repository shows only the current state and readers aren't confused by outdated decisions.",
+    "Delete ADR-007 and write a new ADR, since keeping superseded decisions around clutters the repository.",
+    "Write a new ADR for the move that supersedes ADR-007, and mark ADR-007's status as 'Superseded'.",
+    "Add a comment to the platform configuration file noting the change, since infrastructure code is the real source of truth."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Rewriting an accepted ADR erases the original reasoning and the audit trail of how the decision evolved.",
+    "Deleting history removes the evidence auditors and future maintainers need to understand past choices.",
+    "Correct. ADRs are append-only. A new record supersedes the old one, and both stay so the history is traceable.",
+    "A config comment records what changed, not the reasoning, alternatives or consequences."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "P6-4-003",
+   "subskill": "P6.4",
+   "difficulty": 3,
+   "stem": "An architect is writing the ADR for running a Claude-based underwriting assistant through Amazon Bedrock instead of the Claude API. Which TWO consequences should the ADR record so future teams aren't surprised? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Model retirement dates for this workload follow Bedrock's own published schedule, which can differ from the dates on Anthropic's deprecations page.",
+    "Prompts written for the Claude API must be completely rewritten, because Bedrock uses a different family of Claude models.",
+    "Feature availability can differ between platforms, so each feature the design depends on must be confirmed on Bedrock before use.",
+    "Bedrock removes the need for an eval suite because the platform provider validates model quality.",
+    "Moving to Bedrock automatically satisfies all of the company's data-residency requirements in every region where the underwriting assistant will be offered to brokers."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Anthropic's documentation says partner-operated platforms such as Amazon Bedrock set their own retirement schedules. Lifecycle planning must use theirs.",
+    "The same Claude models are offered on Bedrock. Integration details change, but prompts don't need a wholesale rewrite.",
+    "Correct. Features and their rollout can differ by platform. Recording this in the ADR prompts teams to check before depending on a feature.",
+    "Eval responsibility stays with the team. No platform validates your task-specific quality.",
+    "Residency depends on the regions and configuration you choose and must be verified. Choosing a platform doesn't satisfy it automatically."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "P6-4-004",
+   "subskill": "P6.4",
+   "difficulty": 2,
+   "stem": "A platform team runs a shared Claude gateway that eight product teams will integrate with. Early adopters copied snippets from chat threads, and now each team logs different fields and handles 429 errors differently. What is the MOST effective implementation guidance?",
+   "select": 1,
+   "options": [
+    "A comprehensive wiki page describing every API parameter and recommended practice, which teams are asked to read before starting.",
+    "A mandatory two-day training course for every engineer who will integrate with the gateway, with a certificate to complete.",
+    "A code-review checklist that the platform team applies to each product team's integration after it has been written.",
+    "A maintained reference client that encodes the conventions (config-driven model ID, standard log fields, 429/529 backoff), with examples."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Long prose is easy to skip and drifts from reality. It doesn't stop inconsistency at the source.",
+    "Training helps understanding, but without shared code each team still reimplements the conventions differently.",
+    "Reviewing after the fact catches problems late and is a compensating control rather than a fix.",
+    "Correct. Encoding conventions in runnable shared code fixes the root cause: teams copy what works, and consistency becomes the default."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "P6-4-005",
+   "subskill": "P6.4",
+   "difficulty": 3,
+   "stem": "An architect is writing the implementation guide for teams building on a bank's Claude platform, which uses current Claude models. Which THREE practices should the guide prescribe? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Read the model ID from per-environment configuration and change it through review, evals and a staged rollout.",
+    "Set `temperature` to 0 on every request so outputs are deterministic and easier to test.",
+    "Log `request_id`, model, prompt version, `usage`, `stop_reason` and latency for every call.",
+    "Use structured outputs when a response must match a JSON schema, instead of parsing free text.",
+    "Prefill the assistant turn with an opening brace to force JSON output.",
+    "Disable the SDK's automatic retries so that every 429 and 529 surfaces immediately to the caller."
+   ],
+   "answer": [
+    0,
+    2,
+    3
+   ],
+   "explanations": [
+    "Correct. Pinned, configurable model IDs with controlled changes are the basis of lifecycle management.",
+    "Current models reject sampling parameters such as `temperature` with a 400 error. Guidance must not prescribe them.",
+    "Correct. These fields let teams trace outputs to a configuration, debug with support, and monitor truncation and cost.",
+    "Correct. Structured outputs keep responses schema-valid, which is more reliable than parsing free text.",
+    "Recent Claude models return a 400 error for a prefilled final assistant turn. Use structured outputs instead.",
+    "The SDK retries transient errors with exponential backoff and honours `retry-after`. Disabling that pushes avoidable failures onto users."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "P6-4-006",
+   "subskill": "P6.4",
+   "difficulty": 2,
+   "stem": "A health-tech company's data protection officer must review a Claude-based symptom-triage assistant before launch and asks for 'the architecture documentation'. The team has a component diagram and API docs. What should the architect add to support this review?",
+   "select": 1,
+   "options": [
+    "The system prompt, highlighting the instruction that tells Claude not to retain or share patient data.",
+    "A sequence diagram of the retry and backoff logic used when the model API returns errors, including the maximum number of attempts and the timeout at each stage.",
+    "The eval results showing the assistant's triage accuracy across every symptom category, broken down by age group and urgency level, so the DPO can see the system is clinically safe.",
+    "A data-flow view: sources, redaction steps, the platform and region processing each request, what is logged and retained for how long, tool access and trust boundaries."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A prompt instruction doesn't control retention or data flows. Presenting it as a privacy control misleads the reviewer.",
+    "Retry logic is an engineering concern. It doesn't describe personal-data processing.",
+    "Accuracy matters for clinical safety, but it doesn't answer the DPO's data-protection questions.",
+    "Correct. A privacy review needs to see where personal data goes, how it's minimised, where it's processed, and what's stored and for how long."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P6-4-007",
+   "subskill": "P6.4",
+   "difficulty": 2,
+   "stem": "A retail platform team is publishing internal MCP servers that other teams' Claude agents will use. Agents keep calling the wrong order-lookup tool and retry failed calls with the same bad input. What documentation change addresses the root cause?",
+   "select": 1,
+   "options": [
+    "Write a separate developer wiki explaining which tool to use in which situation, for human engineers to read.",
+    "Add more narrowly scoped order-lookup tools that cover each edge case separately, so the agent always has a precisely matching option and never has to choose between general-purpose tools.",
+    "Rewrite tool names and descriptions for the model, with unambiguous parameters, and return actionable error messages.",
+    "Add a line to each agent's system prompt listing all tools in order of preference."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The agent never reads a human wiki. The confusion is in what the model sees.",
+    "More overlapping tools make selection harder. Anthropic's guidance favours fewer, clearer tools.",
+    "Correct. Tool descriptions are loaded into the agent's context and steer its behaviour. Actionable errors guide the agent to correct its input instead of repeating it.",
+    "A preference list in each consuming agent's prompt is a workaround that every team must duplicate. The tool contract is the root cause."
+   ],
+   "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+  },
+  {
+   "id": "P6-4-008",
+   "subskill": "P6.4",
+   "difficulty": 3,
+   "stem": "An auditor reviewing a Claude-based loan-document checker asks why the human-review threshold is set at a confidence score of 0.82. The configuration file has the value, but nobody remembers how it was chosen. What should the architect put in place so this question can be answered in future?",
+   "select": 1,
+   "options": [
+    "Add a code comment next to the threshold in the configuration file explaining that 0.82 was agreed with the risk team in a meeting, so the next person who reads it knows who to ask.",
+    "Lower the threshold to 0.5 so more cases go to human review, which is easier to defend to an auditor.",
+    "Remove the threshold and send every case to human review until the original reasoning can be reconstructed.",
+    "Record the threshold in an ADR that links the eval run, precision and recall at candidate values, and the risk owner's sign-off."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A comment states who agreed, but not the evidence or the trade-off. Auditors need the reasoning and the data.",
+    "Changing the value arbitrarily doesn't solve the documentation gap, and it may overload reviewers.",
+    "Reviewing every case is a costly compensating control that avoids rather than fixes the missing record.",
+    "Correct. Linking the decision to eval evidence and an accountable owner makes the threshold auditable and repeatable when it's revisited."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-4-009",
+   "subskill": "P6.4",
+   "difficulty": 2,
+   "stem": "An operations team is taking on-call ownership of a Claude-based claims-intake service. The architect is writing the runbook. Which entry is MOST useful?",
+   "select": 1,
+   "options": [
+    "'If quality seems off, contact the architecture team.'",
+    "A general overview of how large language models generate text, so on-call engineers understand the technology.",
+    "'If `stop_reason: max_tokens` exceeds 2% for 15 minutes: check the latest deploy, roll back via flag X, then inspect input lengths.'",
+    "A copy of the full system prompt and tool definitions so engineers can inspect them during incidents and suggest wording changes to the on-call lead."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A vague escalation instruction gives no symptom, threshold or action, and it keeps dependency on the original team.",
+    "Background knowledge doesn't tell an operator what to do when an alert fires.",
+    "Correct. A runbook entry maps a measurable symptom to concrete diagnostic steps and a rollback, which is what on-call needs.",
+    "Editing prompts during an incident is risky. The runbook should point to rollback, not ad-hoc prompt changes."
+   ],
+   "ref": "https://platform.claude.com/docs/en/api/errors"
+  },
+  {
+   "id": "P6-4-010",
+   "subskill": "P6.4",
+   "difficulty": 1,
+   "stem": "An architect must document a Claude-based document-intake system for three audiences: the executive sponsor, the engineering team and the compliance team. Which approach is BEST?",
+   "select": 1,
+   "options": [
+    "One detailed document containing everything, shared with all three audiences so everyone works from the same source.",
+    "One architecture model shown in tailored views: context for executives, components and sequences for engineers, data flow and controls for compliance.",
+    "Separate, independently maintained documents for each of the three audiences, each written by a different person so that it matches its readers' vocabulary, level of detail and preferred format.",
+    "Only engineering documentation, with other audiences briefed verbally as needed."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A single exhaustive document buries what each audience needs and is rarely read in full.",
+    "Correct. One consistent model with audience-specific views gives each stakeholder what they need without the views drifting apart.",
+    "Independently maintained documents drift and contradict each other over time.",
+    "Verbal briefings leave no auditable record, which compliance in particular needs."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "P6-4-011",
+   "subskill": "P6.4",
+   "difficulty": 3,
+   "stem": "A software vendor's team ships Claude-based features quickly, but each feature's prompts, eval cases and decisions are scattered across notebooks and chat threads. A new team is about to take over two of the features. What should the architect require as the standard documentation for each feature?",
+   "select": 1,
+   "options": [
+    "A slide deck per feature summarising its purpose and the model used, updated at each quarterly review.",
+    "A requirement that the original authors stay on call for the new team for six months after handoff, answering questions about prompts, eval cases and design decisions as they come up.",
+    "An export of the chat threads in which the features were designed, stored in a shared drive folder.",
+    "Prompts, eval set, rubric and thresholds versioned together in the repo, with a changelog tying prompt versions to eval results and ADRs for key decisions."
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A quarterly deck drifts from reality and doesn't let the new team reproduce or safely change the feature.",
+    "Depending on individuals is fragile. Documentation should make the new team self-sufficient.",
+    "Raw chat exports are hard to search and mix abandoned ideas with real decisions.",
+    "Correct. Versioning prompts with their evals and decisions makes the feature reproducible and safe to change. The eval threshold becomes the definition of done."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-4-012",
+   "subskill": "P6.4",
+   "difficulty": 2,
+   "stem": "A public-sector agency's architect documents the design of a Claude-based correspondence assistant. The design doc says: 'Residency: the system prompt instructs Claude to keep all citizen data within the country.' A reviewer flags this line. What should the documentation say instead?",
+   "select": 1,
+   "options": [
+    "The same instruction, strengthened with capitals and repeated at the end of the system prompt so the model is less likely to ignore it.",
+    "A note that data residency is entirely the model provider's responsibility under its terms of service and is therefore out of scope for the agency's own design document and review.",
+    "That residency is enforced by the platform and region chosen for processing and by where logs and outputs are stored, citing the configuration.",
+    "That residency is covered because the system does not store any data permanently."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A prompt can't control where processing happens. Emphasis doesn't change that.",
+    "Choosing the platform, region and storage is the agency's architectural decision, so it belongs in the design.",
+    "Correct. Residency is a deployment and configuration control. The documentation should state it and point to the configuration that enforces it.",
+    "Retention and residency are different requirements. Data can be processed out of region even if it isn't stored."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P6-5-001",
+   "subskill": "P6.5",
+   "difficulty": 2,
+   "stem": "An architecture team built a Claude-based invoice-matching service for a manufacturing group and is handing it over to the group's IT operations team, which will own it from next quarter. Which THREE items should the handoff package include? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "The regression eval suite with its pass thresholds, and instructions for running it before any prompt or model change.",
+    "A recommendation to switch to whichever new model is released next, so the service stays current without further evaluation.",
+    "Dashboards and alerts (quality sampling, `stop_reason` mix, error rates, cost) with a runbook that maps each alert to an action and a rollback step.",
+    "The personal API keys of the engineers who built the service, so operations can keep using them without re-provisioning.",
+    "Named owners, version history of prompts and model IDs, known limitations, and a period of joint on-call before full transfer.",
+    "A promise that the architecture team will make all future prompt changes on the operations team's behalf."
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. The eval suite and thresholds let the new owners change the system safely.",
+    "Upgrading without evaluation is exactly the kind of uncontrolled change a handoff should prevent.",
+    "Correct. Operators need visibility and a symptom-to-action runbook to run the service.",
+    "Personal credentials should never be handed over. The service needs its own provisioned keys with owners and rotation.",
+    "Correct. Ownership, version history, documented limitations and a shadowing period make the transfer real.",
+    "Keeping changes with the original team defeats the handoff and leaves operations dependent on it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  },
+  {
+   "id": "P6-5-002",
+   "subskill": "P6.5",
+   "difficulty": 2,
+   "stem": "A retail bank runs its Claude-based dispute assistant on Amazon Bedrock. A planning spreadsheet uses the retirement dates from Anthropic's model deprecations page to schedule migrations. What should the architect point out?",
+   "select": 1,
+   "options": [
+    "Nothing: retirement dates are identical on every platform where Claude models are offered.",
+    "Bedrock sets its own retirement schedule, so the plan must use Bedrock's published dates for the models in use.",
+    "Models on Bedrock are never retired, so no migration plan is needed for this workload while it stays on Bedrock.",
+    "Bedrock automatically upgrades workloads to the recommended replacement model on the retirement date, so the plan only needs a post-upgrade eval run."
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Anthropic's documentation says its dates apply to Anthropic-operated platforms. Partner-operated platforms can differ.",
+    "Correct. Partner-operated platforms such as Amazon Bedrock set their own retirement schedules, so lifecycle planning has to follow the platform actually in use.",
+    "Models on partner platforms are retired too, just on that platform's schedule.",
+    "Assuming an automatic upgrade risks failures and untested behaviour. The team should plan and evaluate the migration itself."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "P6-5-003",
+   "subskill": "P6.5",
+   "difficulty": 1,
+   "stem": "A SaaS company receives notice that a Claude model it has used for two years is deprecated. Several teams created API keys over that time, and nobody is sure which keys still call that model. Using Anthropic's tooling, what is the quickest way to find out?",
+   "select": 1,
+   "options": [
+    "Export usage from the Usage page in the Claude Console, which breaks usage down by API key and model.",
+    "Wait until the retirement date and see which services start returning errors, then fix those.",
+    "Ask Anthropic support to send a list of every request your organisation made to the model, with the code locations that sent them.",
+    "Rotate all API keys at once so that every team must re-register and declare which models it uses."
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Anthropic documents a usage export from the Console Usage page, broken down by API key and model, for finding remaining use of deprecated models.",
+    "Waiting for failures turns a planned migration into an outage. Requests to retired models fail.",
+    "Support doesn't know your code locations, and the self-service usage export already answers the question.",
+    "Rotating every key at once causes widespread disruption and still doesn't tell you which model each service uses."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "P6-5-004",
+   "subskill": "P6.5",
+   "difficulty": 3,
+   "stem": "A media monitoring company is migrating a news-classification service to the recommended replacement for its deprecated model. On the regression eval the new model matches quality, but average output tokens per request rose 35% and two old prompt lines ('CRITICAL: you MUST always...') now cause over-cautious labels on a small subset. Retirement is seven weeks away. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Ship the new model to 100% of traffic now, since quality matches, and look at cost after retirement has passed.",
+    "Stay on the deprecated model until the retirement date, then switch, so the team can collect more data on the old model first.",
+    "Remove the outdated emphatic lines and re-evaluate, review the cost change with stakeholders, then canary with rollback triggers.",
+    "Cap `max_tokens` at the old model's average output length so that the new model's cost per request matches the old one exactly, then move all traffic across in one step to finish the migration early."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Ignoring a 35% output increase surprises the budget owner, and a full cutover with no canary removes the safety net.",
+    "Waiting until retirement leaves no time to fix problems, and requests to the old model fail after that date.",
+    "Correct. Re-tune the prompts for the new model, make the cost change visible to stakeholders, and release gradually with rollback triggers, all with time to spare.",
+    "A hard cap at the old average will truncate longer valid outputs (`stop_reason: max_tokens`), and an all-at-once rollout skips the canary."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/migration-guide"
+  },
+  {
+   "id": "P6-5-005",
+   "subskill": "P6.5",
+   "difficulty": 1,
+   "stem": "A university is retiring a Claude-based course-advising chatbot after replacing it with a new student portal. The chatbot used an API key and an MCP server with read access to student records. Which TWO steps belong in the decommissioning plan? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Revoke the chatbot's API key and the MCP server's credentials to student records once traffic has stopped.",
+    "Keep the MCP server running indefinitely in case a future project wants to reuse the integration.",
+    "Apply the university's retention policy to stored conversation logs and outputs, deleting or archiving them as it requires.",
+    "Leave the API key active but remove the chatbot from the website, since an unused key carries no risk.",
+    "Copy all stored conversations into the new portal's training data so its answers improve."
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Credentials that outlive the service are an unnecessary access path to sensitive data.",
+    "An unowned server with access to student records is a security liability. Rebuild the integration if a future project needs it.",
+    "Correct. Stored conversations hold personal data, and retirement is when the retention policy has to be applied.",
+    "Unused but active keys can still be leaked and misused. Revoke them.",
+    "Reusing personal conversations for a new purpose raises privacy and consent issues and isn't part of a clean decommission."
+   ],
+   "ref": "https://platform.claude.com/docs/en/manage-claude/api-and-data-retention"
+  },
+  {
+   "id": "P6-5-006",
+   "subskill": "P6.5",
+   "difficulty": 2,
+   "stem": "Six months after launch, a Claude-based HR policy assistant at a logistics firm shows a steady HTTP success rate and stable latency. However, weekly rubric grading of sampled answers dropped from 94% to 86% after HR published a large set of revised policies. No prompt or model change was deployed. What is the BEST next step?",
+   "select": 1,
+   "options": [
+    "Do nothing, since the service is healthy by its error and latency metrics and the rubric is only a sample.",
+    "Switch to a more capable model tier to compensate for the drop: prompts and models weren't changed, so the current model is evidently struggling with the larger and more complex body of revised policies.",
+    "Diagnose the failing samples (likely retrieval or index freshness), add them to the eval set, fix the cause, and release through the eval gate.",
+    "Add an instruction to the system prompt telling Claude to prefer the newest policies when answering questions."
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Quality regressions still return HTTP 200. Sampled rubric grading exists to catch exactly this.",
+    "Changing tier without a diagnosis treats a probable data or retrieval problem as a model problem.",
+    "Correct. The iteration loop is: diagnose from the failing samples, turn them into eval cases, fix the root cause (here probably stale or poorly chunked content), and release through the regression gate.",
+    "If the new policies aren't retrieved correctly, a prompt instruction can't make Claude prefer content it never sees."
+   ],
+   "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+  }
+ ]
+}

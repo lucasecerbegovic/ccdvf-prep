@@ -1,0 +1,12 @@
+{"reviewed": 29, "findings": [
+ {"id": "P2-1-002", "file": "content/pro/new/p2p7.json", "class": "bad_fact",
+  "problem": "Correct-option explanation claimed 'A cascade also forfeits cache reuse across its models.' Neither the cost/intelligence page nor the prompt-caching page states that caches are model-specific or lists model switching as an invalidation factor.",
+  "evidence_url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+  "evidence": "Isolation is described per organization/workspace; invalidation table covers tools, system, web search/citations, speed, tool_choice, images, thinking, effort - no statement about cross-model cache reuse. Rest of the explanation verified: 'sweep effort on your current model first, because most workloads end there'; 'A multimodel configuration must beat the single model's whole curve' (optimizing-for-cost-and-intelligence).",
+  "fix": "Removed the unverified cache sentence; key unchanged."},
+ {"id": "P1-6-003", "file": "content/pro/new/p1.json", "class": "bad_fact",
+  "problem": "Option 0 explanation said caching the 200-token instruction 'saves very little'; a 200-token prefix is below every current model's minimum cacheable length, so it is not cached at all. Arithmetic otherwise checks out (120M x $3 = $360 + 16M x $15 = $240 = $600; batch 50% -> $300; halved output -> $480).",
+  "evidence_url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+  "evidence": "Minimum cacheable prompt length is 512 tokens (Opus 5.5, Sonnet 5.5, Haiku 5.5, etc.) or higher for older models; shorter prompts are processed without caching. Pricing page: Batch API gives 'a 50 percent discount on both input and output tokens'.",
+  "fix": "Explanation now says the instruction is below the minimum cacheable length, so caching saves essentially nothing; key unchanged."}
+]}

@@ -1,0 +1,1694 @@
+{
+ "questions": [
+  {
+   "id": "D1-1-001",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research system's lead agent runs on the Agent SDK. For simple fact questions (\"What year was the company founded?\") it still spawns eight subagents and runs 40+ searches, and on obscure topics it sometimes runs for an hour chasing sources that don't exist. Which change BEST addresses both problems?",
+   "select": 1,
+   "options": [
+    "Move the lead agent to the most capable model tier so it can judge question complexity on its own",
+    "Add effort-scaling rules to the lead's prompt and enforce `max_turns` and `max_budget_usd` limits in the harness",
+    "Remove subagents and answer every question in one agent loop with no turn limit, so research on hard topics is never cut off early",
+    "Add a `Stop` hook that sends the lead back to work until the report cites at least ten distinct sources"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "A stronger model may judge complexity a little better, but nothing bounds the runaway case and nothing tells it how much effort each question type deserves.",
+    "Correct. Scaling rules (simple fact: one agent and a few calls; broad comparison: several subagents) address over-spawning; Anthropic's research system embedded such rules because agents struggled to judge appropriate effort, and hard turn/budget caps in the harness stop the runaway loops regardless of what the model decides.",
+    "This removes the over-spawning but makes the runaway problem worse: with no limit, nothing stops a loop chasing nonexistent sources.",
+    "This forces even more work on simple questions and could loop forever when ten sources don't exist."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-2-001",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the research system, the coordinator runs a `market-size` subagent and a `regulatory-impact` subagent in parallel. The regulatory analysis needs the market-size figures to estimate exposure, so its section often contains invented placeholder numbers. A developer proposes letting the two subagents message each other mid-task. What should the architect do instead?",
+   "select": 1,
+   "options": [
+    "Let both subagents append to a shared scratch file as they work, so each can read the other's latest figures",
+    "Merge the two subagents into one with both tool sets, so it has the market figures in its own context",
+    "Run `market-size` first, then pass its condensed figures into the `regulatory-impact` brief",
+    "Keep both in parallel and tell `regulatory-impact` in its prompt to estimate market size itself when needed"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Concurrent writes to a shared file create a race: the regulatory worker may read before the figures exist, and the coordinator no longer controls what each worker sees.",
+    "This works for two workers but discards the specialization and context isolation that justified separate subagents; it doesn't scale to the general dependency problem.",
+    "Correct. A real dependency means the subtasks are sequential. Routing the first result through the coordinator keeps hub-and-spoke control and gives the second worker the exact inputs it needs in its brief.",
+    "This duplicates work and produces figures that may contradict the market-size worker's, leaving the coordinator to reconcile two estimates."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-2-002",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "The research team is splitting responsibilities between the coordinator and its search/analysis subagents. Which TWO responsibilities should stay with the coordinator? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Running each individual web search and reading the full source pages",
+    "Decomposing the research question into subtasks and deciding which can run in parallel",
+    "Extracting quotes and publication dates from each source document",
+    "Synthesizing worker findings into the report and resolving contradictions between workers",
+    "Retrying a failed page fetch inside a worker's own search loop"
+   ],
+   "answer": [
+    1,
+    3
+   ],
+   "explanations": [
+    "This is worker execution. Doing it in the coordinator floods its context with raw pages, which is what delegation is meant to avoid.",
+    "Correct. Decomposition and scheduling need the whole question in view; that is the coordinator's job.",
+    "Per-source extraction is narrow, parallelizable worker work.",
+    "Correct. Only the coordinator sees all workers' results, so only it can merge them and reconcile conflicting findings.",
+    "Retrying a fetch is local to the worker's own tool loop; escalating every transient failure to the coordinator adds latency and noise."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-2-003",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 1,
+   "stem": "The research coordinator splits a question into five independent sub-questions, but it starts each search subagent only after the previous one has returned. Reports are good, but each takes about 25 minutes. Which change MOST directly cuts the run time?",
+   "select": 1,
+   "options": [
+    "Launch the five independent subagents in parallel, then synthesize once all have returned",
+    "Merge the five sub-questions into one subagent so there is only a single round trip",
+    "Switch every subagent to the most capable model tier so that each one finishes its searches faster",
+    "Add an evaluator subagent that reviews each worker's output before the next one starts"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Independent subtasks don't need to wait for each other; running them concurrently makes total time roughly that of the slowest worker.",
+    "One worker doing five sub-questions serially is no faster and loses context isolation between them.",
+    "A larger model is usually slower per call, and it doesn't remove the serial waiting that dominates run time.",
+    "This adds a step to every worker and makes the run longer."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-2-004",
+   "subskill": "P4.4",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "Spot checks of the research system's reports show that about 8% of claims cite a source that doesn't actually support them. The synthesis subagent writes the report from the search workers' findings. Which design change BEST reduces unsupported citations?",
+   "select": 1,
+   "options": [
+    "Add \"double-check every citation before you finish\" to the synthesis subagent's prompt",
+    "Double the number of search subagents so the synthesis step has more sources to cite from",
+    "Have each search subagent re-read the final report and confirm every claim that cites one of its own sources",
+    "Add a separate citation-check step that maps each claim to source text, with one bounded revision"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Self-review in the same context tends to confirm its own work, and nothing enforces that the check happens.",
+    "More sources don't fix mis-attribution; they give the synthesizer more material to mis-cite.",
+    "Search workers have already returned and have no view of the full report; restarting them all is costly and leaves no one in charge of the outcome.",
+    "Correct. A dedicated evaluator with a clear criterion (does the cited text support the claim?) is the evaluator-optimizer pattern, much like the separate citation agent in Anthropic's research system. Capping revisions prevents loops."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-2-005",
+   "subskill": "P1.5",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "An analyst asks the research system: \"For the ten largest grid-battery suppliers in Europe, summarize each one's capacity plans and recent regulatory issues.\" The coordinator immediately spawns ten subagents, each briefed \"Research one of the ten largest European grid-battery suppliers.\" Several workers pick the same companies and two well-known suppliers are missing. What is the BEST orchestration?",
+   "select": 1,
+   "options": [
+    "Spawn twenty subagents with the same brief so overlap is more likely to cover all ten suppliers",
+    "Run one subagent to identify the ten suppliers first, then fan out one subagent per supplier in parallel",
+    "Run a single agent that researches all ten suppliers one after another in its own context",
+    "Keep the ten parallel subagents and have each one post its chosen company to a shared list so the others avoid it"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Redundancy wastes tokens and still can't guarantee coverage, because no worker knows the definitive list.",
+    "Correct. Identifying the list is a dependency for the per-supplier work, so it runs first; the per-supplier subtasks are then independent and can run in parallel with distinct scopes.",
+    "This avoids duplication but is slow and piles ten companies' research into one context.",
+    "Workers coordinating through a shared list race each other and still don't agree on which ten are the largest."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-2-006",
+   "subskill": "P1.3",
+   "scenario": "S5",
+   "difficulty": 2,
+   "stem": "The CI pipeline uses `claude -p` to propose fixes for failing builds. The team wants an evaluator-optimizer loop so weak fixes get improved before a PR is opened. Which design applies the pattern correctly?",
+   "select": 1,
+   "options": [
+    "After generating the fix, ask the same session to \"review your fix critically and improve it\" and repeat until it says the fix is good",
+    "Run five independent fix attempts and open a PR for whichever produced the largest diff",
+    "A separate reviewer scores the fix on explicit criteria and feeds failures back, with a round cap and human fallback",
+    "Loop generator and reviewer until the reviewer reports zero findings, with no limit, so only perfect fixes ship"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The generator critiquing itself in the same context tends to approve its own reasoning, and the stop condition is the model's own say-so.",
+    "This is voting with a meaningless selection criterion; diff size says nothing about correctness.",
+    "Correct. Evaluator-optimizer needs an independent evaluator, clear criteria (for example tests pass, no public API change) and an iteration cap with a fallback.",
+    "A reviewer asked to find problems will nearly always find something, so an uncapped loop burns budget and may never end."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-2-007",
+   "subskill": "P1.3",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The extraction pipeline handles three document types (invoices, purchase contracts, customs forms). Each type has its own schema and extraction prompt, and an existing classifier labels the type with 99% accuracy. An engineer proposes a coordinator agent that reads each document and dynamically spawns whichever extraction subagents it thinks are needed. What should the architect recommend?",
+   "select": 1,
+   "options": [
+    "A routing workflow: classify, dispatch to that type's prompt and schema, and send low-confidence labels to review",
+    "The coordinator agent as proposed, because dynamic delegation adapts better to unusual or mixed documents than a fixed classifier",
+    "One general extraction prompt with all three schemas merged, so no classification step is needed",
+    "A coordinator agent plus an evaluator subagent that re-extracts every document to confirm the first result"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The categories are known in advance and classification is reliable, which is exactly what routing is for: predictable, cheap and auditable.",
+    "Dynamic orchestration adds cost, latency and variance for a decision that a classifier already makes reliably.",
+    "A merged schema invites cross-type confusion and fields being filled from the wrong document type.",
+    "This doubles the cost of every document on top of an orchestration layer the problem doesn't need."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-2-008",
+   "subskill": "P1.4",
+   "scenario": "S1",
+   "difficulty": 2,
+   "stem": "The support-resolution agent handles multi-turn conversations with customers. The team is deciding where subagents help. Which TWO tasks are good candidates for delegating to a subagent? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Searching three years of a customer's order history and the knowledge base, where only the conclusion matters to the conversation",
+    "Asking the customer a clarifying question about which of two orders they mean",
+    "Issuing a refund the main agent has already verified and approved",
+    "Running a fraud-pattern analysis with read-only tools, isolated from the refund and account-change tools",
+    "Summarizing the current conversation so the main agent can remember it"
+   ],
+   "answer": [
+    0,
+    3
+   ],
+   "explanations": [
+    "Correct. Verbose, self-contained research whose output can be a short summary is a textbook use of a subagent's isolated context.",
+    "The clarifying question belongs in the live conversation; a subagent has no direct channel to the customer.",
+    "A single, already-decided tool call gains nothing from delegation and adds latency.",
+    "Correct. A subagent with a restricted tool set enforces separation: the analysis can't trigger refunds or account changes.",
+    "A fresh subagent doesn't see the conversation, so it can't summarize it unless the whole history is passed in, which defeats the point."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+  },
+  {
+   "id": "D1-3-001",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the research system, the user and the coordinator spend several turns narrowing a question to \"EU lithium-refining capacity announced since 2024, excluding pilot plants.\" The coordinator then delegates with the Agent tool prompt \"Research the refining question we discussed.\" The subagent returns a generic global overview. What is the MOST likely cause and fix?",
+   "select": 1,
+   "options": [
+    "The subagent's model tier is too small to infer the scope; set `model` to a more capable tier",
+    "The subagent lacks the coordinator's tools; give it the same tool list as the coordinator",
+    "The subagent ran out of turns; raise its `maxTurns` so it can keep exploring until it discovers the intended scope",
+    "A non-fork subagent sees only its brief; put the exact question, scope and exclusions in the Agent prompt"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "No model can recover constraints that were never sent to it.",
+    "Tools aren't the gap; the subagent searched fine, just for the wrong question.",
+    "More turns spent on an unscoped question produce a longer generic overview.",
+    "Correct. The parent conversation isn't visible to a non-fork subagent; the Agent tool's prompt string is the only channel from parent to subagent."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+  },
+  {
+   "id": "D1-3-002",
+   "subskill": "P2.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research coordinator's context keeps hitting compaction partway through large jobs. Logs show each search subagent returns its full working notes, including the raw text of every page it read, often 30,000+ tokens per worker. What change BEST fixes this?",
+   "select": 1,
+   "options": [
+    "Subagents save full text to storage and return a short structured result: claims, source refs, dates, gaps",
+    "Move the coordinator to a model with a larger context window so that every worker's full output fits without compaction",
+    "Have subagents return their full notes but ask the coordinator to ignore everything except the conclusions",
+    "Disable compaction on the coordinator so that none of the worker output is ever summarized away"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Only a subagent's final message enters the parent's context, so make it condensed. Writing full material to storage and passing references keeps detail available without bloating the coordinator.",
+    "A bigger window postpones the problem and worsens attention dilution on the content that matters.",
+    "Telling the model to ignore tokens doesn't remove them from the context; the cost and dilution remain.",
+    "Without compaction the coordinator simply runs out of context."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-3-003",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research coordinator is rewriting the template it uses to brief search subagents. Which TWO elements MUST each brief include? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "The full transcript of the coordinator's conversation so far, so the worker has all possible context",
+    "The specific sub-question with scope boundaries (time range, regions, exclusions)",
+    "A note that the worker can read the coordinator's history if it needs more detail",
+    "The required output format, e.g. claims with source URL and publication date",
+    "The tool lists of the other subagents, so the worker knows who else is searching"
+   ],
+   "answer": [
+    1,
+    3
+   ],
+   "explanations": [
+    "This bloats the worker's context with mostly irrelevant material and sends data the worker doesn't need.",
+    "Correct. Without a clear objective and boundaries, workers duplicate each other, leave gaps and drift.",
+    "False premise: a non-fork subagent cannot see the parent's history at all.",
+    "Correct. A common output format lets the coordinator merge results and preserves provenance.",
+    "Other workers' tool lists don't help a worker do its own task; non-overlapping scope does."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-3-004",
+   "subskill": "P1.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research coordinator has the two subagents below. When users ask it to analyze academic PDFs that search workers have already saved, it usually delegates to `web-searcher`, which runs new searches instead. What is the BEST fix?",
+   "code": {
+    "lang": "python",
+    "src": "agents={\n  \"web-searcher\": AgentDefinition(\n      description=\"Helps with research.\",\n      prompt=SEARCH_PROMPT, tools=[\"WebSearch\", \"WebFetch\"]),\n  \"paper-analyst\": AgentDefinition(\n      description=\"Research helper.\",\n      prompt=ANALYST_PROMPT, tools=[\"Read\", \"Grep\"]),\n}"
+   },
+   "select": 1,
+   "options": [
+    "Rename the subagents to `a-web-searcher` and `b-paper-analyst` so the coordinator considers them in the intended order",
+    "Rewrite both descriptions to state when to use each: saved PDFs go to paper-analyst, new sources to web-searcher",
+    "Remove `web-searcher` and let `paper-analyst` handle both searching and analysis",
+    "Raise `paper-analyst` to a larger model tier so the coordinator trusts it with more work"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Ordering by name isn't how delegation is chosen; Claude matches tasks against descriptions.",
+    "Correct. `description` is the main signal for automatic delegation. Vague, overlapping descriptions make selection near-random; explicit when-to-use criteria fix routing.",
+    "This collapses a useful separation of tools and context to avoid writing two good descriptions.",
+    "The model tier of a subagent doesn't affect which one the coordinator picks."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+  },
+  {
+   "id": "D1-3-005",
+   "subskill": "P3.1",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "The research system's `synthesizer` subagent should only read the findings files that workers saved and write the report. In practice it often launches new web searches and adds unvetted sources. Its definition is below. What is the BEST fix?",
+   "code": {
+    "lang": "python",
+    "src": "\"synthesizer\": AgentDefinition(\n    description=\"Writes the final report from saved findings files.\",\n    prompt=\"Read findings/*.json and write a cited report.\",\n    model=\"opus\",\n)"
+   },
+   "select": 1,
+   "options": [
+    "Add \"Do not search the web; use only the findings files\" in capitals to the synthesizer's `prompt`",
+    "Remove `WebSearch` from the coordinator's `allowed_tools` so that no agent in the run is pre-approved to search",
+    "Ask the coordinator to remind the synthesizer in every brief that it must not search",
+    "Add `tools=[\"Read\", \"Glob\"]` to the definition; an omitted `tools` field inherits every available tool"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A prompt instruction is probabilistic; the tool stays available and will still be used sometimes.",
+    "`allowed_tools` controls auto-approval, not availability, and changing it also affects the search workers that need the tool.",
+    "Same weakness as a prompt rule, repeated in every brief.",
+    "Correct. With `tools` omitted the subagent gets every tool available to subagents. An explicit list removes web tools from its session entirely, which is a deterministic restriction."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+  },
+  {
+   "id": "D1-3-006",
+   "subskill": "P2.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "In the research system, search subagents have saved 30 source documents to disk (about 2 million tokens in total). The coordinator now needs an analysis subagent to answer one sub-question from them. How should the coordinator pass the material?",
+   "select": 1,
+   "options": [
+    "Paste all 30 documents into the analysis subagent's brief so it has complete information",
+    "Summarize each document to a single line first and pass only those 30 lines to the subagent",
+    "Pass the sub-question, the file paths with a one-line note on each, and the output format",
+    "Fork the coordinator's conversation into the subagent so it inherits everything the coordinator has seen"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "2M tokens won't fit in a context window, and even a fraction of it dilutes attention.",
+    "One-line summaries throw away the detail the analysis needs, and the subagent can't recover it.",
+    "Correct. The subagent reads only what it needs. Lightweight references plus just-in-time reading keep the brief small while giving the subagent access to full detail.",
+    "The coordinator's conversation doesn't contain the documents' full text either, and it would bring along unrelated history."
+   ],
+   "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+  },
+  {
+   "id": "D1-3-007",
+   "subskill": "P2.4",
+   "scenario": "S4",
+   "difficulty": 2,
+   "stem": "On the internal developer platform, a `repo-explorer` subagent helps engineers understand unfamiliar services. Its prompt ends with \"Report everything you read so nothing is lost.\" Engineers say the main session becomes slow and unfocused after each exploration, because the result includes thousands of lines of pasted source. Which change BEST fixes this?",
+   "select": 1,
+   "options": [
+    "Have it return a concise summary: key files with paths and line ranges, the flow, and open questions",
+    "Run the main session on a larger-context model so the explorer's full output fits comfortably alongside the conversation",
+    "Replace the subagent with direct file reads in the main session so nothing has to be summarized",
+    "Have the main session run `/compact` after every exploration to shrink the pasted source"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. The subagent's final message is all that returns to the parent; asking for a condensed, referenced summary preserves isolation, and the engineer can open specific files by path when needed.",
+    "A larger window doesn't stop the noise from diluting attention and raising cost.",
+    "Reading everything in the main session puts the same volume of content into the main context, which is worse.",
+    "Compacting afterwards treats the symptom; the bloat is still sent and paid for each time."
+   ],
+   "ref": "https://code.claude.com/docs/en/sub-agents"
+  },
+  {
+   "id": "D1-3-009",
+   "subskill": "P5.4",
+   "scenario": "S1",
+   "difficulty": 2,
+   "stem": "The support-resolution agent delegates knowledge-base and public-web research to a `kb-researcher` subagent that has `WebFetch`. A review finds that the coordinator pastes the whole case into each brief, including the customer's address, payment method details and account notes. The research only needs the product and the symptom. What should the architect change?",
+   "select": 1,
+   "options": [
+    "Keep the full case but tell `kb-researcher` in its prompt never to include personal data in URLs or queries",
+    "Remove `WebFetch` from `kb-researcher` so it can only search the internal knowledge base",
+    "Encrypt the brief before passing it so the subagent's tools can't read the personal fields",
+    "Pass only what the research needs (product, version, symptom, error codes), not the whole case"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "This leaves the data in a context with outbound web access and relies on the model following an instruction.",
+    "This breaks a legitimate capability instead of fixing what is sent.",
+    "The subagent must read its brief to work; encryption isn't a meaningful control here.",
+    "Correct. Because a subagent sees only what you pass it, brief contents are a data-minimization control. Sending only task-relevant fields removes the exposure."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents"
+  },
+  {
+   "id": "D1-4-001",
+   "subskill": "P5.1",
+   "scenario": "S1",
+   "difficulty": 1,
+   "stem": "The support-resolution agent's system prompt says: \"Always call `verify_identity` before calling `issue_refund`.\" An audit finds that about 3% of refunds were issued in conversations where verification never succeeded. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Repeat the rule at the end of the system prompt with IMPORTANT, since instructions at the end get more attention",
+    "Add few-shot examples showing the agent calling `verify_identity` first in several different refund conversations",
+    "Run a nightly job that finds refunds without verification and claws them back from the customer's account",
+    "Have the `issue_refund` handler check server-side state for successful verification, else return an error"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Emphasis can lower the failure rate but can't guarantee the order; a 3% miss rate on money movement needs a deterministic control.",
+    "Examples also shape behavior probabilistically; the refund still executes whenever the model skips the step.",
+    "Detecting violations after money has moved is remediation, not prevention, and creates a bad customer experience.",
+    "Correct. A prerequisite enforced in the tool handler runs every time. The error message also tells the agent what to do next."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-4-002",
+   "subskill": "P5.1",
+   "scenario": "S1",
+   "difficulty": 3,
+   "stem": "The support-resolution team needs a guarantee that no refund is issued before the customer's identity is verified in the same conversation. Which TWO implementations provide that guarantee? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Add a required `identity_verified: boolean` parameter to `issue_refund` and reject calls where the model passes `false`",
+    "In the `issue_refund` handler, check a verified flag stored server-side for the authenticated conversation and refuse if it's missing",
+    "Leave `issue_refund` out of the agent's tool list until `verify_identity` returns success, then have the harness add it",
+    "Add a `PostToolUse` hook on `issue_refund` that alerts the fraud team when no verification preceded the refund",
+    "Put the verification rule first in the system prompt and add a red-team test suite that checks the agent follows it"
+   ],
+   "answer": [
+    1,
+    2
+   ],
+   "explanations": [
+    "The model fills in that parameter itself, so it can simply pass `true`. A gate must read state the model can't write.",
+    "Correct. The check reads state set only by the verification tool's own code path, so the model can't bypass it.",
+    "Correct. Tool gating by the harness makes an unverified refund impossible: the tool doesn't exist for the model until the prerequisite is met.",
+    "A `PostToolUse` hook runs after the refund has already been issued; it detects, it doesn't prevent.",
+    "Tests measure how often the prompt is followed; they don't enforce it in production."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/permissions"
+  },
+  {
+   "id": "D1-4-003",
+   "subskill": "P5.3",
+   "scenario": "S1",
+   "difficulty": 2,
+   "stem": "When the support-resolution agent escalates a case, human agents receive the raw 60-120 turn transcript and spend several minutes reconstructing what happened; some re-ask the customer for information already verified. The team adds an `escalate_to_human` tool with a required input schema. Which THREE fields belong in that schema? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Customer and order identifiers, plus which identity checks have already passed",
+    "The agent's sentiment score for the customer, so humans can prioritize angry customers first",
+    "A summary of actions taken and their results (lookups, refunds attempted, policy checks)",
+    "The full list of tools available to the agent during the conversation",
+    "The reason for escalation and a recommended next step",
+    "The model tier and temperature used for the conversation"
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. Identifiers and verified status let the human act immediately without re-verifying the customer.",
+    "A sentiment score doesn't tell the human what to do, and sentiment is a weak routing signal compared with the actual issue.",
+    "Correct. What was already tried, and what happened, prevents duplicate actions and repeated questions.",
+    "The agent's tool list is configuration, not case information; it doesn't help the human resolve the case.",
+    "Correct. Why the agent stopped (policy gap, customer request, failed action) plus a suggested next step makes the handoff actionable.",
+    "Model settings are operational metadata for engineers, not for the human resolving the case."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-4-004",
+   "subskill": "P5.1",
+   "scenario": "S1",
+   "difficulty": 3,
+   "stem": "The support-resolution agent calls `check_refund_eligibility(order_id, amount)` before `issue_refund`. Investigations show a few approvals where the model passed a lower `amount` than the real order total (it paraphrased a customer's claim), so a large refund slipped under the auto-approval limit. Which change BEST closes this gap?",
+   "select": 1,
+   "options": [
+    "Add a system-prompt rule that the amount must be copied exactly from the order lookup result",
+    "Change the tool to take only `order_id`; the handler fetches the real total and applies the limit to it",
+    "Have a second model call review each eligibility request and confirm the amount looks consistent with the conversation",
+    "Lower the auto-approval limit so that small mistakes in the amount matter less"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Still probabilistic; the model can paraphrase or mistype again.",
+    "Correct. Values that decide policy should come from the system of record, not from model-supplied input. Removing the parameter makes the error impossible.",
+    "A reviewing model reduces but doesn't remove errors, and it adds latency and cost to every refund.",
+    "This shrinks the impact but leaves the root cause: policy is still evaluated on a number the model chose."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-4-005",
+   "subskill": "P5.1",
+   "scenario": "S6",
+   "difficulty": 1,
+   "stem": "In the extraction pipeline, an agent has tools `extract_fields`, `validate_document` and `write_to_erp`. The prompt says to write only after validation passes, but logs show occasional ERP writes of documents that were never validated. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Strengthen the prompt and add a few-shot example of the correct three-step order",
+    "Add a `PostToolUse` hook on `write_to_erp` that logs any write made without a prior validation",
+    "Remove `write_to_erp` from the agent; pipeline code writes to the ERP only after validation passes",
+    "Ask the agent to output `validated: true` in its final JSON and write only when it does"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A better prompt lowers the error rate but can't guarantee the order of an irreversible side effect.",
+    "Logging after the write detects the problem instead of preventing it.",
+    "Correct. When the order is fixed, the side effect belongs in deterministic code. The model extracts; the pipeline decides when to write.",
+    "The model sets that flag itself, so it's no stronger than the prompt rule."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-4-006",
+   "subskill": "P5.3",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "The extraction pipeline sends some documents to human reviewers. Reviewers say many routed items look fine while some bad extractions never reach them, and each item takes long to check because they must re-read the whole document. Which TWO changes BEST improve the handoff? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Route by code rules: validation failures, or field confidence below a threshold calibrated on labeled data",
+    "Ask the extraction model at the end of each document whether it is confident, and route the ones where it says no",
+    "Include the extracted values, the specific fields that failed and why, and the page/region each value came from",
+    "Attach the model's full reasoning transcript so reviewers can follow how it reached each value",
+    "Send every document to review in arrival order so reviewers see a representative sample"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Deterministic, calibrated routing catches the failures that matter and stops sending clean items.",
+    "Self-reported confidence is poorly calibrated, which explains both symptoms: confident errors slip through and good items get flagged.",
+    "Correct. A focused package lets reviewers check specific fields at specific locations instead of re-reading the document.",
+    "A long transcript adds reading time; reviewers need the values and their sources, not the reasoning.",
+    "Reviewing everything defeats the purpose of automation and doesn't make individual reviews faster."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-4-007",
+   "subskill": "P1.2",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "In the extraction pipeline, an extraction agent hands each processed invoice to a reconciliation agent by writing a prose summary (\"Total is about 12.4k EUR, due next month, two line items…\"). The reconciliation agent sometimes misreads amounts and dates. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Define a typed handoff schema (amounts with currency, ISO dates, nulls, source refs) validated in code",
+    "Instruct the extraction agent to write more detailed prose that spells out every number precisely",
+    "Merge the extraction and reconciliation agents into one agent so that no handoff between stages is needed at all",
+    "Have the reconciliation agent re-extract the invoice itself and compare with the prose summary"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. A structured contract validated in code makes the handoff unambiguous, and a failed validation stops bad data at the boundary.",
+    "Prose is still ambiguous and can't be validated mechanically.",
+    "This removes the boundary but loses the separation of concerns, and the reconciliation logic still needs structured inputs.",
+    "Doubling the extraction work papers over an interface problem instead of fixing the interface."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-4-008",
+   "subskill": "P7.2",
+   "scenario": "S5",
+   "difficulty": 2,
+   "stem": "A CI job runs `claude -p` to fix failing tests and then pushes the branch. CLAUDE.md says \"Always run the full test suite before you finish.\" Sometimes the job pushes changes that still fail. Which design BEST guarantees nothing is pushed unless tests pass?",
+   "select": 1,
+   "options": [
+    "Put the test rule at the top of CLAUDE.md in capitals and repeat it in the `-p` prompt",
+    "Request `--json-schema` output with a `tests_passed` boolean and push only when Claude reports `true`",
+    "Run Claude with `--dangerously-skip-permissions` so it can always run the test suite without being blocked by prompts",
+    "Withhold push from Claude; after `claude -p` exits, the pipeline runs the tests and pushes only on success"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Stronger wording still relies on the model choosing to follow it.",
+    "Structured output guarantees the format, not the truth: `tests_passed` is the model's own claim.",
+    "Skipping permissions doesn't make the model run tests, and removes guardrails for an unattended job.",
+    "Correct. The pipeline's own test run is the gate, and withholding push from Claude means the required step can't be skipped."
+   ],
+   "ref": "https://code.claude.com/docs/en/headless"
+  },
+  {
+   "id": "D1-4-010",
+   "subskill": "P1.2",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research system's policy is that every report passes a citation-verification step before delivery. The lead agent has the verifier as one of its subagents and is told to call it last. Under time pressure it sometimes delivers without verifying. What should the architect do?",
+   "select": 1,
+   "options": [
+    "Make verification a fixed step in orchestration code: always run the verifier, deliver only if it passes",
+    "Move the instruction to call the verifier to the start of the lead's system prompt",
+    "Give the lead a larger turn budget so it doesn't run out of time before verifying",
+    "Have the lead include a `verified: true` field in its output and have the delivery service reject reports without it"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. A mandatory step belongs in the deterministic part of the system, not in the agent's discretion.",
+    "Position may help a little, but the lead can still skip it.",
+    "Time pressure is one trigger, but the step is still optional for the agent.",
+    "The lead writes that field itself, so it's no guarantee the verifier ran."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-001",
+   "subskill": "P1.5",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research system currently decomposes every question into the same four subagent tasks: background, market data, regulation, outlook. For questions like \"How do EU and US battery-recycling rules differ?\" the market and outlook sections come back thin or irrelevant, while the key comparison is spread across sections. What is the BEST change?",
+   "select": 1,
+   "options": [
+    "Add two more fixed sections (comparison and risks) so that the template covers more of the question types users ask",
+    "Keep the four sections but have the synthesis step drop any that come back thin",
+    "Have the lead decompose each question into sub-questions that fit its shape, guided by example decompositions",
+    "Run the four-section template twice with different search engines and merge the results"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A bigger fixed template still forces every question into the same shape and adds more empty sections.",
+    "This hides the symptom; the comparison the user asked for is still never directly researched.",
+    "Correct. Open-ended questions vary in shape, so the subtasks should be chosen per question (orchestrator-workers) rather than fixed in advance as in a prompt chain.",
+    "Running the wrong decomposition twice doubles cost without fixing it."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-002",
+   "subskill": "P1.5",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "Asked \"What are the main risks of deploying solid-state batteries in passenger EVs?\", the research lead splits the work into three subagents: thermal runaway, dendrite formation and manufacturing cost. Each returns strong findings, but reviewers note the report misses supply-chain and regulatory risk entirely. What is the BEST fix?",
+   "select": 1,
+   "options": [
+    "Have the lead first map the question's dimensions, then check its subtasks against that map before delegating",
+    "Run two subagents on each of the three subtopics and keep the more detailed answer",
+    "Give each subagent a larger search budget so it goes deeper into its subtopic",
+    "Move the synthesis step to the most capable model tier so it can recognize and fill in the missing risk areas itself"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. This is over-narrow decomposition: the subtasks were good but didn't span the question. A scoping pass plus a coverage check catches missing dimensions before work is delegated.",
+    "Redundancy on the same narrow topics doesn't add the missing ones.",
+    "Deeper research inside the same three boxes still leaves the gaps.",
+    "The synthesizer has no researched material on the missing risks, so it would have to invent or omit them."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-6-003",
+   "subskill": "P1.5",
+   "scenario": "S3",
+   "difficulty": 1,
+   "stem": "The research lead is being tuned to split questions into parallel subagent tasks. Which TWO principles should its decomposition follow? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Make subtasks independent so no subagent has to wait for another's result",
+    "Create as many subtasks as possible, since more subagents always produce a more thorough report",
+    "Give each subtask a distinct, non-overlapping scope and a common output format",
+    "Split by tool, one subagent per search engine, regardless of the question",
+    "Let subagents agree among themselves who covers which part of the question"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Independent subtasks can run in parallel; dependencies force sequencing.",
+    "Each subagent adds tokens and coordination; effort should scale with the question's complexity.",
+    "Correct. Distinct scopes avoid duplicated work and a shared format lets the coordinator merge results.",
+    "The split should follow the question's structure, not the tool inventory.",
+    "Coverage decisions belong to the coordinator; self-organizing workers duplicate and miss work."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-6-004",
+   "subskill": "P1.3",
+   "scenario": "S3",
+   "difficulty": 1,
+   "stem": "In the research system, a fact-check step sends the same claim-verification prompt for each key claim to three independent model calls and accepts the verdict that at least two agree on. Which pattern is this?",
+   "select": 1,
+   "options": [
+    "Prompt chaining with a programmatic gate between the calls",
+    "Parallelization, voting variant: the same task run several times with the results aggregated",
+    "Orchestrator-workers, because a central model decides the subtasks at runtime",
+    "Evaluator-optimizer, because one call grades the output of another"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "The calls don't consume each other's output in sequence.",
+    "Correct. Voting runs the same task several times for higher confidence; sectioning would split different subtasks.",
+    "The subtasks here are identical and fixed in code, not chosen at runtime.",
+    "No call critiques or revises another's output; they vote independently."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-005",
+   "subskill": "P1.5",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "An analyst gives the research system 25 analyst reports on one company and asks it to find where they contradict each other. A single pass over all 25 misses many contradictions; giving each report to its own subagent produces good summaries but no contradictions at all. Which decomposition BEST fits?",
+   "select": 1,
+   "options": [
+    "One pass over all 25 reports with a much more detailed prompt listing contradiction types",
+    "Per-report subagents only, each told to mention anything in its report that might conflict with the other reports",
+    "Per-report passes that extract claims with source and date, then a cross-report pass comparing claims by topic",
+    "Split the reports into five batches of five and look for contradictions within each batch"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "One giant pass dilutes attention across 25 documents; more prompt detail doesn't fix that.",
+    "A worker that sees one report can't know what other reports say.",
+    "Correct. Local passes produce comparable structured claims, and an integration pass across them finds the cross-document conflicts.",
+    "Contradictions between reports in different batches are never compared."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-6-006",
+   "subskill": "P1.5",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The extraction pipeline must pull 40 fields from 300-page supply contracts. A single extraction call over the whole contract misses fields, and it sometimes takes the payment terms from the original clause even though a later amendment replaced them. Which approach is BEST?",
+   "select": 1,
+   "options": [
+    "Extract per section with page references, then consolidate in a pass that applies amendment precedence",
+    "Use a larger-context model so the whole 300-page contract fits more comfortably into a single extraction call",
+    "Make all 40 fields required in the schema so the model can't skip any",
+    "Ask the model to read the contract twice in the same call before answering"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Section-level passes keep attention focused, and a consolidation pass sees all candidate values so it can resolve conflicts such as amendments overriding originals.",
+    "Fitting more text in the window doesn't fix diluted attention or teach precedence.",
+    "Required fields force the model to fill gaps, inviting fabricated values where a field is absent.",
+    "Rereading in one call doesn't change the decomposition or resolve the amendment problem."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-007",
+   "subskill": "P1.5",
+   "scenario": "S6",
+   "difficulty": 3,
+   "stem": "To raise accuracy, an engineer changes the invoice-extraction pipeline from one structured call per invoice to 40 separate calls, one per field. Accuracy on individual fields improves slightly, but cost rises sharply and a new class of errors appears: subtotals, tax and totals that don't add up, and line items assigned to the wrong currency. What should the architect recommend?",
+   "select": 1,
+   "options": [
+    "Keep the per-field calls and add an LLM review call that checks all 40 answers for consistency before saving",
+    "Revert to one call per invoice with no other changes, accepting the earlier field accuracy",
+    "Group related fields per call (header, line items, totals) and check arithmetic and currency in code",
+    "Keep per-field calls but run each one three times and take the majority answer"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "This adds a 41st call on top of an already over-fragmented design, and the review is probabilistic.",
+    "This gives up the accuracy gain instead of fixing the decomposition.",
+    "Correct. The split was too fine: fields that depend on each other lost shared context. Grouping related fields restores consistency, and deterministic checks catch arithmetic mismatches cheaply.",
+    "Voting triples an already high cost and still doesn't give any call the context to keep fields consistent."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-008",
+   "subskill": "P1.5",
+   "scenario": "S5",
+   "difficulty": 1,
+   "stem": "The CI review job runs `claude -p` once over a 60-file pull request. Its comments are shallow, it misses obvious bugs in some files, and it rarely catches broken call sites between modules. Which decomposition BEST addresses this?",
+   "select": 1,
+   "options": [
+    "Per-file review passes, then a separate cross-file pass on changed interfaces and their call sites",
+    "Increase `--max-turns` so the single pass has more time to look at everything",
+    "Split the PR into two halves of 30 files and review each half in one pass",
+    "Run the same single-pass review three times and merge all comments"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Focused per-file passes catch local bugs, and an integration pass finds problems that only show up across files.",
+    "More turns don't fix attention spread across 60 files in one context.",
+    "Two big passes are still diluted and still can't see cross-half interactions.",
+    "Repeating a diluted pass repeats its blind spots and multiplies noise."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-009",
+   "subskill": "P7.2",
+   "scenario": "S5",
+   "difficulty": 3,
+   "stem": "A nightly CI job must migrate about 400 service files from a deprecated logging API to a new one. Each file can be changed independently, and each service has its own tests. Which TWO practices BEST fit this job? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "Build the target list with a deterministic search, then run one scoped `claude -p` per file",
+    "Send all 400 file paths to a single `claude -p` session and ask it to migrate them one after another",
+    "Pilot the prompt on a handful of files, fix the instructions, then run the full batch",
+    "Let each invocation decide which other services also need changes and edit those too",
+    "Use `--dangerously-skip-permissions` so no invocation stalls on a permission prompt"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Independent items fan out cleanly: a deterministic work list plus one non-interactive run per file with the same instructions and a narrow `--allowedTools`.",
+    "One session over 400 files accumulates context and degrades long before it finishes.",
+    "Correct. Problems in the prompt show up on a few files cheaply; at 400 files they multiply.",
+    "Overlapping, self-expanding scope creates conflicting edits between runs.",
+    "Unattended runs should get a narrow allowlist with a non-prompting mode, not blanket bypass."
+   ],
+   "ref": "https://code.claude.com/docs/en/headless"
+  },
+  {
+   "id": "D1-6-010",
+   "subskill": "P7.2",
+   "scenario": "S2",
+   "difficulty": 1,
+   "stem": "A developer asks Claude Code in one prompt to \"add multi-currency support\" to a billing service. The result touches the schema, services, API and UI at once, and half of it doesn't work. How should the work be decomposed instead?",
+   "select": 1,
+   "options": [
+    "Write a much longer single prompt that lists every file to change",
+    "Spawn four parallel subagents (schema, services, API, UI) and merge their changes at the end",
+    "Ask Claude to review its own large change and fix what it finds",
+    "Split it into ordered steps (schema, services, API, UI) and check tests after each step"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "More detail in one shot still produces one large, unverified change.",
+    "The layers depend on each other; parallel workers would build on interfaces that don't exist yet.",
+    "Self-review of a sprawling change in the same context finds little.",
+    "Correct. This is prompt chaining with gates: each step builds on a verified previous step, so problems surface early and stay small."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D1-6-011",
+   "subskill": "P1.4",
+   "scenario": "S2",
+   "difficulty": 3,
+   "stem": "A developer asks Claude Code to change a core `Account` model (new required field, renamed method) and update its 40 call sites across the codebase. To go faster, they have Claude spawn ten subagents immediately, each taking four call sites. Several subagents guess the new method signature differently and edit the shared model file in conflicting ways. What is the BEST approach?",
+   "select": 1,
+   "options": [
+    "Make the shared model and interface change first, then fan out the independent call-site updates",
+    "Spawn one subagent per call site so that each one has a smaller, more focused task",
+    "Do all 40 call sites sequentially in the main session to avoid any parallelism",
+    "Keep the ten subagents but tell them to coordinate through comments in the model file before editing it"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Dependency-ordered decomposition: once the shared interface exists, the call-site updates really are independent and safe to parallelize.",
+    "Smaller tasks don't solve the missing dependency; forty workers would guess the interface forty ways.",
+    "Safe but unnecessarily slow; only the shared core needs to be sequential.",
+    "Workers editing and messaging through a shared file recreates the conflict."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents"
+  },
+  {
+   "id": "D1-6-012",
+   "subskill": "P1.5",
+   "scenario": "S4",
+   "difficulty": 1,
+   "stem": "On the internal developer platform, an \"explain this repository\" tool reads every file of an unfamiliar 2,000-file monorepo in sequence before answering. It is slow and its answers are vague. Which decomposition BEST fits the task?",
+   "select": 1,
+   "options": [
+    "Read every file again, but in a fixed alphabetical order so nothing is missed",
+    "Map the structure first with Glob/Grep, deep-dive per subsystem in subagents, then synthesize",
+    "Ask one subagent to read the whole repository end to end and return a single summary of what it found",
+    "Embed the whole repository in the prompt of a larger-context model"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Ordering doesn't change the problem: everything still lands in one diluted pass.",
+    "Correct. Breadth-first mapping finds where to look, focused deep dives keep each context clean, and a synthesis step combines the findings.",
+    "One subagent reading everything has the same dilution problem in a different window.",
+    "2,000 files rarely fit, and when they do, attention is spread too thin for a useful answer."
+   ],
+   "ref": "https://code.claude.com/docs/en/sub-agents"
+  },
+  {
+   "id": "D1-7-001",
+   "subskill": "P1.2",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "A large research job runs ten subagents over about 40 minutes. When subagent 7 hits an unrecoverable error, the whole job restarts from zero, repeating the work and cost of the first six. What should the architect change?",
+   "select": 1,
+   "options": [
+    "Retry the entire job automatically up to three times so that transient failures have a chance to clear on their own",
+    "Persist the plan and each finished subagent's result; on failure, resume and rerun only unfinished subtasks",
+    "Run all ten subagents inside one context so there is only one thing that can fail",
+    "Switch to a more reliable, larger model tier so subagents fail less often"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Repeating the whole job repeats the wasted work and can fail again at the same point.",
+    "Correct. Checkpointing state outside the context window lets a long run resume where the error occurred instead of restarting, as Anthropic's research system does.",
+    "This removes isolation and still loses everything when that context fails.",
+    "Errors can't be eliminated; the design has to tolerate them."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "D1-7-002",
+   "subskill": "P2.4",
+   "scenario": "S3",
+   "difficulty": 3,
+   "stem": "Last week a research session produced a market analysis. Three of its key sources have since been updated, and an analyst now asks for a refreshed report. The old session still exists and can be resumed. What is the BEST approach?",
+   "select": 1,
+   "options": [
+    "Resume the old session and ask it to update the report, since it already holds all of the earlier context and reasoning",
+    "Fork the old session and ask the fork to refresh the report, keeping the original intact",
+    "Start fresh, seeded with a summary of prior findings (with source dates) and the sources to re-verify",
+    "Start a fresh session with only the original question so nothing stale can leak in"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The resumed context is full of out-of-date tool results that the model may keep relying on.",
+    "A fork carries the same stale history; it only protects the original session.",
+    "Correct. When the old context is stale, a fresh session with a summary keeps what is still valid and makes clear what must be rechecked.",
+    "This throws away valid prior work and repeats all the research."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/sessions"
+  },
+  {
+   "id": "D1-7-006",
+   "subskill": "P2.4",
+   "scenario": "S1",
+   "difficulty": 3,
+   "stem": "A customer returns three days after a 150-turn support conversation about a damaged shipment. The agent had verified their identity, agreed a partial refund amount and promised a replacement. The old session can be resumed, but it is long and mostly about troubleshooting steps that are no longer relevant. What is the BEST way to continue?",
+   "select": 1,
+   "options": [
+    "Resume the full 150-turn session so the agent has every detail of the earlier conversation",
+    "Start a new session seeded from the persisted case record and a short summary",
+    "Start a new session with no history and ask the customer to explain the issue again",
+    "Fork the old session so the original stays intact while the agent continues in the copy"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Resuming carries a long, mostly irrelevant history, which costs more and risks key facts getting lost in the middle.",
+    "Correct. Durable case facts (verified status, agreed amount, promised actions) kept outside the context window are the reliable source; a fresh session seeded with them is focused and accurate.",
+    "This discards commitments the company made and frustrates the customer.",
+    "A fork has exactly the same long history; it only protects the original."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/sessions"
+  },
+  {
+   "id": "D1-7-007",
+   "subskill": "P7.2",
+   "scenario": "S4",
+   "difficulty": 1,
+   "stem": "An engineer on the internal platform has corrected Claude Code twice about how the team's auth middleware works, and the third attempt is still wrong. The session is long and contains both failed attempts. What does Anthropic's guidance recommend?",
+   "select": 1,
+   "options": [
+    "Correct it a third time with more emphasis, in capitals, on the parts it keeps missing",
+    "Run `/compact` so the failed attempts are summarized and keep correcting",
+    "`/clear` and start again with one better prompt that includes what was learned",
+    "Fork the session so the failed attempts are preserved for later reference"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "A third correction mostly adds to a context that already contains two failed attempts for Claude to keep re-reading.",
+    "Compaction carries a summary of the failed attempts forward.",
+    "Correct. A fresh context plus a prompt that folds in the lessons usually works better than continuing to correct.",
+    "A fork keeps exactly the context that is causing the problem."
+   ],
+   "ref": "https://code.claude.com/docs/en/best-practices"
+  },
+  {
+   "id": "D1-7-009",
+   "subskill": "P1.2",
+   "scenario": "S6",
+   "difficulty": 2,
+   "stem": "The extraction pipeline runs Agent SDK workers in short-lived containers. When validation fails, the pipeline sends a correction request (\"`total` doesn't match the line items; recheck page 3\") to whatever worker is free, using `resume` with the original session ID. These retries usually fail with a session-not-found error. Which design is the MOST robust and simplest?",
+   "select": 1,
+   "options": [
+    "Use `continue_conversation=True` on the retry so whichever worker is free picks up the latest session",
+    "Raise `max_turns` on the first run so corrections never need a second request",
+    "Resume with `fork_session=True` so the retry gets its own copy of the session",
+    "Skip resume: send a fresh request with the document, the extracted JSON and the validation errors"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "A new container has no sessions on disk, so there is nothing to continue.",
+    "The first run doesn't know about the validation failure that happens afterwards in pipeline code.",
+    "Forking still needs the original session file on that machine.",
+    "Correct. Session files are local to the host that wrote them. Passing the captured results into a fresh request avoids shipping transcripts around; the docs note this is often more robust."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/sessions"
+  },
+  {
+   "id": "D1-7-010",
+   "subskill": "P2.4",
+   "scenario": "S3",
+   "difficulty": 2,
+   "stem": "The research system's lead agent runs multi-hour jobs and its context regularly approaches the limit, after which it loses track of its own plan and redoes finished work. Which THREE practices BEST address this? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Have the lead save its research plan and progress to external memory so it can reload them after its context is truncated",
+    "Move the lead to a model with a larger context window and keep all worker output in context",
+    "Have subagents write full findings to storage and return only condensed results with references",
+    "Disable compaction so that nothing in the lead's context is ever summarized away",
+    "When a phase completes, hand off to a fresh agent with a clean context, passing state through stored notes",
+    "Ask subagents to return their full transcripts so the lead never loses any detail"
+   ],
+   "answer": [
+    0,
+    2,
+    4
+   ],
+   "explanations": [
+    "Correct. Anthropic's research lead saves its plan to memory because context can be truncated; reloading it restores direction.",
+    "A larger window delays the problem and worsens attention dilution.",
+    "Correct. Condensed returns plus references keep the lead's context small without losing detail.",
+    "Without compaction the lead simply runs out of context.",
+    "Correct. Fresh contexts with a stored-state handoff are how long-running agents continue past context limits.",
+    "Full transcripts accelerate the context overflow they are meant to prevent."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+  },
+  {
+   "id": "AW2-006",
+   "subskill": "P2.4",
+   "difficulty": 2,
+   "stem": "In a multi-agent research system, a due-diligence task requires reviewing 40 contracts and producing a risk memo. Running everything in one loop, the agent's context fills with full contract text and tool output, and by contract 25 its analysis gets noticeably worse. Which design change BEST addresses this?",
+   "select": 1,
+   "options": [
+    "Raise `max_tokens` so the model has more room to reason over the contracts",
+    "Ask the agent in the prompt to \"forget\" contracts once it has finished them",
+    "Delegate contracts to subagents that return short structured risk summaries",
+    "Move all 40 contracts into a cached system prompt so they are cheaper to resend on each turn and always available to the agent"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "`max_tokens` limits output length; it does not relieve input context pressure.",
+    "The model cannot remove content from its own context; the harness must manage what is sent.",
+    "Correct. Subagents isolate the reading-heavy work so the coordinator's context grows by summaries, not transcripts.",
+    "Caching reduces cost, not context load; the window still fills with all the text."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents",
+   "scenario": "S3"
+  },
+  {
+   "id": "AW2-017",
+   "subskill": "P1.4",
+   "difficulty": 3,
+   "stem": "In the team's Claude Code workflow, to speed up a small refactor (renaming a function and updating its four call sites in two files), a developer configures the main agent to spawn five subagents, one per edit. The job now takes longer, uses several times more tokens, and two subagents made conflicting edits to the same file. What is the BEST recommendation?",
+   "select": 1,
+   "options": [
+    "Do this coupled task in the main agent; save subagents for independent, context-heavy work",
+    "Keep the five subagents but also give each one Bash access so they can take file locks before editing shared files",
+    "Raise the concurrency limit so all subagents finish sooner",
+    "Pass the parent's full conversation transcript to each subagent so they coordinate"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Subagents add tokens and coordination cost and do not share state; small, interdependent edits are better done in one context.",
+    "This adds more machinery to a task that does not benefit from delegation.",
+    "More concurrency increases the risk of conflicting edits and does nothing for cost.",
+    "This erases the context-isolation benefit and still does not prevent concurrent conflicting writes."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents",
+   "scenario": "S2"
+  },
+  {
+   "id": "AW2-018",
+   "subskill": "P5.3",
+   "difficulty": 2,
+   "stem": "A support-resolution agent currently performs every action through a general `bash` tool, including sending customer emails with `curl` to the mail API. The team now needs to require human approval before any email is sent and to log the recipient and subject. What is the BEST design change?",
+   "select": 1,
+   "options": [
+    "Add a system prompt rule telling Claude to ask for approval before sending email",
+    "Promote email sending to a dedicated `send_email` tool with typed recipient, subject and body arguments the harness can gate and log",
+    "Keep the bash tool and match `curl` commands to the mail API with a regular expression that triggers an approval prompt",
+    "Remove network access from the bash tool so emails cannot be sent at all"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Instructions are not an enforced approval gate.",
+    "Correct. A dedicated tool gives the harness an action-specific hook with structured arguments; an opaque bash command string is hard to gate reliably.",
+    "Fragile: the same action can be expressed many ways in shell, and recipient/subject are buried in an opaque string.",
+    "That blocks the required capability rather than gating it."
+   ],
+   "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview",
+   "scenario": "S1"
+  },
+  {
+   "id": "AW3-001",
+   "subskill": "P1.3",
+   "difficulty": 1,
+   "stem": "A report-generation pipeline asks Claude to write a report outline, runs a code check that the outline covers five required sections, and only then asks Claude to write the full report from the approved outline. Which pattern from \"Building effective agents\" is this?",
+   "select": 1,
+   "options": [
+    "Prompt chaining, with a programmatic gate that checks the outline before the drafting step runs",
+    "Orchestrator-workers, because one call produces the plan the next call executes",
+    "Evaluator-optimizer, because the outline is checked before drafting",
+    "Routing, because the outline decides which prompt runs next"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Sequential LLM calls where each consumes the previous output, with a code check as the gate.",
+    "An orchestrator decides subtasks dynamically and delegates them to workers; this flow is fixed in code.",
+    "Evaluator-optimizer loops an LLM critic and generator; this is a single deterministic check on the way through.",
+    "Routing classifies an input and dispatches it to one of several specialized paths; here every input follows the same fixed sequence."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S3"
+  },
+  {
+   "id": "AW3-002",
+   "subskill": "P1.3",
+   "difficulty": 1,
+   "stem": "The support-resolution system first classifies each incoming message as billing, technical outage, or general question. Billing messages go to a prompt with refund tools, outages to a prompt with network-status tools, and simple general questions to a smaller, cheaper model. Which pattern is being used?",
+   "select": 1,
+   "options": [
+    "Prompt chaining, because classification happens before the answer is written",
+    "Parallelization (sectioning), because each category is handled by a separate prompt",
+    "Orchestrator-workers, because the classifier delegates to specialized workers",
+    "Routing: classify first, then dispatch to a specialized prompt, tool set or model"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Chaining sends every input through the same sequence; routing chooses among different downstream paths.",
+    "Sectioning runs independent subtasks of the same input at the same time; here each input takes exactly one path.",
+    "An orchestrator breaks one task into dynamic subtasks and synthesizes results; a classifier picking a single path is routing.",
+    "Correct. Classify, then send to a specialized follow-up path or model; this also enables cost savings by sending easy queries to smaller models."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S1"
+  },
+  {
+   "id": "AW3-003",
+   "subskill": "P1.3",
+   "difficulty": 2,
+   "stem": "In the CI pipeline, a security reviewer runs the same pull request through three differently worded vulnerability-review prompts at the same time and flags the PR if any reviewer reports a high-severity issue. Which pattern is this, and what is its main benefit?",
+   "select": 1,
+   "options": [
+    "Routing; each prompt specializes in one class of vulnerability",
+    "Prompt chaining; each review builds on the previous review's findings",
+    "Parallelization (voting), for higher recall and confidence",
+    "Evaluator-optimizer; the reviewers critique the code and the developer revises it until all three pass"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "All three prompts look at the same task and the PR is not dispatched to only one of them.",
+    "The reviews are independent and simultaneous, not sequential.",
+    "Correct. Voting runs the same task several times for diverse outputs; aggregation rules (here, any-flag) trade false positives against misses.",
+    "No generator is revising the code in a feedback loop here."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S5"
+  },
+  {
+   "id": "AW3-004",
+   "subskill": "P1.3",
+   "difficulty": 1,
+   "stem": "The support agent must screen each customer message for policy violations without adding latency to the reply. The team runs a guardrail classification call and the main response call at the same time and suppresses the reply if the guardrail flags the message. Which pattern does this implement?",
+   "select": 1,
+   "options": [
+    "Routing, since the guardrail decides whether the response is shown",
+    "Parallelization (voting): two calls vote on whether the reply is safe",
+    "Evaluator-optimizer: the guardrail evaluates and the main call optimizes",
+    "Parallelization (sectioning) of independent subtasks within one request"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "The guardrail is not choosing among specialized handlers; both calls always run.",
+    "Voting runs the same task multiple times; here the two calls do different jobs.",
+    "There is no feedback loop in which the response is revised based on the evaluation.",
+    "Correct. Anthropic gives exactly this guardrail-alongside-response example for sectioning."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S1"
+  },
+  {
+   "id": "AW3-005",
+   "subskill": "P1.3",
+   "difficulty": 3,
+   "stem": "In the team's Claude Code workflow, a feature applies a requested API change across the codebase. The number and identity of the files that must change are unknown until the codebase is inspected, and the edits must be combined into one coherent pull request. Which pattern fits BEST?",
+   "select": 1,
+   "options": [
+    "Prompt chaining, with one step per file in alphabetical order",
+    "Orchestrator-workers: a central model inspects the code, decides which files need edits, delegates them and synthesizes one change",
+    "Parallelization (sectioning), splitting the repository into fixed directory chunks that are edited in parallel and then concatenated",
+    "Routing, sending each file to the most capable model for its language"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Chaining needs a fixed sequence known in advance; here the files are not known until inspection.",
+    "Correct. The defining feature is that subtasks are determined at runtime, as in Anthropic's multi-file coding example.",
+    "Fixed chunks are predefined subtasks; they ignore which files actually need changes and still require coherent synthesis.",
+    "Routing picks one path per input; it does not plan or synthesize a multi-file change."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S2"
+  },
+  {
+   "id": "AW3-006",
+   "subskill": "P1.3",
+   "difficulty": 1,
+   "stem": "In the research system, a `brief-writer` subagent turns each finished report into a two-page executive brief. Editors grade briefs against a written rubric (faithful to the report, neutral tone, plain language). In a pilot, briefs that got specific rubric-based critique and one or two rewrites scored clearly higher than first drafts. Which pattern should the architect build into this step?",
+   "select": 1,
+   "options": [
+    "Parallelization (sectioning): have separate subagents write each section of the brief, then concatenate them",
+    "Routing: send short reports to a fast model and long reports to a more capable one",
+    "Evaluator-optimizer: an evaluator critiques each draft against the rubric, with capped revisions",
+    "An autonomous agent with web search that gathers extra sources to strengthen each brief"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Sectioning speeds up independent parts but gives no feedback loop, and separately written sections tend to read unevenly.",
+    "Routing picks a handler per input; it provides no critique-and-revise cycle, which is what the pilot showed adds value.",
+    "Correct. Anthropic names the conditions for evaluator-optimizer: clear evaluation criteria and iterative refinement that provides measurable value. Both hold here; capping revisions keeps cost bounded.",
+    "The brief must be faithful to the finished report; new outside sources add cost and risk content the report doesn't support."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S3"
+  },
+  {
+   "id": "AW3-007",
+   "subskill": "P1.3",
+   "difficulty": 2,
+   "stem": "A document-extraction pipeline processes 50,000 invoices per day. Each invoice needs the same steps: extract fields, validate totals against the purchase order, and flag mismatches. Auditors require predictable, explainable behaviour and stable cost per invoice. Which architecture is MOST appropriate?",
+   "select": 1,
+   "options": [
+    "An autonomous agent with file and database tools that decides for each invoice how to proceed",
+    "A multi-agent supervisor with separate extraction, validation and reporting agents",
+    "A workflow: structured-output extraction, then code-based validation and flagging, calling the model only where judgment is needed",
+    "An evaluator-optimizer loop that iterates on every invoice until a grader is satisfied"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "Autonomy adds cost, latency and variance to a fully specified process, and makes audits harder.",
+    "Over-engineered for a fixed, known sequence; coordination overhead and cost rise with no benefit.",
+    "Correct. The steps are known in advance, so a predefined code path is cheaper, faster and more auditable than an agent.",
+    "Every invoice paying for multiple iterations breaks the cost goal; validation can be done in code."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S6"
+  },
+  {
+   "id": "AW3-008",
+   "subskill": "P1.3",
+   "difficulty": 2,
+   "stem": "A product manager wants to replace the support team's reliable rules-based refund process with an autonomous Claude agent. Which TWO conditions are strong reasons to stay with a workflow or a single call instead? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "The task can be fully specified in advance as a fixed sequence of steps",
+    "Each completed task is worth far more than the extra tokens and latency an agent uses",
+    "Mistakes cannot be caught or rolled back before they reach customers (no tests, review or undo)",
+    "The number of steps varies widely and cannot be predicted ahead of time",
+    "The environment returns clear ground-truth feedback, such as test results, after each step"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. If the path is known, a predefined workflow is simpler, cheaper and more predictable.",
+    "High value per task supports, rather than argues against, an agent.",
+    "Correct. Low recoverability of errors is a key reason not to grant autonomy.",
+    "Unpredictable step counts are what agents are good for.",
+    "Environmental feedback is what lets agents self-correct, so it favours an agent."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S1"
+  },
+  {
+   "id": "AW3-009",
+   "subskill": "P1.3",
+   "difficulty": 3,
+   "stem": "An internal-platform team plans a hierarchical multi-agent system (a supervisor, a retrieval agent and an answer agent) to answer employee questions about an 80-page HR handbook. No prototype or evaluation set exists yet. What should they do FIRST?",
+   "select": 1,
+   "options": [
+    "Prototype one well-prompted call with the relevant content, measure it on a small eval set, then add complexity",
+    "Start with an autonomous agent that can browse the intranet, since it can discover answers the handbook lacks",
+    "Fine-tune a model on the handbook so no retrieval or agents are needed",
+    "Build the full supervisor architecture now but use Haiku-tier models for every agent so that the cost of the extra calls stays low"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Anthropic's guidance is to find the simplest solution first; one call with retrieval and examples often suffices.",
+    "Adds scope, cost and risk without evidence that it is needed.",
+    "Costly and slow to iterate; it also skips the step of measuring a simple baseline.",
+    "This still commits to the most complex design before knowing whether it is needed."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S4"
+  },
+  {
+   "id": "AW3-010",
+   "subskill": "P1.4",
+   "difficulty": 2,
+   "stem": "In the multi-agent research system, the coordinator delegates with briefs like \"research the semiconductor shortage\". Logs show workers duplicating each other's searches, some drifting into unrelated topics, and the lead struggling to merge their free-form outputs. What is the MOST effective fix?",
+   "select": 1,
+   "options": [
+    "Let the workers read each other's full transcripts in real time so they can see what others have searched and avoid overlapping work",
+    "Replace the workers with a single agent that does all research sequentially",
+    "Give each worker a specific objective, scope boundaries, tool guidance and an output format",
+    "Add an evaluator agent that rejects duplicate findings after they are produced"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "This defeats context isolation, multiplies tokens, and still does not define who owns what.",
+    "This may avoid overlap but gives up parallelism and context isolation for broad research instead of fixing the briefs.",
+    "Correct. Workers see only their brief; vague delegation causes duplication and drift, and a fixed output format makes synthesis reliable.",
+    "This catches waste after paying for it rather than preventing it."
+   ],
+   "ref": "https://www.anthropic.com/engineering/multi-agent-research-system",
+   "scenario": "S3"
+  },
+  {
+   "id": "AW3-012",
+   "subskill": "P1.3",
+   "difficulty": 2,
+   "stem": "A five-step extraction chain generates structured regulatory-filing records. Step 3 (converting extracted data to a specific JSON schema) fails validation in about 5% of runs, and the current code restarts the whole chain on any error, wasting tokens and time. What is the BEST improvement?",
+   "select": 1,
+   "options": [
+    "Raise the temperature on step 3 so that retries produce different outputs",
+    "Add a code gate after step 3 that validates its output and retries only that step, feeding back the validation error, with a retry cap",
+    "Run the entire chain three times in parallel for every filing and keep whichever run finishes successfully first",
+    "Convert the chain into an autonomous agent that decides on its own how to recover"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Sampling changes do not make outputs schema-compliant; use structured outputs plus validation and a targeted retry instead.",
+    "Correct. Gates between chain steps catch errors early, and targeted retries with feedback avoid re-running successful steps.",
+    "Triples cost on every filing to address a 5% failure in one step.",
+    "Replacing a predictable workflow with an agent adds variance; the failure is localized to one step."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S6"
+  },
+  {
+   "id": "AW3-013",
+   "subskill": "P4.5",
+   "difficulty": 2,
+   "stem": "The CI code-review job makes three independent model calls per pull request (security, performance, style), one after another, then a fourth call to summarize. End-to-end latency is 40 seconds and the target is under 20. Which TWO changes MOST directly reduce latency without lowering review quality on the hard checks? (Select TWO.)",
+   "code": {
+    "lang": "python",
+    "src": "sec = await ask(SECURITY, diff)\nperf = await ask(PERF, diff)\nstyle = await ask(STYLE, diff)\nreturn await ask(SUMMARY, sec + perf + style)"
+   },
+   "select": 2,
+   "options": [
+    "Chain the reviews so each one receives the previous reviewer's findings",
+    "Set every call to the maximum effort level",
+    "Run the three independent reviews concurrently (for example with `asyncio.gather`) before the summary call",
+    "Add an evaluator-optimizer loop to the summary step",
+    "Route the simple style check to a smaller, faster model while keeping the more capable model for security"
+   ],
+   "answer": [
+    2,
+    4
+   ],
+   "explanations": [
+    "Chaining is sequential by definition and keeps latency high.",
+    "Higher effort typically increases latency.",
+    "Correct. Sectioning independent subtasks means latency is set by the slowest call rather than the sum.",
+    "Extra iterations add latency.",
+    "Correct. Routing easy subtasks to a faster tier cuts latency while preserving quality where it matters."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S5"
+  },
+  {
+   "id": "AW3-014",
+   "subskill": "P5.2",
+   "difficulty": 2,
+   "stem": "An autonomous data-cleanup agent on the developer platform occasionally loops for hours, repeatedly re-running the same failing query and running up a large bill. Which TWO safeguards BEST address this? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "A spend or token budget for the run, enforced by the harness",
+    "Removing error details from tool results so the agent stops trying once a tool fails",
+    "Switching to a model with a larger context window so the loop has more room",
+    "A hard cap on iterations or turns, after which the run stops and reports partial progress",
+    "Raising the effort level so the agent thinks harder before each retry"
+   ],
+   "answer": [
+    0,
+    3
+   ],
+   "explanations": [
+    "Correct. A budget cap (such as `max_budget_usd` in the Agent SDK) bounds cost even when the agent keeps going.",
+    "Hiding errors removes the ground truth the agent needs to change strategy.",
+    "More context lets the loop run longer; it does not stop it.",
+    "Correct. Stopping conditions such as a maximum iteration count are a standard agent guardrail.",
+    "May help some cases but is not a safeguard and can increase cost per iteration."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/agent-loop",
+   "scenario": "S4"
+  },
+  {
+   "id": "AW3-015",
+   "subskill": "P5.2",
+   "difficulty": 3,
+   "stem": "The support-resolution system's routing step sends tickets to refund, technical or account handlers. About 8% of tickets are ambiguous (for example, a refund request caused by a technical fault) and get misrouted, and the refund handler then issues wrong refunds. What is the BEST improvement?",
+   "select": 1,
+   "options": [
+    "Replace routing with a fully autonomous agent that has every tool from all three handlers",
+    "Add an \"uncertain\" route to a general handler or human, and evaluate the router on labelled tickets",
+    "Add more few-shot refund examples to the refund handler's prompt",
+    "Remove the router and send every ticket to all three handlers in parallel, then merge their answers and actions into one response"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Loses the separation of concerns and gives one agent broad refund powers, increasing risk.",
+    "Correct. Routing works when categories are distinct; an explicit fallback path and a measured classifier handle the ambiguous cases safely.",
+    "This tunes the downstream handler, not the misclassification that sends tickets there.",
+    "Triples cost for every ticket to fix 8% of them and creates conflicting actions."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S1"
+  },
+  {
+   "id": "AW3-016",
+   "subskill": "P1.3",
+   "difficulty": 1,
+   "stem": "The support-agent team is debating its architecture. According to Anthropic's \"Building effective agents\", what distinguishes an agent from a workflow?",
+   "select": 1,
+   "options": [
+    "An agent runs on Anthropic's infrastructure with a managed sandbox, while a workflow always runs on the customer's own servers",
+    "An agent uses tools, while a workflow cannot call tools",
+    "An agent always uses multiple models, while a workflow uses a single model",
+    "In an agent, the LLM dynamically directs its own process and tool use; in a workflow, LLMs and tools follow predefined code paths"
+   ],
+   "answer": [
+    3
+   ],
+   "explanations": [
+    "Hosting location is unrelated to the definition.",
+    "Workflows can call tools along predefined paths.",
+    "Model count is not the distinction; both can use one or many models.",
+    "Correct. This is Anthropic's definition."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S1"
+  },
+  {
+   "id": "AW3-017",
+   "subskill": "P1.3",
+   "difficulty": 2,
+   "stem": "In the research system's report-polishing step, an evaluator-optimizer loop refines the executive-summary headline. The evaluator prompt says only \"make it better\". Logs show the loop often runs to its 10-iteration cap, flip-flopping between two phrasings, and quality ratings do not improve after the first revision. What is the BEST action?",
+   "select": 1,
+   "options": [
+    "Give the evaluator explicit criteria and a pass threshold, keep a low cap, or drop the loop",
+    "Use the same prompt for generator and evaluator so they agree faster",
+    "Raise the iteration cap to 25 so the loop has time to converge",
+    "Run five evaluators in parallel each round and average their scores, so that a single noisy evaluator cannot stall the loop"
+   ],
+   "answer": [
+    0
+   ],
+   "explanations": [
+    "Correct. Evaluator-optimizer only works with clear criteria and measurable improvement from feedback.",
+    "Agreement is not quality; the evaluator still has no criteria.",
+    "Without criteria, more iterations just extend the oscillation.",
+    "Adds cost without fixing the underlying lack of criteria."
+   ],
+   "ref": "https://www.anthropic.com/engineering/building-effective-agents",
+   "scenario": "S3"
+  },
+  {
+   "id": "AW3-018",
+   "subskill": "P1.4",
+   "difficulty": 3,
+   "stem": "A developer-platform team is designing an orchestrator-workers system that migrates logging calls across hundreds of repositories. Which THREE design choices are sound? (Select THREE.)",
+   "select": 3,
+   "options": [
+    "Have every worker receive the orchestrator's full transcript so they all share the same knowledge",
+    "Require the orchestrator to fix the full list of subtasks in code before inspecting any repository",
+    "Give each worker an isolated context and have it return a concise summary of what it changed and what it could not do",
+    "Let each worker spawn unlimited sub-workers to maximize parallelism",
+    "Use a cheaper, faster model for the reading-heavy per-repo workers and a more capable model for planning and synthesis",
+    "Cap concurrency, nesting depth and total spend for the run"
+   ],
+   "answer": [
+    2,
+    4,
+    5
+   ],
+   "explanations": [
+    "This removes the main benefit of isolation and multiplies token cost.",
+    "Predefining subtasks turns this into parallelization and loses the orchestrator's main advantage: deciding the work at runtime.",
+    "Correct. Isolation keeps the orchestrator's context small, and condensed reports make synthesis tractable.",
+    "Unbounded nesting is a classic runaway-cost failure mode.",
+    "Correct. Matching model tier to subtask difficulty is a standard cost lever in hierarchies.",
+    "Correct. Fan-out can grow quickly; limits such as maximum concurrent subagents, spawn depth and a budget bound cost and rate-limit pressure."
+   ],
+   "ref": "https://code.claude.com/docs/en/agent-sdk/subagents",
+   "scenario": "S4"
+  }
+ ],
+ "dropped": [
+  {
+   "id": "D1-3-008",
+   "reason": "Option 0 claims subagents do not load project CLAUDE.md, which I doubt; also CI delegation mechanics rather than an architect decision."
+  },
+  {
+   "id": "D1-4-009",
+   "reason": "Hinges on the --json-schema CLI flag; flag-level detail."
+  },
+  {
+   "id": "D1-4-011",
+   "reason": "Stop-hook exit-code mechanics (Claude Code config trivia)."
+  },
+  {
+   "id": "D1-5-001",
+   "reason": "Hook field name (updatedToolOutput) API trivia."
+  },
+  {
+   "id": "D1-5-002",
+   "reason": "Agent SDK hook ordering/matcher semantics trivia."
+  },
+  {
+   "id": "D1-7-003",
+   "reason": "fork_session/continue_conversation SDK flags."
+  },
+  {
+   "id": "D1-7-004",
+   "reason": "Claude Code --fork-session behavioural details; version trivia."
+  },
+  {
+   "id": "D1-7-005",
+   "reason": "SDK session_id/resume mechanics."
+  },
+  {
+   "id": "D1-7-008",
+   "reason": "--resume/--mcp-config flag behaviour trivia."
+  },
+  {
+   "id": "AW1-005",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-006",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-007",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-008",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-009",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-010",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-011",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-012",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW1-013",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW2-001",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW2-002",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW2-003",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW2-004",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  },
+  {
+   "id": "AW2-019",
+   "reason": "Agent SDK / API implementation mechanics (flags, fields, permission modes, hook/session semantics) rather than a professional-level architectural decision."
+  }
+ ]
+}

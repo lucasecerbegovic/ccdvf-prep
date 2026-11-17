@@ -1,0 +1,955 @@
+{
+  "lessons": [
+    {
+      "subskill": "P4.1",
+      "title": "Define evaluation metrics",
+      "summary": "The exam checks whether you can turn a stakeholder wish ('accurate', 'fast', 'safe') into success criteria a release can be gated on. Strong answers are specific, measurable, multidimensional and tied to business risk. Weak answers lean on a prompt instruction, a single headline number, or a target nobody can measure.",
+      "keyPoints": [
+        "**Good success criteria are specific, measurable, achievable and relevant.** Weak: 'classify sentiment well'. Strong: 'F1 of at least 0.85 on a held-out set of 10,000 representative posts, a 5% improvement on the current baseline'.",
+        "**Most use cases need several dimensions at once.** Anthropic's list: task fidelity (including rare and hard inputs), consistency, relevance and coherence, tone and style, privacy preservation, context utilisation, latency and price. The exam also expects **safety** and **security** as gates.",
+        "**Safety can be quantified.** For example: 'fewer than 0.1% of outputs out of 10,000 trials flagged for toxicity'. Define the test set and the grader, then make the threshold a release gate.",
+        "**Error severity matters.** A criterion such as '90% of errors are inconveniences, not egregious errors' only works once both classes are defined. A near-zero bar for the severe class can decide between two versions with the same headline accuracy.",
+        "**Fit the metric to the risk.** With a rare positive class (3% urgent claims), overall accuracy hides a model that never flags anything, so use per-class **recall and precision**. For extraction, use field-level exact match. For grounded answers, use the citation-support rate.",
+        "**Latency**: use **time to first token (TTFT)** for streaming, user-facing chat, and total latency or completion within the delivery window for batch or backend jobs. Report percentiles (p95), not just means.",
+        "**Cost**: measure cost per *successful* task, including retries, failed attempts and human review, not price per token.",
+        "**Agents are non-deterministic, so run several trials.** `pass@k` is the chance at least one of k trials succeeds and suits cases where one success is enough. `pass^k` is the chance all k succeed and suits customer-facing consistency. At 75% per trial, pass^3 is about 42%.",
+        "**Security metrics measure outcomes.** Examples: attack success rate on a maintained prompt-injection set, and the rate of tool calls outside the permitted scope in a sandbox (target zero). Don't use proxies such as refusal rate or the length of the 'security rules' section.",
+        "**Achievable and relevant**: anchor targets to a measured baseline, human performance, prior experiments or expert knowledge, never to '100%'. Weight dimensions by purpose. Citation accuracy matters more in a medical or legal tool than in a casual chatbot."
+      ],
+      "traps": [
+        "Accepting 'it must be safe' or 'it must be accurate' and writing a system-prompt instruction instead of a measurable gate.",
+        "Reporting overall accuracy on an imbalanced task, where always predicting the majority class scores well.",
+        "Using an overlap metric (ROUGE or BLEU against reference answers) as the main quality signal when what matters is correctness or groundedness.",
+        "Quoting pass@k for an unattended, customer-facing agent where every attempt has to work.",
+        "Agreeing to an unanchored 100% target instead of measuring a baseline and designing human review for the residual errors."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "criteria = {\n  'task_fidelity': {'metric': 'urgent_recall', 'min': 0.95, 'set': 'heldout_v3 (n=2000)'},\n  'precision':     {'metric': 'urgent_precision', 'min': 0.70},\n  'safety':        {'metric': 'unsafe_advice_rate', 'max': 0.0, 'set': 'redteam_v2'},\n  'latency':       {'metric': 'p95_ttft_ms', 'max': 1500},\n  'cost':          {'metric': 'usd_per_resolved_case', 'max': 0.04},\n}"
+      },
+      "docs": [
+        {
+          "title": "Define success criteria and build evaluations",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+        },
+        {
+          "title": "Demystifying evals for AI agents",
+          "url": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+        },
+        {
+          "title": "Reducing latency (TTFT and baseline latency)",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+        }
+      ],
+      "drill": "Pick a Claude feature you know and write its success criteria as a table with five rows: task fidelity, one safety or security gate, consistency, latency and cost. For each row give the metric, the threshold, the test set and the grader. Then rewrite one vague stakeholder sentence ('answers should be trustworthy') into two measurable rows, and decide whether your agent's gate should use pass@k or pass^k."
+    },
+    {
+      "subskill": "P4.2",
+      "title": "Design evaluation datasets and mixed-method test frameworks",
+      "summary": "The exam tests whether you can build an eval that predicts production behaviour. That means a test set drawn from real traffic with edge cases and balanced positive and negative cases, a grader matched to each criterion (code, then LLM, then human), outcome-based grading for agents, and layered methods, because no single method catches everything.",
+      "keyPoints": [
+        "**Be task-specific.** Mirror the real input distribution and add edge cases: irrelevant or missing input, overly long input, poor or harmful input, and ambiguous cases where even humans would disagree.",
+        "**Automate when possible, and favour volume over quality.** Anthropic's guidance is that many questions with slightly lower-signal automated grading beat a few high-quality hand-graded ones.",
+        "**Choose the fastest, most reliable, most scalable grader that fits.** **Code-based** grading is fastest, most reliable and very scalable, but lacks nuance. **LLM-based** grading is fast, flexible and handles complex judgement, but test its reliability before you scale it. **Human** grading is the most flexible and highest quality, but slow and expensive, so avoid it where you can and use it to calibrate.",
+        "**LLM-grader practice**: give a detailed rubric, ask for an empirical output ('correct'/'incorrect' or a 1–5 score) and let the grader reason (thinking on) before it scores. It's generally best to grade with a different model from the one that generated the output. Give the judge an 'Unknown' option, use one isolated judge per dimension, and calibrate against human verdicts.",
+        "**Match the eval type to the criterion**: exact match for labels, cosine similarity across paraphrased inputs for consistency, ROUGE-L for summary overlap, an LLM Likert scale for tone, an LLM binary classifier for leakage (including implicit or hypothetical PHI), and an LLM ordinal scale for context use.",
+        "**Agent evals vocabulary**: a *task* has inputs and success criteria, a *trial* is one attempt, a *grader* scores it, the *transcript* records every step and the *outcome* is the final environment state. **Grade outcomes, not paths**: check that the booking exists in the database, not that the agent said it did. Add partial credit and start each trial clean.",
+        "**Start small and real.** 20–50 tasks drawn from real failures is a good start. Write unambiguous tasks with reference solutions, where two experts would independently agree on pass or fail.",
+        "**Balance the set.** Test both when a behaviour should happen and when it shouldn't, so neither under-triggering nor over-triggering gets rewarded.",
+        "**Capability suites vs regression suites.** Capability evals start at a low pass rate to give a hill to climb. Regression evals sit near 100% to stop backsliding. A saturated capability eval *graduates* into the regression suite.",
+        "**Layer the methods.** Automated evals, production monitoring, A/B tests, user feedback, manual transcript review and systematic human studies each catch what the others miss."
+      ],
+      "traps": [
+        "Keeping a small, hand-graded set because it feels more rigorous, so the team can iterate only once every few days.",
+        "Asking the generating model, in the same call or conversation, to grade its own answer.",
+        "A test set with only 'should trigger' cases, which rewards an agent that over-escalates or over-calls tools.",
+        "Grading an agent's claim ('booking confirmed') or a fixed tool-call order instead of the end state.",
+        "Deleting a saturated suite instead of keeping it as a regression guard."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "def grade(case, output):\n    # 1) deterministic checks first\n    if extract_amount(output) != case['expected_refund']:\n        return {'pass': False, 'why': 'amount'}\n    # 2) rubric LLM judge (different model, reasons before scoring)\n    tone = judge(rubric=TONE_RUBRIC, answer=output)  # returns 1-5 or 'unknown'\n    # 3) binary leakage classifier\n    leak = leak_judge(output)                       # 'yes' / 'no'\n    return {'pass': tone != 'unknown' and tone >= 4 and leak == 'no'}"
+      },
+      "docs": [
+        {
+          "title": "Define success criteria and build evaluations",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+        },
+        {
+          "title": "Demystifying evals for AI agents",
+          "url": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+        }
+      ],
+      "drill": "For an assistant you know, list three success criteria and assign each a grader (code, LLM or human) with a one-line justification. Draft 20 test cases from real or realistic inputs: at least five edge cases and at least five where the behaviour should *not* happen. Write the LLM-judge rubric for one criterion with a 1–5 scale and an 'unknown' option, then hand-grade 10 outputs and compare your scores with the judge's."
+    },
+    {
+      "subskill": "P4.3",
+      "title": "Run A/B tests and iterate with statistical discipline",
+      "summary": "The exam tests whether you can tell a real improvement from noise and run a disciplined improvement loop: baseline first, one change at a time, held-out data, statistics on eval scores, and online A/B tests designed so their results can be trusted. Expect questions where a small score gain, a peeked dashboard or an overfit dev set leads to the wrong decision.",
+      "keyPoints": [
+        "**Improvement loop**: define the criteria, build the eval, run the current version to get a **baseline**, change **one variable**, re-run, compare, then keep or roll back. Version every prompt, model and parameter change.",
+        "**Quality first, then latency.** Anthropic advises first engineering a prompt that works well without model or prompt constraints, then applying latency reductions. Cutting latency too early can stop you from discovering what top performance looks like.",
+        "**An eval score is an estimate.** Report the standard error of the mean and a 95% confidence interval (about mean ± 1.96 × SEM), not just the point score.",
+        "**Paired comparison**: when two variants answer the same questions, analyse per-question differences. That removes question-difficulty variance. Anthropic found per-question score correlations of 0.3–0.7 between frontier models, which makes paired analysis essentially free variance reduction.",
+        "**Clustered standard errors**: when questions share a unit (10 questions per contract or passage), cluster on that unit. On popular evals Anthropic found clustered errors can be more than three times the naive ones, and ignoring clustering produces false 'wins'.",
+        "**Reduce within-question noise** by sampling several trials per question and averaging, especially for chain-of-thought or agentic tasks.",
+        "**Power analysis** before you build or run: work out how many questions (and resamples) you need to detect the effect size you care about. A small eval can only detect large gaps.",
+        "**Guard against overfitting.** Tune on a dev set, gate releases on a **held-out** set that you don't iterate against, and keep adding new cases from production failures.",
+        "**Read transcripts when scores move.** A 0% pass rate across many trials usually means a broken task or grader, not an incapable agent.",
+        "**Online A/B tests** measure real user outcomes but are slow, need traffic and say little about *why*. Randomise by user or conversation, fix the primary metric, guardrail metrics and sample size up front, and don't stop the moment the variant pulls ahead. Roll out behind a flag with a rollback path."
+      ],
+      "traps": [
+        "Shipping on a 1–2 point gain from a 150-item eval without an interval or a paired test.",
+        "Treating 400 questions drawn from 40 documents as 400 independent samples.",
+        "Changing the prompt, model tier and effort in one release, so nobody can attribute the regression.",
+        "Iterating 30 times against the same set and reading the final score as a production forecast.",
+        "Per-request randomisation plus daily peeking with 'stop when B leads', which looks rigorous but isn't."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "import numpy as np\n# a, b: per-question mean scores (avg of several trials) on the SAME questions\nd = np.array(b) - np.array(a)\nse = d.std(ddof=1) / np.sqrt(len(d))\nlo, hi = d.mean() - 1.96 * se, d.mean() + 1.96 * se\nprint(f'diff={d.mean():.3f}  95% CI=({lo:.3f}, {hi:.3f})')\n# if the CI spans 0: not a demonstrated win -> enlarge set or resample"
+      },
+      "docs": [
+        {
+          "title": "A statistical approach to model evaluations",
+          "url": "https://www.anthropic.com/research/statistical-approach-to-model-evals"
+        },
+        {
+          "title": "Demystifying evals for AI agents",
+          "url": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+        },
+        {
+          "title": "Reducing latency",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+        }
+      ],
+      "drill": "Take two prompt variants and a set of at least 50 cases. Run each variant three times per case and record per-case mean scores. Compute the paired difference, its standard error and the 95% CI using the snippet. Then group the cases by source document and work out how far the effective sample size falls. Write a three-line ship / don't-ship note that a product manager could act on."
+    },
+    {
+      "subskill": "P4.4",
+      "title": "Diagnose system issues: prompt failure, hallucination, model mismatch",
+      "summary": "The exam gives you a symptom (truncated output, invented facts, a regression after a migration, a looping agent, schema-valid but wrong data) and asks for the most likely cause or the right first fix. Read the evidence first (`stop_reason`, `usage`, prompt and model version, transcripts), then fix the root cause rather than adding a compensating control.",
+      "keyPoints": [
+        "**Start with evidence.** Check `stop_reason` (`max_tokens` means truncation, plus `refusal` and `tool_use`), `usage` against `max_tokens`, the model ID, the prompt version and the request ID. Mid-sentence endings and unparseable JSON on long outputs are usually truncation, not the model 'failing to follow the schema'.",
+        "**Thinking counts against `max_tokens`.** Low budgets with adaptive or extended thinking cut answers short, so raise the budget or lower effort.",
+        "**Systematic vs random errors**: the same failure on one layout or category points to a prompt or example gap (add a targeted example or rule). Scattered one-off errors suit code validation plus a retry that feeds the specific error back.",
+        "**Schema-valid isn't correct.** Structured outputs guarantee shape, not truth. Add business-rule checks in code (line items sum to the total, dates are ordered) and route failures to a retry or to a human.",
+        "**Hallucination controls (Anthropic)**: allow 'I don't know'; for long documents (more than about 20k tokens), extract word-for-word quotes first and answer only from them; require citations and retract claims without a supporting quote; use best-of-N inconsistency as a signal; restrict answers to the provided documents. These reduce hallucination but don't eliminate it, so validate critical information.",
+        "**Self-review in the same context is weak.** Use an independent verifier with fresh context, and verify per section to avoid lost-in-the-middle misses.",
+        "**Model mismatch after a migration**: newer models follow instructions more literally, so shouted legacy workarounds ('CRITICAL: you MUST') can over-trigger. Re-baseline the prompt. Cost can rise at the same per-token price through tokenizer or verbosity differences, so compare `usage`.",
+        "**Agent and tool bugs**: vague tool descriptions cause wrong tool choice. Unhandled exceptions without `is_error: true` cause repeat calls. Answering only one of several parallel `tool_use` blocks returns a 400.",
+        "**Required fields that are often absent** push the model to invent values. Make them nullable with a clear meaning ('not present on the document').",
+        "**Retry storms**: stacking an SDK retry layer under your own retry loop multiplies calls. Use a single retry layer."
+      ],
+      "traps": [
+        "Switching to a bigger model or a bigger context as the first move, before reading `stop_reason`, `usage` and transcripts.",
+        "Prompt-only fixes ('be accurate') for errors that need deterministic validation in code.",
+        "Treating every regression after a migration as a capability loss instead of a prompt that needs re-baselining.",
+        "Asking the same conversation to 'double-check' its own claims."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "msg = client.messages.create(model=MODEL, max_tokens=4096, messages=msgs)\nif msg.stop_reason == 'max_tokens':\n    log.warning('truncated', extra={'req': msg._request_id, 'out': msg.usage.output_tokens})\nelif msg.stop_reason == 'refusal':\n    route_to_human(msg)\nelse:\n    data = parse(msg)\n    errors = business_rules(data)   # sums, dates, cross-field checks\n    if errors:\n        retry_with_feedback(errors)  # specific errors, bounded retries"
+      },
+      "docs": [
+        {
+          "title": "Reduce hallucinations",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-hallucinations"
+        },
+        {
+          "title": "Handling stop reasons",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+        },
+        {
+          "title": "Writing effective tools for agents",
+          "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+        }
+      ],
+      "drill": "Collect 10 failing outputs from any Claude workflow you run, or create them by lowering `max_tokens` and giving vague tool descriptions. Label each one: truncation, prompt gap (systematic), random error, hallucination, tool or integration bug, or model mismatch. Name the evidence field that proved it and the root-cause fix. Then add the five most important ones to an eval set as regression cases."
+    },
+    {
+      "subskill": "P4.5",
+      "title": "Optimise token usage, latency and cost-performance",
+      "summary": "The exam tests whether you can cut cost or latency without breaking a quality bar you have measured. That covers the right model tier and effort, prompt caching that actually hits, the Message Batches API for work nobody is waiting on, concurrency within rate limits, and judging options by cost per completed task.",
+      "keyPoints": [
+        "**Sequence**: get quality first, then optimise. Every cost or latency change is validated on the eval against the quality bar.",
+        "**Latency levers (Anthropic)**: choose the right model (smaller tiers are fastest), cut prompt and output tokens, and **stream** to improve perceived latency (TTFT). To shorten output, ask for sentence or paragraph limits rather than word counts.",
+        "**Effort** (`output_config.effort`) is the main speed and cost lever on current models. Sweep it on your eval, set it explicitly per route and re-sweep after a model change. Try a lower effort on the current tier before stepping down a tier.",
+        "**`max_tokens` is a hard backstop, not a cost dial.** Hitting it cuts the response off mid-output, and thinking counts toward it, so lowering it to save money mostly creates truncation.",
+        "**Prompt caching**: the cache covers the prefix in order `tools` → `system` → `messages`, and a change at one level invalidates that level and everything after it. The default lifetime is 5 minutes, refreshed free on each use, and a 1-hour TTL is available. Cache writes cost more than base input (1.25× for 5 minutes, 2× for 1 hour). Reads cost a small fraction of base input, and the exact multiplier depends on the model. Prompts below the model's minimum cacheable length are silently not cached.",
+        "**Verify caching in `usage`.** Look at `cache_read_input_tokens` and `cache_creation_input_tokens`. Total input = `input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`. Keep variable content (timestamps, user data) after the cached prefix.",
+        "**Message Batches API**: 50% of standard prices, processed asynchronously. It fits nightly jobs, backfills and eval runs. It doesn't fit flows where a user or a merge-blocking CI job is waiting. Batching and caching can be combined.",
+        "**Architecture levers**: route simple subtasks to a smaller tier, run independent calls concurrently, send only the delta (for example the diff since the last review) and gather inputs in code instead of with agent tool calls.",
+        "**Throughput**: size concurrency to your rate limits (requests and input or output tokens per minute) with a token-aware limiter instead of firing everything and retrying 429s.",
+        "**Judge by cost per completed task**: (total spend including failed attempts and retries) ÷ successful outcomes. A pricier configuration that succeeds more often can be cheaper overall."
+      ],
+      "traps": [
+        "Cutting `max_tokens` to save money and getting truncated, unparseable output.",
+        "Putting a timestamp or user ID at the top of the system prompt, so every request writes a new cache entry.",
+        "Using batches for interactive or blocking work because they're cheaper.",
+        "Dropping to the smallest tier before trying effort, caching and batching on the current one.",
+        "Comparing options on price per token instead of cost per completed task."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "resp = client.messages.create(\n    model=MODEL, max_tokens=8000,                       # generous backstop\n    output_config={'effort': 'medium'},                  # swept on eval\n    system=[{'type': 'text', 'text': STABLE_RULES,\n             'cache_control': {'type': 'ephemeral'}}],  # stable prefix first\n    messages=[{'role': 'user', 'content': f'{today}\\n{doc}'}],  # variable last\n)\nu = resp.usage\nhit_ratio = u.cache_read_input_tokens / (u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens)"
+      },
+      "docs": [
+        {
+          "title": "Reducing latency",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+        },
+        {
+          "title": "Prompt caching",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+        },
+        {
+          "title": "Batch processing",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing"
+        },
+        {
+          "title": "Effort",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/effort"
+        }
+      ],
+      "drill": "On a 30-case eval, run one route at two effort levels and with and without a cached system prompt. Record pass rate, mean input and output tokens, the cache-read ratio, p95 latency and cost per completed task in one table. Recommend a configuration, then list which of your organisation's workloads could move to the Batches API and which can't (someone is waiting)."
+    },
+    {
+      "subskill": "P4.6",
+      "title": "Monitor system performance with logging and observability",
+      "summary": "The exam tests whether your monitoring would catch the failures LLM systems actually have. Most quality regressions, truncations, cache misses and drift still return HTTP 200. Expect questions on per-request log fields, agent traces, quality sampling, org-level usage and cost reporting, Claude Code telemetry, and logging sensitive data safely.",
+      "keyPoints": [
+        "**Per-request record**: request ID (`request-id` header, `_request_id` in the SDKs), model, prompt version, `usage` (input, output, cache creation and cache read tokens), latency (TTFT and total), `stop_reason` and error status. Give Anthropic support the request ID for a failing call.",
+        "**Quality monitoring**: HTTP dashboards miss quality drops. Sample production traffic into rubric or LLM-judge scoring tagged by prompt version and segment, watch the `stop_reason` mix and output length, and feed failures back into the eval set.",
+        "**Agent traces**: link every model call and tool call for one user request under a trace or session ID, with tool names, inputs and results (redacted) and per-step tokens and latency, so a run can be replayed as a transcript.",
+        "**Drift**: when inputs change (a new product line, a new language or document type), segment-level quality can fall while the overall average looks flat. Track the input-category mix and quality per segment.",
+        "**Org-level usage and cost**: the Admin API usage and cost report endpoints need an Admin API credential; workspace API keys don't work. For new integrations Anthropic recommends the **Usage and Cost Analytics API**. Usage can be bucketed by `1m`, `1h` or `1d` and grouped by model, workspace, API key, service tier and more. The cost report is in USD with **daily** buckets only. Data typically appears within about 5 minutes.",
+        "**Cache health**: track the share of input served from cache (`cache_read_input_tokens` over total input) per prompt version. A sudden drop after a release usually means something variable has entered the cached prefix.",
+        "**Claude Code OpenTelemetry**: `CLAUDE_CODE_ENABLE_TELEMETRY=1` plus `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` and `OTEL_EXPORTER_OTLP_ENDPOINT`. Metrics include `claude_code.token.usage` and `claude_code.cost.usage`. Prompts are **redacted by default** (`OTEL_LOG_USER_PROMPTS=1` turns them on), and tool details are off unless `OTEL_LOG_TOOL_DETAILS=1`. Enforce the settings org-wide through the managed settings `env` block, because a repository's `.claude/settings.json` exporter variables are ignored.",
+        "**Sensitive data**: log metadata by default. Capture content only redacted or sampled, in an access-controlled store with defined retention, especially for PHI or PII and third-party observability platforms.",
+        "**Alerts**: spend against budget, 429 and 5xx/529 rates, p95 latency, the truncation (`max_tokens`) rate, the cache-hit ratio and sampled quality per prompt version.",
+        "**Monitoring is reactive.** It finds problems after users do, so pair it with pre-release evals and A/B tests (the 'Swiss cheese' model)."
+      ],
+      "traps": [
+        "Error-rate and latency dashboards only, so quality regressions return 200 and go unseen.",
+        "Logging every prompt and response in full to a third-party tool by default in a regulated workload.",
+        "Calling the cost report with workspace keys, or expecting minute-level cost buckets.",
+        "Putting Claude Code telemetry variables in a repo's `.claude/settings.json` and expecting org-wide enforcement.",
+        "Per-call logs with no trace ID linking the steps of an agent run."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "log.info('llm_call', extra={\n  'trace_id': trace_id, 'step': step, 'request_id': msg._request_id,\n  'model': msg.model, 'prompt_version': PROMPT_V, 'stop_reason': msg.stop_reason,\n  'in': msg.usage.input_tokens, 'out': msg.usage.output_tokens,\n  'cache_read': msg.usage.cache_read_input_tokens,\n  'cache_write': msg.usage.cache_creation_input_tokens,\n  'ttft_ms': ttft, 'total_ms': total, 'segment': request_category,\n})  # content: redacted/sampled only"
+      },
+      "docs": [
+        {
+          "title": "Usage and Cost API",
+          "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"
+        },
+        {
+          "title": "Claude Code monitoring (OpenTelemetry)",
+          "url": "https://code.claude.com/docs/en/monitoring-usage"
+        },
+        {
+          "title": "Prompt caching (usage fields)",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+        },
+        {
+          "title": "Demystifying evals for AI agents",
+          "url": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+        }
+      ],
+      "drill": "Write the log schema and the alert list for one Claude service: fields, which ones may hold content and how they are redacted, retention, and five alerts with thresholds. Then call the usage report endpoint (or read the Console Usage page) grouped by model at `1h` buckets, and compute your cache-read ratio for the last day."
+    }
+  ],
+  "questions": [
+    {
+      "id": "P4-1-001",
+      "subskill": "P4.1",
+      "difficulty": 1,
+      "stem": "A retail bank's product owner writes the success criterion for a new complaint-classification feature as 'Claude should categorise complaints well and fast.' The architect has to turn it into a criterion the team can test against before launch. Which rewrite is BEST?",
+      "select": 1,
+      "options": [
+        "Claude should reach 100% accuracy on every complaint category, so that no complaint is ever routed to the wrong team.",
+        "Claude should categorise complaints accurately and quickly, as judged each week by the product owner reviewing a sample of outputs and confirming they look reasonable.",
+        "At least 92% agreement with compliance-team labels on a held-out set of 2,000 recent complaints matching the production category mix, with p95 latency under 3 seconds.",
+        "Use the most capable Claude model at its highest effort setting, so that categorisation quality is as high as it can be."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Not achievable or anchored to any baseline. A 100% target can't be met or verified, and it doesn't name a test set or a latency bar.",
+        "Still vague and unmeasurable. 'Looks reasonable' to one reviewer is neither a defined scale nor a repeatable test.",
+        "Correct. It is specific (agreement with expert labels), measurable (92%, p95 under 3 s), tied to a representative held-out set, and covers both dimensions the owner cares about.",
+        "This is a configuration choice, not a success criterion. It says nothing about how to measure 'well' or 'fast', and it may break any latency or cost target."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-1-002",
+      "subskill": "P4.1",
+      "difficulty": 2,
+      "stem": "A hospital network is launching a patient-portal assistant that answers questions about appointments and medications. The chief medical officer's only requirement for privacy is 'it must be safe.' The architect needs a privacy criterion that can block a release. Which is BEST?",
+      "select": 1,
+      "options": [
+        "Add a system-prompt instruction telling Claude never to reveal protected health information, to check every answer for patient details before sending it, and always to put patient safety first.",
+        "Zero responses judged by a calibrated binary grader to disclose another patient's health information, across a 500-query test set with explicit, hypothetical and implicit PHI cases; any failure blocks release.",
+        "Track the weekly number of patient complaints about privacy, and investigate whenever it rises above the previous month's level.",
+        "Require the assistant to refuse any question that mentions a medication, which removes the risk of disclosing medical details."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "An instruction is a control, not a measure. Without a test set and a threshold nobody can show the release meets the requirement.",
+        "Correct. It turns 'safe' into a measurable gate: a defined test set covering hard implicit cases, a grader suited to subtle PHI, and an explicit pass bar.",
+        "Complaints are sparse, self-selected and reactive. Harm reaches patients before the signal appears, so this can't gate a release.",
+        "This fails task fidelity for a medication-questions assistant. It also defines no metric, so it isn't a success criterion."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-1-003",
+      "subskill": "P4.1",
+      "difficulty": 2,
+      "stem": "An insurer uses Claude to flag incoming claims that need urgent handling, such as a suspected injury or a vulnerable customer. About 3% of claims are urgent. A pilot report says the classifier is '97% accurate', and the operations director is ready to sign off. Which metric should the architect insist on before sign-off?",
+      "select": 1,
+      "options": [
+        "Recall and precision on the urgent class, measured on a labelled set with enough urgent examples to estimate both reliably.",
+        "Overall accuracy re-measured on a much larger random sample of claims, because 97% on a small pilot may not hold at production volume.",
+        "The average confidence Claude reports for its labels, to confirm that the model is sure about its urgent and non-urgent decisions.",
+        "Mean latency per claim, because urgent claims have to reach a handler quickly once they are flagged."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. With a 3% positive rate, a classifier that never flags anything is 97% accurate. Recall on the urgent class shows how many urgent claims are caught, and precision shows the cost in false alarms.",
+        "A bigger sample still measures the wrong thing. Overall accuracy stays dominated by the 97% majority class.",
+        "Self-reported confidence isn't a validated measure of correctness and doesn't show whether urgent claims are being missed.",
+        "Latency matters operationally, but it says nothing about whether urgent claims are detected at all."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-1-004",
+      "subskill": "P4.1",
+      "difficulty": 2,
+      "stem": "An e-learning company is adding a streaming tutor chat to its web app. Separately, a nightly job generates written progress reports that teachers read the next morning. Product asks the architect for 'one latency target' covering both features. Which metric choice is BEST?",
+      "select": 1,
+      "options": [
+        "For the chat, p95 time to first token; for the nightly reports, completion of the whole job within the delivery window, with per-request latency treated as secondary.",
+        "A single mean end-to-end latency target applied to both features, so that the team has one number and one dashboard to watch.",
+        "For both features, the model's output tokens per second, since faster generation improves every kind of workload.",
+        "For the chat, mean total response time across all conversations; for the nightly reports, p99 time to first token on each individual request in the batch, reported per teacher."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. With streaming, the user's experience is driven by time to first token, and a percentile captures the tail. For an overnight job, what matters is finishing before teachers need the reports.",
+        "The two features have different latency needs. A mean also hides the slow tail that users notice in chat.",
+        "Generation speed is one input to latency, not a user-facing target. It ignores time to first token for chat and the job deadline for reports.",
+        "This is backwards. A streaming chat should track time to first token, and nobody is waiting on each request of an overnight job."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "P4-1-005",
+      "subskill": "P4.1",
+      "difficulty": 3,
+      "stem": "A travel company's booking agent will change customers' reservations with no human in the loop. In evaluation, every task runs for 3 independent trials. On one important task the agent succeeds in about 80% of trials. The product lead reports 'pass@3 is 99% on this task, so it's ready.' Which statement is MOST accurate?",
+      "select": 1,
+      "options": [
+        "pass@3 is the right release metric here because a customer who hits a failure can simply ask the agent again, so a 99% figure shows the agent is ready for unattended use.",
+        "Use pass^3, the chance that all three trials succeed: about 51% at 80% per trial. Each customer gets one attempt, so consistency is what has to be measured.",
+        "Run more trials until pass@k reaches 100%, which will prove that the agent handles this task reliably.",
+        "The per-trial success rate doesn't matter once pass@3 is high, so report pass@3 and use it as the release gate."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "pass@k counts a task as solved if any one of k attempts works. That suits tools where one success is enough, not an unattended agent acting on each customer's booking.",
+        "Correct. 0.8³ ≈ 0.51. pass^k captures the consistency a customer-facing agent needs, while pass@3 (1 − 0.2³ ≈ 99%) hides a 1-in-5 failure rate per attempt.",
+        "pass@k rises with k by construction, so a high value proves nothing about reliability on any single attempt.",
+        "The per-trial rate is exactly what each customer experiences. Gating on pass@3 would ship an agent that fails about one booking in five."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-1-006",
+      "subskill": "P4.1",
+      "difficulty": 2,
+      "stem": "A logistics SaaS vendor's agent reads inbound supplier emails and can call tools that update shipment records and issue credit notes. The security lead asks which security metrics belong in the release criteria. Which TWO are BEST? Select TWO.",
+      "select": 2,
+      "options": [
+        "Overall refusal rate on normal, legitimate supplier emails, on the basis that a model that refuses more often is less likely to be manipulated by an attacker into misusing its tools.",
+        "Attack success rate on a maintained set of prompt-injection emails, with instructions hidden in bodies and attachments, run in a sandbox on every release.",
+        "Number of tokens in the system prompt's security section, as a proxy for how thoroughly the rules are specified.",
+        "Rate of tool calls outside the agent's permitted scope, such as credit notes above its authorised limit, across the sandboxed suite, with a target of zero.",
+        "Satisfaction score from suppliers who receive the agent's automated replies."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "A higher refusal rate on legitimate email is a usability cost, not evidence of security. It doesn't measure whether attacks succeed.",
+        "Correct. It measures the outcome that matters (does injected content steer the agent?) on a maintained adversarial set, run repeatably on every release.",
+        "Prompt length is an input proxy. It says nothing about whether the agent resists attacks.",
+        "Correct. Out-of-scope actions are the actual harm, so measuring them in a sandbox against a zero target tests the agent's permission boundaries directly.",
+        "Satisfaction is a business metric that is blind to whether an attacker has manipulated the agent."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-1-007",
+      "subskill": "P4.1",
+      "difficulty": 2,
+      "stem": "A public-sector agency wants a Claude-based service that extracts data from benefit application forms. The programme director sets the target at '100% accuracy, no exceptions.' Manual keying today has a measured field error rate of about 2%. What should the architect do FIRST?",
+      "select": 1,
+      "options": [
+        "Accept the target and plan to reach it by moving to the most capable model at its highest effort setting and adding more detailed extraction instructions to the prompt.",
+        "Measure a prototype's field-level accuracy on a labelled sample, agree targets anchored to that baseline and to manual keying, and send records that fail validation to human review.",
+        "Decline the project, because no LLM-based system can ever be guaranteed to meet a 100% accuracy requirement, and recommend that the agency keeps keying forms manually until the technology matures.",
+        "Agree to the 100% target in the project charter and add a disclaimer that production results may vary."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "This commits to a target that nobody has measured or shown to be achievable. A bigger model and more instructions don't guarantee 100%.",
+        "Correct. Achievable criteria are anchored to measured baselines and the human comparison. Designing human review for the residual errors handles the 'no exceptions' concern at the process level.",
+        "The business problem is valid. Manual keying isn't perfect either, so the right move is to set evidence-based targets with review, not to refuse.",
+        "Signing up to a target you expect to miss sets the stakeholder relationship up to fail and leaves no measurable gate."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-1-008",
+      "subskill": "P4.1",
+      "difficulty": 3,
+      "stem": "A law firm's research assistant answers lawyers' questions from the firm's precedent library and cites passages. The team scores it with ROUGE-L against reference answers written by associates. After a prompt change the score rose 6 points, yet partners say the answers have become less trustworthy. Which TWO metrics should the architect add to the success criteria? Select TWO.",
+      "select": 2,
+      "options": [
+        "A higher ROUGE-L threshold, so that future prompt changes have to beat the reference answers by a wider margin.",
+        "Citation support rate: the share of claims whose cited passage actually supports them, graded against the source text.",
+        "Average answer length, since longer answers give lawyers more material to review.",
+        "BLEU against the same associate-written reference answers, to confirm the ROUGE-L gain with a second, independent overlap metric before the change is rolled out to all lawyers.",
+        "Answer correctness on a partner-written rubric, graded by an LLM judge that has been calibrated against partner verdicts on a sample."
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "The overlap metric is the problem. It rewards matching associate wording, not being right or well grounded.",
+        "Correct. For a legal tool, groundedness is the relevant criterion. It directly measures whether citations back the claims.",
+        "Length isn't quality and can hide unsupported content. It also raises cost and reading time.",
+        "A second overlap metric repeats the same blind spot and won't explain why partners distrust the answers.",
+        "Correct. Expert-defined correctness, graded at scale by a judge validated against partners, captures what the stakeholders actually care about."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-1-009",
+      "subskill": "P4.1",
+      "difficulty": 3,
+      "stem": "A pharmacy chain's assistant drafts replies to customer questions. On the eval, prompt A scores 93% correct and prompt B scores 91%. Reviewing the failures shows that A's errors include 12 cases of wrong dosage-timing advice, while B's errors are almost all over-cautious 'please ask your pharmacist' replies. The team can't agree which to ship. What should the success criteria have contained to settle this?",
+      "select": 1,
+      "options": [
+        "A higher overall accuracy bar, such as 95% on the same eval set, so that neither version would have qualified and the team would keep iterating on the prompt until one of them cleared it.",
+        "A tone criterion graded on a Likert scale, so that cautious replies are penalised less than curt ones.",
+        "A tie-break rule that the version with higher overall accuracy wins, so decisions stay objective and fast whenever the team disagrees.",
+        "Defined error-severity classes, such as 'unsafe advice' and 'unhelpful but safe', with a near-zero threshold for the severe class alongside the accuracy target."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Raising the bar postpones the decision without capturing the real difference between the two versions, which is how harmful their errors are.",
+        "Tone isn't the issue. Wrong dosage timing is a safety failure, whatever the tone.",
+        "This would ship A, the version making unsafe errors, because overall accuracy treats every error as equal.",
+        "Correct. Multidimensional criteria that weight error severity separately (with both classes clearly defined) make B's safe failures acceptable and A's unsafe ones disqualifying."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-2-001",
+      "subskill": "P4.2",
+      "difficulty": 2,
+      "stem": "At a fintech, every candidate prompt for a transaction-dispute assistant is graded by two compliance analysts who hand-score the same 40 examples. Each iteration takes two days. Engineering wants to iterate several times a day without losing the analysts' judgement. Which change BEST fits Anthropic's evaluation guidance?",
+      "select": 1,
+      "options": [
+        "Keep the 40 hand-graded examples but have one analyst score them instead of two, which halves the turnaround for each prompt iteration.",
+        "Stop running pre-release evals and ship each prompt change directly to production, using the weekly volume of customer disputes escalated to a human as the quality signal instead.",
+        "Grow the set to several hundred cases from real disputes, grade them with code checks plus a rubric-based LLM judge, and have the analysts score a sample to confirm the judge agrees with them.",
+        "Have the model that wrote each answer rate it from 1 to 10 in the same request, and keep the analysts for final sign-off only."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "This saves a day but keeps a tiny, slow, human-only eval. It also drops the second rater who checks consistency.",
+        "Production signals are reactive and sparse. Customers would find regressions before the team did.",
+        "Correct. Anthropic favours more automatically graded cases over a few hand-graded ones. Analysts are best used to calibrate the LLM judge rather than to grade every run.",
+        "Self-grading in the same request is a weak, biased grader. Anthropic suggests grading with a different model from the one that produced the output."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "P4-2-002",
+      "subskill": "P4.2",
+      "difficulty": 2,
+      "stem": "An airline's support assistant must (1) state the correct refund amount from the fare rules, (2) keep an empathetic, professional tone with upset customers, and (3) never reveal another passenger's booking details. The architect is choosing a grader for each criterion. Which THREE choices are BEST? Select THREE.",
+      "select": 3,
+      "options": [
+        "Refund amount: ROUGE-L overlap between the reply and a reference reply written by an experienced agent.",
+        "Refund amount: a code-based check comparing the amount in the reply with the value computed from the fare rules for that case.",
+        "Tone: human graders score every output on every run, because tone is subjective.",
+        "Tone: an LLM grader with a detailed 1–5 rubric that reasons before scoring, preferably a different model from the generator, spot-checked against human ratings.",
+        "Leakage: in the same conversation, ask the assistant to review whether its last answer revealed anything it shouldn't have, and treat a 'no' as a pass for that test case.",
+        "Leakage: an LLM binary classifier that flags any reply containing another passenger's details, run over test cases with both direct and indirect extraction attempts."
+      ],
+      "answer": [
+        1,
+        3,
+        5
+      ],
+      "explanations": [
+        "An overlap metric can score a wrong amount highly if the surrounding wording matches. The amount has an exact right answer, so check it exactly.",
+        "Correct. When a criterion has a deterministic right answer, code-based grading is the fastest and most reliable option.",
+        "Human grading is slow and expensive. Use it to calibrate an automated grader, not to score every run.",
+        "Correct. LLM grading suits nuanced judgements. A detailed rubric, an empirical scale, reasoning before the score and human calibration make it reliable.",
+        "Self-review in the same context is unreliable and biased toward confirming its own output.",
+        "Correct. A binary LLM classifier can catch subtle or implied disclosures that pattern rules miss, and the test set covers the hard cases."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "P4-2-003",
+      "subskill": "P4.2",
+      "difficulty": 1,
+      "stem": "A telecom's support agent should hand the conversation to a human when a customer asks to cancel or mentions a legal complaint. Every case in the eval set is one where escalation is required, and the agent scores 100%. In production it also escalates many routine billing questions. What is the BEST fix to the eval?",
+      "select": 1,
+      "options": [
+        "Raise the pass threshold so that the agent must escalate earlier in the conversation in the existing cases.",
+        "Remove the escalation tool and route all cancellations through a fixed menu instead.",
+        "Add the instruction 'only escalate when it is really necessary' to the system prompt, then re-run the current eval set to confirm the agent still scores 100% on it.",
+        "Add cases where escalation should not happen, such as routine billing and plan questions, so the eval measures both under- and over-escalation."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "This tightens the same one-sided test and would reward even more eager escalation.",
+        "This removes a capability the business needs instead of fixing how it is measured.",
+        "A prompt tweak may help, but without negative cases the eval can't tell whether it worked or broke the required escalations.",
+        "Correct. Balanced sets test when a behaviour should and shouldn't happen. A suite with only positive cases can't detect over-triggering."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-2-004",
+      "subskill": "P4.2",
+      "difficulty": 3,
+      "stem": "An HR SaaS company's agent eval suite has scored 99–100% for four months. Leadership now wants the agent to handle multi-country payroll queries, which it currently handles poorly. An engineer proposes deleting the existing suite because 'it no longer tells us anything.' What should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Make the existing tasks harder by adding stricter formatting and wording checks to the graders, so the overall score falls back into a range where it shows improvement.",
+        "Keep the existing tasks unchanged, add the payroll tasks to the same suite, and report one combined pass rate for the agent.",
+        "Keep the saturated suite as a regression suite run on every change, and build a separate payroll capability suite that starts at a low pass rate so progress is visible.",
+        "Delete the suite and replace it with payroll tasks, because a suite scoring 100% provides no information."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Arbitrary grader strictness makes the eval brittle and penalises valid outputs. It manufactures difficulty instead of measuring the new capability.",
+        "A combined rate dilutes the payroll signal and blurs regression and capability tracking.",
+        "Correct. A saturated eval still guards against backsliding. New capabilities need their own suite with headroom, a hill to climb.",
+        "Deleting the suite discards protection against regressions on behaviour the business already relies on."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-2-005",
+      "subskill": "P4.2",
+      "difficulty": 2,
+      "stem": "A hotel group's booking agent is evaluated by an LLM grader that reads the agent's final message and passes the trial if it says the booking was confirmed. The eval pass rate is 96%, but the front desk keeps finding stays that customers were told were booked but that don't exist in the property system. Which change BEST fixes the evaluation?",
+      "select": 1,
+      "options": [
+        "Grade the outcome: after each trial, query the test environment's reservation system and pass only if the expected booking exists with the right details.",
+        "Tighten the LLM grader's rubric so that it requires the final confirmation message to include a booking reference number in the expected format and the correct stay dates.",
+        "Require the agent to call its tools in a fixed sequence, and fail any trial that departs from it.",
+        "Run each task more times and report pass@k so that occasional failures don't distort the overall score."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Grade what the agent produced (the end state of the environment), not what it says it did.",
+        "The agent can still claim a reference number that doesn't exist. The grader is still checking words, not the result.",
+        "Checking a fixed path is brittle and punishes valid alternative approaches. It still doesn't confirm that a booking exists.",
+        "pass@k makes things look better while hiding the failures. More trials don't fix a grader that measures the wrong thing."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-3-001",
+      "subskill": "P4.3",
+      "difficulty": 3,
+      "stem": "A SaaS company compares two support-reply prompts on the same 150-question eval. Prompt B scores 86% and prompt A scores 84%. The product manager wants to announce that B is better and ship it this week. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Ship B, because it scored higher on exactly the same questions and the eval set was drawn from production traffic.",
+        "Report the paired difference on the 150 questions with its standard error and confidence interval. If the interval includes zero, enlarge the set (sized with a power analysis) or resample before deciding.",
+        "Re-run both prompts once more on the same questions and ship whichever one wins the second run.",
+        "Score B on a fresh, larger set of different questions while keeping A's original 84%, so the comparison isn't biased by B having been tuned on the first 150 questions and having seen them repeatedly."
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "At about 85% on 150 items, each score has a standard error of roughly 3 points, so a 2-point gap may well be noise.",
+        "Correct. Treat eval scores as estimates. A paired analysis on shared questions removes question-difficulty variance, and power analysis tells you how many items you need to detect a 2-point effect.",
+        "One more noisy run is still noise. 'Best of two' doesn't give you a confidence statement.",
+        "Comparing scores from different question sets throws away the pairing and adds set-difficulty variance, so the comparison gets less reliable, not more."
+      ],
+      "ref": "https://www.anthropic.com/research/statistical-approach-to-model-evals"
+    },
+    {
+      "id": "P4-3-002",
+      "subskill": "P4.3",
+      "difficulty": 3,
+      "stem": "A legal-tech firm's eval has 400 questions: 10 questions about each of 40 contracts. A new retrieval setting raises accuracy from 71% to 75%, and a paired standard error that treats all 400 questions as independent says the gain is significant. A reviewer isn't convinced. What is the MOST likely flaw in the analysis?",
+      "select": 1,
+      "options": [
+        "400 questions is too many: a large sample makes the standard error artificially small and overstates significance, so the eval should be cut back to around 100 questions.",
+        "Accuracy is the wrong metric for a retrieval change; the team should report ROUGE-L against reference answers instead.",
+        "Questions about the same contract are correlated, so the standard error should be clustered by contract. It can be much larger, and the gain may not be significant.",
+        "The new setting should have been tested on a different set of contracts to avoid bias carried over from the old configuration."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "More independent data gives an honest, smaller error. The problem here is that the data isn't independent, not that there is too much of it.",
+        "Changing the metric doesn't fix the statistical flaw, and an overlap metric is weaker evidence of correctness.",
+        "Correct. Cluster standard errors on the unit of randomisation. Anthropic reports clustered errors on popular evals can be more than three times the naive ones, which turns false 'wins' into non-results.",
+        "Testing on different contracts would remove the paired comparison and add variance. The flaw is in how the errors are computed."
+      ],
+      "ref": "https://www.anthropic.com/research/statistical-approach-to-model-evals"
+    },
+    {
+      "id": "P4-3-003",
+      "subskill": "P4.3",
+      "difficulty": 2,
+      "stem": "A retailer evaluates its product-description generator on 200 items with an LLM grader. Re-running the same prompt with no changes moves the score anywhere between 78% and 83%, so the team can't tell whether small prompt edits help. Which change BEST reduces this noise?",
+      "select": 1,
+      "options": [
+        "Ask the grader for a longer free-text critique of each description before its verdict, so that its judgements are more detailed and therefore more stable from run to run.",
+        "Drop the items whose scores change between runs and keep only items that always pass or always fail.",
+        "Run several trials per item for each prompt version, average the per-item scores, and compare the versions on the same items.",
+        "Compare each new prompt against the best score the current prompt has ever reached, rather than its average."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Asking the grader to reason before its verdict can improve grading accuracy, but it doesn't remove the main noise source: sampling variance in the generated descriptions, scored once per item across only 200 items.",
+        "Removing hard, variable items biases the eval toward easy cases and hides exactly where prompt changes matter.",
+        "Correct. Resampling and averaging per item shrinks within-item variance, and comparing on the same items (paired) removes between-item variance.",
+        "Comparing against a lucky maximum is biased against every new version and makes the noise worse."
+      ],
+      "ref": "https://www.anthropic.com/research/statistical-approach-to-model-evals"
+    },
+    {
+      "id": "P4-3-004",
+      "subskill": "P4.3",
+      "difficulty": 3,
+      "stem": "An online education platform is A/B testing a new tutoring prompt in production. Each incoming request is randomly assigned to prompt A or B, so a student can see both within one session. An analyst checks the dashboard daily and plans to stop the test as soon as B's lesson-completion rate is ahead. Which TWO changes BEST fix the design? Select TWO.",
+      "select": 2,
+      "options": [
+        "Give variant B the more capable model tier and a higher effort setting so that any difference between the variants becomes large enough to detect within a few days.",
+        "Randomise by student (or by conversation) so that each student consistently gets one variant and outcomes can be attributed to it.",
+        "Serve variant A during the day and variant B at night, so the two variants never interfere with each other.",
+        "Replace lesson-completion rate with average response length, which moves faster and needs fewer samples.",
+        "Fix the primary metric, guardrail metrics and required sample size before starting, and decide when that sample is reached instead of stopping when B first leads."
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "This confounds the prompt with the model, so the test no longer measures the prompt change.",
+        "Correct. Lesson completion is a per-student outcome. Mixing variants within a session contaminates it.",
+        "Time of day becomes a confounder, because day and night students differ.",
+        "Response length isn't the business outcome. A metric that moves fast but is irrelevant can't justify a decision.",
+        "Correct. Stopping the first time B leads inflates false positives. Pre-registered metrics and sample size make the result trustworthy."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-3-005",
+      "subskill": "P4.3",
+      "difficulty": 1,
+      "stem": "A media company's summarisation team changed the prompt wording, switched to a different model tier and raised the effort level, all in the same release. Eval scores dropped 5 points and nobody can say why. Which practice would have prevented this confusion?",
+      "select": 1,
+      "options": [
+        "Wait for a full quarter of production data before making any further changes to the summarisation pipeline.",
+        "Use the most capable model tier for every experiment so that model choice can never be the cause of a regression.",
+        "Ask the model to explain which of the three changes made its summaries worse.",
+        "Change one variable at a time against a versioned baseline and re-run the eval after each change."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Waiting slows iteration and still wouldn't separate three simultaneous changes.",
+        "This fixes one variable by over-spending, and it doesn't separate the prompt and effort effects.",
+        "The model can't reliably attribute its own regressions. Attribution needs controlled experiments.",
+        "Correct. Isolating each change against a versioned baseline shows which one caused the drop, and lets you roll back just that change."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests"
+    },
+    {
+      "id": "P4-3-006",
+      "subskill": "P4.3",
+      "difficulty": 2,
+      "stem": "A government benefits agency iterated its eligibility-explanation prompt 30 times against the same 120-case eval set and reached 98%. After launch, caseworkers judge quality to be closer to 85%. What should the architect change in the iteration process?",
+      "select": 1,
+      "options": [
+        "Keep a held-out test set that isn't used during tuning, refresh both sets with new cases from production failures, and gate releases on the held-out score.",
+        "Keep iterating on the 120 cases until the score reaches 100%, then relaunch with the improved prompt.",
+        "Raise the effort setting so that the model generalises better to cases it hasn't seen in the eval.",
+        "Stop using offline evals and rely on structured caseworker feedback instead, because this eval has now been shown not to predict production quality for this service."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. After 30 rounds of tuning on one set, its score no longer predicts unseen cases. A held-out set gives an honest estimate, and production failures keep the data representative.",
+        "This overfits further to the same 120 cases. The gap with production would likely grow.",
+        "Effort doesn't fix overfitting in the prompt or an unrepresentative eval set.",
+        "Feedback is sparse and reactive. The fix is a better eval process, not dropping evals."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/define-success"
+    },
+    {
+      "id": "P4-3-007",
+      "subskill": "P4.3",
+      "difficulty": 2,
+      "stem": "A bank adds 25 tasks to its agent eval to cover a new account-reconciliation feature. Across 10 trials each, six of the tasks score 0% while the rest pass most of the time. An engineer starts rewriting the system prompt to fix those six. What should happen FIRST?",
+      "select": 1,
+      "options": [
+        "Rerun the six tasks on a more capable model tier and compare the results with the current model.",
+        "Remove the six tasks from the suite so that they stop pulling down the overall pass rate.",
+        "Read the failing transcripts and check the six tasks and their graders for ambiguity or bugs; 0% across many trials often signals a broken task.",
+        "Increase to 50 trials per task so that the 0% estimate becomes statistically reliable before anyone spends time investigating or changing the prompt."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "If the task or grader is broken, a stronger model will also score 0%, and the money is wasted.",
+        "Removing tasks before understanding them can hide a real gap in a feature the bank needs.",
+        "Correct. With frontier models, a 0% pass rate across many trials usually means the task is unclear or the grader rejects valid answers. Reading transcripts shows whether a failure is fair before anyone changes the prompt.",
+        "More trials will confirm the 0% but won't explain it."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-3-008",
+      "subskill": "P4.3",
+      "difficulty": 1,
+      "stem": "A ride-hailing company needs a driver-support assistant that responds in under 2 seconds. The team started with the smallest model tier and a heavily shortened prompt. Quality is poor, and they can't tell whether the task is achievable at all. What does Anthropic's guidance suggest?",
+      "select": 1,
+      "options": [
+        "Keep the smallest tier and keep adding few-shot examples and stricter instructions until quality improves, since the 2-second latency is the hard requirement here.",
+        "Drop the latency requirement, because users always care more about answer quality than about speed.",
+        "Set a low max_tokens value so that responses come back faster, then assess quality afterwards.",
+        "First build a prompt that works well without model or latency limits to see what top performance looks like, then apply latency reductions and measure the trade-off."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Without a quality ceiling the team can't tell whether the tier, the prompt or the task is the limit. Long few-shot blocks also add latency.",
+        "Latency is a real business constraint. The task is to find the best trade-off, not to drop the requirement.",
+        "max_tokens is a blunt cap that cuts responses off mid-output. It isn't a quality-preserving latency fix.",
+        "Correct. Anthropic advises engineering for quality first, then reducing latency (smaller tier, shorter prompts and outputs, streaming). Optimising too early can hide what is achievable."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "P4-6-001",
+      "subskill": "P4.6",
+      "difficulty": 1,
+      "stem": "A retail group runs Claude workloads for marketing, customer service and analytics, each in its own workspace in one Claude Console organisation. Finance wants a monthly cost breakdown by department. Which approach is BEST?",
+      "select": 1,
+      "options": [
+        "Ask each department to download its own invoice from the Console and add the totals together in a spreadsheet.",
+        "Have each application add up output_tokens from its own responses each month and multiply the total by the published list price for the model it calls.",
+        "Call the cost report endpoint with each department's workspace API key, so that each key returns only that department's spend.",
+        "Query org cost data through the Admin API cost report (or the Usage and Cost Analytics API) with an admin credential, grouped by workspace."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Billing is at the organisation level. Per-department totals come from grouping cost data by workspace, not from separate invoices.",
+        "This ignores input, cache and server-tool costs and drifts from billing. Anthropic's cost reporting exists so you can reconcile with what is actually billed.",
+        "The usage and cost endpoints need an Admin API credential. Workspace API keys don't work for them.",
+        "Correct. Org cost data can be grouped by workspace for chargeback, and the endpoints need an admin-level credential."
+      ],
+      "ref": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"
+    },
+    {
+      "id": "P4-6-002",
+      "subskill": "P4.6",
+      "difficulty": 3,
+      "stem": "A SaaS company wants to be alerted within about 15 minutes when Claude spend on any API key spikes unexpectedly, for example because an agent is stuck in a loop. Org usage is reported through Anthropic's Admin API. Which design BEST meets the requirement?",
+      "select": 1,
+      "options": [
+        "Request the cost report endpoint with 1-minute buckets grouped by API key, and alert when any bucket exceeds that key's threshold.",
+        "Wait for the monthly invoice, because the API reports cost only after the billing period has closed.",
+        "Poll the usage report in 1-minute or 1-hour buckets grouped by API key, estimate cost from tokens, alert on deviations, and reconcile with the daily cost report.",
+        "Log every request's full prompt and response to a data warehouse and run a nightly query that estimates the cost for each API key from the logged text and token counts."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "The cost report only supports daily (1d) buckets, so it can't drive a 15-minute alert.",
+        "Usage and cost data are available through the API well before invoicing. Waiting a month defeats the purpose.",
+        "Correct. The usage endpoint supports 1m, 1h and 1d buckets with grouping by API key, and data typically appears within about 5 minutes, which is enough for near-real-time alerting. The daily cost report is for reconciliation.",
+        "A nightly job misses the 15-minute target, and logging full content adds privacy risk that cost monitoring doesn't need."
+      ],
+      "ref": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api"
+    },
+    {
+      "id": "P4-6-003",
+      "subskill": "P4.6",
+      "difficulty": 2,
+      "stem": "A software consultancy is rolling out Claude Code to 300 developers and wants organisation-wide token and cost metrics in its OpenTelemetry collector. The security team requires that prompt text is never exported. Which TWO actions are BEST? Select TWO.",
+      "select": 2,
+      "options": [
+        "Commit the telemetry variables to each repository's .claude/settings.json so they apply to every developer who clones it.",
+        "Set CLAUDE_CODE_ENABLE_TELEMETRY=1, the exporter variables and the OTLP endpoint in the env block of the managed settings file.",
+        "Set OTEL_LOG_USER_PROMPTS=1 and strip prompt text out in the collector before it reaches storage.",
+        "Leave OTEL_LOG_USER_PROMPTS unset, because prompt content is redacted by default.",
+        "Ask every developer to export the telemetry variables in their own shell profile, and confirm compliance each quarter through a short internal survey."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "Claude Code ignores OpenTelemetry exporter variables in a repository's .claude/settings.json, so this doesn't enable export.",
+        "Correct. Managed settings apply the env block to every user, which makes telemetry org-wide and centrally controlled.",
+        "This exports prompts first and relies on a downstream scrubber, which breaks the requirement that prompt text is never exported.",
+        "Correct. Prompt text is redacted unless OTEL_LOG_USER_PROMPTS=1, so the default already meets the security requirement.",
+        "Developers can change shell profiles at will, and a survey isn't enforcement or evidence."
+      ],
+      "ref": "https://code.claude.com/docs/en/monitoring-usage"
+    },
+    {
+      "id": "P4-6-004",
+      "subskill": "P4.6",
+      "difficulty": 2,
+      "stem": "A healthcare-scheduling company's agent makes 5–20 model and tool calls per patient request. Its logs record each API call separately, with nothing linking them, and engineers spend hours reconstructing why a request ended in the wrong appointment. Which change BEST addresses this?",
+      "select": 1,
+      "options": [
+        "Extend log retention from 30 days to one year and index every call by timestamp, so that more historical calls are available and searchable when incidents are investigated.",
+        "Log only the final response for each request, because that is what the patient actually sees.",
+        "Give every user request a trace ID that is attached to each model and tool call, recording tool names, inputs and results (PHI redacted), stop_reason, and tokens and latency per step.",
+        "Add a dashboard of hourly average latency and error rate across all calls the agent makes."
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Longer retention keeps more unlinked fragments. The investigation is still slow.",
+        "The final response hides the step where the agent went wrong, such as a bad tool result or a wrong argument.",
+        "Correct. A per-request trace turns scattered calls into a replayable transcript, so engineers can find the failing step. Redaction keeps PHI out of the logs.",
+        "Aggregate latency and error rates won't explain why a specific request produced the wrong appointment, which usually still returns 200."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-6-005",
+      "subskill": "P4.6",
+      "difficulty": 3,
+      "stem": "An insurance broker's quote-explanation assistant has had no prompt or model changes for three months. Over the last month, complaints about wrong explanations have doubled, while error rates and latency are flat. The business recently began selling pet insurance through the same channel. Which TWO monitoring changes would MOST directly surface this kind of problem early? Select TWO.",
+      "select": 2,
+      "options": [
+        "Alert when HTTP 5xx rates exceed 1%, since quality problems usually show up as server errors.",
+        "Track the distribution of request categories (product line and intent) over time, and alert when the mix shifts beyond a set threshold.",
+        "Track daily total token spend, on the basis that a quality problem will show up as higher costs.",
+        "Score sampled production conversations with the rubric-based grader and report the results per category, so a drop in one segment is visible even when the overall average looks stable.",
+        "Keep the full text of every conversation indefinitely so that analysts can search it later for problems."
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "Wrong explanations come back as successful responses, so server-error alerts miss them, as the flat error rate shows.",
+        "Correct. A new product line changes the input distribution, which is a classic drift trigger that HTTP metrics never show.",
+        "Spend may barely move when quality drops. It is a cost signal, not a quality signal.",
+        "Correct. Sampled quality scoring per segment catches degradation that an overall average hides, and the failures feed back into the eval set.",
+        "Indefinite full-content retention adds privacy and compliance risk and is reactive. It doesn't raise an alert."
+      ],
+      "ref": "https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents"
+    },
+    {
+      "id": "P4-6-006",
+      "subskill": "P4.6",
+      "difficulty": 1,
+      "stem": "A health insurer's engineers want to send the full prompt and response of every Claude call to a third-party observability platform 'to make debugging easier.' Requests contain members' health information. What should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Approve full logging, because the observability vendor encrypts all data at rest and in transit by default.",
+        "Disable application logging entirely for this service, so that members' health information can never be exposed through the logs or the third-party platform.",
+        "Log full prompt and response content, but only for requests that return an HTTP error status, since those are the calls that engineers actually need to debug.",
+        "Log metadata by default (request ID, model, prompt version, tokens, latency, stop_reason, status) and keep content only redacted or sampled, access-controlled, with set retention."
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Encryption doesn't address data minimisation, access or retention. Full PHI would sit with a third party by default.",
+        "This removes the signals needed to operate and debug the service, and the architect needs those.",
+        "Most quality problems return 200, so this captures the wrong calls and still sends PHI to a third party.",
+        "Correct. Metadata covers most debugging and cost needs. Redacted or sampled content, under access control and retention limits, minimises exposure of health data."
+      ],
+      "ref": "https://code.claude.com/docs/en/monitoring-usage"
+    },
+    {
+      "id": "P4-6-007",
+      "subskill": "P4.6",
+      "difficulty": 2,
+      "stem": "A legal-research SaaS caches a 30,000-token system prompt. After a release, daily input cost rises sharply although traffic is unchanged. Per-request logs show cache_read_input_tokens near zero and cache_creation_input_tokens near 30,000 on most requests. What is the MOST likely cause, and which signal should the dashboard track from now on?",
+      "select": 1,
+      "options": [
+        "The release put per-request content, such as a timestamp, into the cached prefix, so each request writes a new entry. Track cache reads as a share of total input tokens per prompt version.",
+        "The model's tokenizer changed in the release, so the same 30,000-token system prompt now produces far more tokens per request. Track total input tokens per request against the previous release.",
+        "Responses became longer after the release, which raises the price of cache creation. Track average output tokens per request.",
+        "The release shortened the cache lifetime so that entries now expire after every response. Track the TTL configured on each cache breakpoint."
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Any change in the prefix (tools, then system, then messages) invalidates the cache from that point on. Reads near zero and writes near the full prompt on every request mean the prefix differs each time.",
+        "A tokenizer change would raise total tokens, but it wouldn't turn cache reads into cache writes on every request.",
+        "Output length doesn't affect whether the input prefix is read from cache.",
+        "The default 5-minute lifetime is refreshed on each use. Steady traffic keeps it warm, and an entry doesn't expire after each response."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    }
+  ]
+}

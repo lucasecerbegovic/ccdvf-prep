@@ -1,0 +1,1299 @@
+{
+  "lessons": [
+    {
+      "subskill": "P3.1",
+      "title": "Evaluate tool and agent configuration for capability bloat",
+      "summary": "The exam gives you an agent or subagent with too many, too broad or overlapping tools and asks for the root-cause fix. Expect to remove or scope capabilities at the configuration layer, replace generic power tools with narrow task-shaped ones, and promote risky actions to dedicated tools the harness can gate, rather than adding prompt rules or a bigger model.",
+      "keyPoints": [
+        "**More tools hurt selection.** Anthropic's tool search docs say Claude's ability to pick the right tool degrades once more than about **30–50 tools** are available, and a multi-server setup can spend ~55k tokens on definitions before any work starts.",
+        "**Least privilege per role.** Each agent or subagent gets only the tools its job needs. In Claude Code / the Agent SDK, a subagent with no `tools` field **inherits every tool**; `allowedTools` only pre-approves and does not restrict.",
+        "**Capability is blast radius.** An agent that reads untrusted content (email, web pages, tickets, documents) and also holds send, delete, pay or forward tools turns a prompt injection into an action. Remove the capability, or gate it with a human approval step in the harness.",
+        "**Bash vs dedicated tools.** A shell tool gives breadth but hands the harness an opaque command string. Promote an action to a dedicated, typed tool when you need to gate, audit, render or parallelise it (for example refunds, outbound messages, deletes).",
+        "**Fewer, higher-level tools.** Anthropic's tool-writing guidance favours tools shaped like the workflow (`schedule_event`, `search_contacts`) over one-to-one API mirrors (`list_users`, `list_events`, `create_event`). Consolidate overlapping tools and namespace names by service (`crm_`, `billing_`).",
+        "**Narrow beats generic.** `get_order_status(order_id)` backed by a fixed read-only query, with ownership checked from the authenticated session, beats `run_sql(query)` plus a prompt rule.",
+        "**Restrict in configuration, not prose.** MCP connector: `mcp_toolset` with `default_config: {enabled: false}` plus an allowlist in `configs` keeps vendor-added tools off. Claude Code: `tools` / `disallowedTools`.",
+        "**Audit with traces and evals.** Look for tools never called, tools called interchangeably, and tools called wrongly; prune, then re-run the eval suite to confirm nothing depended on what you removed."
+      ],
+      "traps": [
+        "A system-prompt rule (\"never use `send_email`\") instead of removing the tool: prompts are not a security boundary.",
+        "Moving to a bigger model so it can cope with 100+ tools, instead of shrinking the tool set.",
+        "Adding more granular tools \"for flexibility\", which adds overlap and selection errors.",
+        "Treating `allowedTools` as a restriction: unlisted tools are still available.",
+        "Over-correcting by exposing every CLI subcommand as its own tool, which recreates bloat in a different form."
+      ],
+      "docs": [
+        {
+          "title": "Writing effective tools for agents",
+          "url": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+        },
+        {
+          "title": "Tool search tool",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+        },
+        {
+          "title": "MCP connector",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector"
+        }
+      ],
+      "drill": "Take one agent you run (or a sample config). List every tool, map each to the tasks in its job description, and mark it keep, merge, remove, or gate behind approval. Note which tools touch untrusted input and which can act outside the system, then write the new `tools` / `mcp_toolset` config and the eval you would re-run."
+    },
+    {
+      "subskill": "P3.2",
+      "title": "Analyse authentication and authorisation for security gaps",
+      "summary": "The exam asks you to spot where identity, credentials and permissions are enforced in the wrong place, usually in the prompt or the model's arguments. The correct answers move enforcement into deterministic code and infrastructure: host-side credentials, authorisation checks from the authenticated session, scoped keys and roles, and the MCP authorisation rules.",
+      "keyPoints": [
+        "**Authorise in the tool handler.** Take the tenant or user from the authenticated session, not from a model-supplied parameter or a prompt rule; reject objects the caller does not own.",
+        "**Credentials stay host-side.** Never put API keys or OAuth tokens in prompts or messages; assume prompt contents can be extracted. The tool attaches the credential when it executes.",
+        "**Secrets management.** Store keys in a secret manager and inject them at runtime for the service identity; not in images, code or committed config. Use a distinct key per service and environment.",
+        "**Isolate environments** with a workspace per environment, workspace-scoped keys and workspace-level limits, so a staging load test cannot throttle production and spend is separable.",
+        "**Rotation and exposure.** Rotate by creating the new key, deploying it, then revoking the old one. On exposure, **revoke first**, then investigate usage.",
+        "**CI without static keys:** Workload Identity Federation exchanges the CI system's OIDC token for short-lived Claude API credentials.",
+        "**MCP authorisation:** remote (HTTP) servers use OAuth; servers must validate that tokens were issued for them (audience) and must not pass the client's token through to upstream APIs. Local Streamable HTTP servers should validate `Origin` and bind to localhost. Committed `.mcp.json` should reference `${ENV_VARS}`, not secrets.",
+        "**Cloud IAM and multi-tenant agents:** a dedicated role scoped to the models and resources the workload needs; per-tenant working directories, settings and memory scopes so nothing leaks across tenants."
+      ],
+      "traps": [
+        "Adding `tenant_id` to the tool schema: the model can still pass the wrong one; the check must come from the session.",
+        "Prompt instructions such as \"never reveal the key\" instead of removing the key.",
+        "Rewriting git history or making the repo private before revoking a leaked key.",
+        "One organisation-wide key \"to simplify rotation\".",
+        "Forwarding the MCP client's bearer token to an upstream API."
+      ],
+      "docs": [
+        {
+          "title": "MCP authorization specification",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization"
+        },
+        {
+          "title": "MCP security best practices",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices"
+        },
+        {
+          "title": "API errors and request IDs",
+          "url": "https://platform.claude.com/docs/en/api/errors"
+        }
+      ],
+      "drill": "Draw the request path for one agent action (user, app, model, tool, downstream API). At each hop write where identity comes from, which credential is used and who can see it. Mark every place where the model could choose an identity or see a secret, and redesign those hops."
+    },
+    {
+      "subskill": "P3.3",
+      "title": "Evaluate accuracy-latency trade-offs and justify configuration",
+      "summary": "Questions give you accuracy and latency numbers, a requirement, and several levers, and ask for the configuration you can justify. The exam rewards measuring candidates on the same eval, choosing the cheapest configuration that clears both bars, and using levers that cut the actual term dominating the wait, not reflexively downgrading the model.",
+      "keyPoints": [
+        "**Decompose the wait:** task time ≈ calls × time to first token + output tokens ÷ output speed + time outside the model (tools, network, retries). Fix the term that dominates.",
+        "**Know the measures:** time to first token, time to first *visible* output (later if the model thinks first), time to finish, and output tokens per second. Judge per completed task, not per request.",
+        "**Perceived vs actual:** streaming makes a reply feel faster but barely changes total generation time; it also keeps long requests from idling out.",
+        "**Free-ish levers first:** a tighter output shape (fewer output tokens), prompt caching (cuts time to first token on long prefixes; little effect on short prompts), executing parallel tool calls concurrently and returning them together, prefetching predictable lookups.",
+        "**Trading levers:** lower effort (fewer tokens and calls, some capability), a smaller tier (faster but may need more turns), fast mode (same model, higher output speed, premium price), thinking off where the model allows it (steepest quality risk).",
+        "**No win without evidence:** a change counts only when the eval shows quality held and a measurement in the same run shows latency fell; service speed drifts, so don't compare against last week's number.",
+        "**Justify per route:** pick the cheapest configuration that meets the accuracy bar and the latency SLA for each traffic type; batch work nobody waits on.",
+        "**Errors as latency:** 429 = your rate limit (cap concurrency, back off); 529 = service overload (back off with jitter, queue non-urgent work or fall back to another tier)."
+      ],
+      "traps": [
+        "Smallest model everywhere \"because latency\" without checking the accuracy bar.",
+        "Raising `max_tokens` to make responses faster; it is a ceiling, not a speed control.",
+        "Assuming prompt caching cuts latency for short, varying prompts.",
+        "Disabling parallel tool use or returning parallel results in separate messages, which serialises the loop.",
+        "Turning off streaming to \"save overhead\"."
+      ],
+      "docs": [
+        {
+          "title": "Reducing latency",
+          "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+        },
+        {
+          "title": "Fast mode",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/fast-mode"
+        },
+        {
+          "title": "Parallel tool use",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use"
+        }
+      ],
+      "drill": "Pick one workload and build a 3×3 grid (three tiers × three effort levels). For each cell record eval accuracy, p50/p90 time to finish and cost per completed task, all from one interleaved run. Circle the cheapest cell that meets your accuracy and latency targets and write a two-sentence justification."
+    },
+    {
+      "subskill": "P3.4",
+      "title": "Observability challenges and monitoring strategies at scale",
+      "summary": "The exam tests whether you can make an LLM system debuggable and measurable at production volume without leaking sensitive data. Expect questions on correlation IDs and request IDs, what to log per call, tracing multi-step agents, content capture versus privacy, sampling, quality monitoring beyond HTTP status, and using the right source of truth for cost.",
+      "keyPoints": [
+        "**Correlate everything:** generate a trace ID per user request, propagate it through retrieval, tool and model calls, and log each response's API request ID (the `request-id` header; `_request_id` in the Python SDK). W3C `traceparent` links your spans to the provider's.",
+        "**Per-call record:** model, `usage` (input, output, `cache_creation_input_tokens`, `cache_read_input_tokens`), `stop_reason`, time to first token and total latency, tool names and error flags.",
+        "**Signals that catch silent failures:** cache reads dropping to zero (a prefix invalidator such as a timestamp), `max_tokens` stop reasons rising (truncation), refusal rates, tool error rates, turns per task.",
+        "**HTTP 200 is not quality.** Sample production traffic and score it with an LLM-as-judge rubric calibrated against human review; alert on score drift by version.",
+        "**Agents need step-level traces.** Anthropic's multi-agent research post credits full production tracing with diagnosing why agents failed, and notes agents are stateful so errors compound.",
+        "**Privacy:** OpenTelemetry export for the Claude API defaults to **metadata only**; full prompt/response content is opt-in, and the backend then holds it under its own access and retention rules. Anthropic monitored agent decision patterns and interaction structure without reading conversation contents.",
+        "**Scale:** keep cheap metrics for 100% of traffic and full traces for errors, flagged or low-scored items plus a random sample. Traces are sampled or best-effort, so use the usage and cost reports, not traces, for billing and per-key spend.",
+        "**Claude Code fleets:** set `CLAUDE_CODE_ENABLE_TELEMETRY` and `OTEL_*` in managed settings; prompt text is redacted unless `OTEL_LOG_USER_PROMPTS=1`."
+      ],
+      "traps": [
+        "Dumping full prompts and responses into a shared log index \"for debugging\".",
+        "Logging only the question and final answer for a multi-step agent.",
+        "Building finance reports from sampled traces.",
+        "Monitoring only error rates and latency when the failure is answer quality.",
+        "Putting personal data into IDs or labels that are exported in every telemetry mode."
+      ],
+      "docs": [
+        {
+          "title": "How we built our multi-agent research system",
+          "url": "https://www.anthropic.com/engineering/multi-agent-research-system"
+        },
+        {
+          "title": "OpenTelemetry for the Claude API",
+          "url": "https://platform.claude.com/docs/en/manage-claude/opentelemetry"
+        },
+        {
+          "title": "Usage and Cost Analytics API",
+          "url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-analytics-api"
+        }
+      ],
+      "drill": "Write the telemetry schema for one Claude-backed endpoint: the fields recorded for every call, the extra fields kept only for sampled or failed calls, who can read each tier, and how long each is retained. Then list three alerts (for example cache-read ratio, `max_tokens` stop rate, judge score) with thresholds."
+    },
+    {
+      "subskill": "P3.5",
+      "title": "Design a RAG pipeline: chunking and indexing",
+      "summary": "This objective covers the ingestion side of retrieval: whether you need RAG at all, how to chunk, how to give chunks context, which embedding model and index to use, what metadata to store, and how to keep the index correct over time. Anthropic's contextual retrieval post supplies most of the testable numbers.",
+      "keyPoints": [
+        "**Maybe skip RAG.** If the knowledge base is under about **200,000 tokens (~500 pages)**, Anthropic suggests putting all of it in the prompt and using prompt caching.",
+        "**Pipeline:** parse → chunk (typically no more than a few hundred tokens) → add context → embed **and** build a BM25 index → store with metadata. Chunk boundaries, size and overlap all affect retrieval; chunk along document structure and tune on an eval.",
+        "**Contextual retrieval:** Claude writes 50–100 tokens of chunk-specific context from the whole document and prepends it before embedding and BM25 indexing. Top-20 retrieval failures fell **35%** (contextual embeddings), **49%** (plus contextual BM25) and **67%** (plus reranking).",
+        "**Make it affordable:** load each document once into a cached prefix and generate every chunk's context against it; Anthropic estimated a one-time ~$1.02 per million document tokens. Generic per-document summaries gave very limited gains.",
+        "**Embeddings:** Anthropic does not offer its own embedding model; its docs describe Voyage AI and advise assessing several vendors. Choose on domain fit, latency and customisation, measured on your own labelled queries. Use query vs document input types where the model supports them.",
+        "**One model per index:** vectors from different embedding models are not comparable. Changing models means re-embedding the corpus into a new index, validating it, then switching.",
+        "**Metadata at index time:** source, section, version/effective date, jurisdiction, tenant and access groups. These support filters, permission-aware retrieval, freshness and citations. On update, replace or retire the document's old chunks.",
+        "**Citations:** pass chunks as `document` blocks with `citations.enabled`. Plain text and PDF are chunked into sentences; custom content documents are not chunked further. `cited_text` doesn't count toward output tokens, and citations can't be combined with structured outputs (400)."
+      ],
+      "traps": [
+        "Building a vector database for a 90k-token handbook.",
+        "Raising top-K to compensate for context-free chunks.",
+        "Prepending the same document summary to every chunk and calling it contextual retrieval.",
+        "Mixing vectors from two embedding models in one index.",
+        "Enforcing document permissions with a prompt instruction instead of a retrieval filter."
+      ],
+      "code": {
+        "lang": "python",
+        "src": "# Contextualise each chunk against a cached copy of its document\nfor chunk in chunks:\n    resp = client.messages.create(\n        model=\"claude-haiku-5-5\", max_tokens=200,\n        system=[{\"type\": \"text\", \"text\": f\"<document>{doc}</document>\",\n                 \"cache_control\": {\"type\": \"ephemeral\"}}],\n        messages=[{\"role\": \"user\", \"content\":\n            f\"<chunk>{chunk}</chunk>\\nGive a short context situating this chunk \"\n            \"within the document to improve search retrieval. Answer only with the context.\"}])\n    ctx = resp.content[0].text\n    index(embed(ctx + \"\\n\" + chunk), bm25_text=ctx + \"\\n\" + chunk, meta=chunk.meta)"
+      },
+      "docs": [
+        {
+          "title": "Introducing Contextual Retrieval",
+          "url": "https://www.anthropic.com/engineering/contextual-retrieval"
+        },
+        {
+          "title": "Embeddings",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+        },
+        {
+          "title": "Citations",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/citations"
+        }
+      ],
+      "drill": "Take 20 pages of a real document set. Chunk it two ways (fixed 300 tokens vs structure-aware with overlap), add contextual prefixes to one variant, and write 15 questions with known answer passages. Measure recall@20 for each variant and note which change moved it most."
+    },
+    {
+      "subskill": "P3.6",
+      "title": "Match retrieval strategy to data shape and query pattern",
+      "summary": "Here the exam describes the data (prose, codes, tables, one long contract, many sources) and the questions people ask, and asks which retrieval approach fits. Correct answers combine lexical and semantic search for mixed queries, rerank, scope with metadata filters, use query tools for structured data, use long context or agentic search when single-shot top-K can't work, and diagnose retrieval separately from generation.",
+      "keyPoints": [
+        "**Exact identifiers** (error codes, part numbers, clause IDs) are where embeddings miss and **BM25** shines; Anthropic's example is an error code. Run both and merge with **rank fusion**, deduplicating results.",
+        "**Rerank:** retrieve wide, then rerank. Anthropic's setup retrieved the top 150 and passed the reranked top 20; reranking adds some latency and cost, so tune the candidate count against your budget.",
+        "**Top-K:** passing 20 chunks beat 5 or 10 in Anthropic's tests, but always confirm with your own evals.",
+        "**Structured data** (aggregates, rankings, joins) needs a query tool (read-only SQL/API) or code execution over an extract, not similarity search over rows.",
+        "**One long document** that fits the window and needs cross-clause reasoning: put it in context (document first, question last) and cache it for follow-ups.",
+        "**Multi-hop, multi-source questions:** give an agent search tools so it can query iteratively (just-in-time retrieval) instead of one top-K over the whole question.",
+        "**Scope with metadata filters** (country, tenant, product, effective date) known from the user or query, before ranking. Rewrite conversational follow-ups into standalone queries before retrieval.",
+        "**Long-context layout:** documents at the top and the query at the end can improve quality by up to 30%; wrap each document in tags with source metadata; ask for relevant quotes first. **Diagnose:** measure retrieval recall on labelled questions, then review answers where the right passage *was* retrieved."
+      ],
+      "traps": [
+        "A bigger embedding model to fix exact-code lookups.",
+        "Stuffing 150 unranked chunks into the prompt.",
+        "Embedding warehouse rows and expecting correct totals.",
+        "Prompting the model to discard out-of-scope chunks instead of filtering.",
+        "Changing the generator when retrieval recall is the real problem, or the reverse."
+      ],
+      "docs": [
+        {
+          "title": "Introducing Contextual Retrieval",
+          "url": "https://www.anthropic.com/engineering/contextual-retrieval"
+        },
+        {
+          "title": "Prompting best practices: long context",
+          "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+        },
+        {
+          "title": "Effective context engineering for AI agents",
+          "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+        }
+      ],
+      "drill": "List ten real questions your users ask. Tag each by query pattern (exact ID, semantic, aggregate, single long doc, multi-hop, conversational follow-up) and write the retrieval path you'd use for each tag. Check whether one pipeline really serves them all."
+    },
+    {
+      "subskill": "P3.7",
+      "title": "Select the integration mechanism: MCP, API/CLI, agent-to-agent",
+      "summary": "The exam asks which mechanism should connect Claude to a capability: a custom tool, an MCP server, a CLI, a server tool, or another agent. Choose by who needs the capability, where it runs, how it authenticates and how much you want to build and maintain.",
+      "keyPoints": [
+        "**Custom tool in `tools`** when one application needs an in-process function; run it in your loop or the SDK Tool Runner. No server needed.",
+        "**MCP server** when the same capability must serve several clients (Claude Code, Claude Desktop, claude.ai connectors, Agent SDK, Messages API MCP connector). Prefer a maintained existing server over writing your own.",
+        "**Transports:** stdio for a local process the client launches; Streamable HTTP over HTTPS with OAuth for a central, multi-user server. The older HTTP+SSE transport is superseded. claude.ai and the API MCP connector reach **remote** servers only.",
+        "**Primitives:** tools are model-controlled, resources are application-controlled context, prompts are user-invoked templates.",
+        "**CLI first in Claude Code:** if a system has a CLI that is installed and signed in, that is usually the easiest way in (Claude Code can read `--help`). Use MCP for systems without a CLI. Connected MCP servers add their tool names and instructions to context even when unused.",
+        "**Server tools** (web search, web fetch, code execution) run on Anthropic's infrastructure, so they're the least to build and maintain.",
+        "**Agent-to-agent:** within one system, delegate to subagents for context isolation and parallelism. Across team boundaries, treat the other agent as a service with a defined, typed interface (a tool or MCP server) and pass only the context it needs.",
+        "**Configuration hygiene:** project `.mcp.json` with `${ENV}` references for shared servers; managed settings to deny built-ins (for example `WebSearch`) when a compliant replacement exists."
+      ],
+      "traps": [
+        "Building a custom MCP server when a maintained one or an installed CLI already covers the need.",
+        "A public remote MCP server for a function only one backend uses.",
+        "stdio for a server shared by thousands of employees.",
+        "Pasting API references into CLAUDE.md so Claude hand-builds `curl` calls.",
+        "Expecting claude.ai or the API MCP connector to launch a local stdio server."
+      ],
+      "docs": [
+        {
+          "title": "Claude Code best practices",
+          "url": "https://code.claude.com/docs/en/best-practices"
+        },
+        {
+          "title": "Model Context Protocol: transports",
+          "url": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports"
+        },
+        {
+          "title": "MCP connector",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector"
+        }
+      ],
+      "drill": "For five integrations your team needs, fill in a table: who uses it, from which clients, where it runs, how it authenticates, and whether a CLI or maintained MCP server exists. Pick the mechanism for each and note the one you would revisit if a second client appears."
+    },
+    {
+      "subskill": "P3.8",
+      "title": "Progressive discovery vs monolithic context",
+      "summary": "This objective asks when to load everything up front and when to let the agent discover tools, instructions and data on demand. The exam rewards progressive discovery for large or mostly-unused catalogues (tool search, Skills, just-in-time file access), and monolithic context for small, always-needed, stable content, with mandatory rules kept in always-on context or code.",
+      "keyPoints": [
+        "**Monolithic:** everything in the prompt. It's simple, predictable and cacheable, but it bloats context and distracts the model as content grows.",
+        "**Tool search:** send every definition, mark most `defer_loading: true`; Claude searches (regex or BM25) and loads matches (5 by default). Keep the **3–5 most-used tools non-deferred**; never defer the search tool, and at least one tool must stay non-deferred (else 400). Typical saving is over 85% of definition tokens.",
+        "**When to use it:** 10+ tools, definitions over 10k tokens, accuracy dropping as tools are added, many MCP servers. **Skip it** for fewer than 10 tools, or when every tool is used on every request.",
+        "**Caching:** discovered definitions are appended, so the cached prefix survives; rebuilding the `tools` array per turn breaks the cache. A deferred tool cannot carry `cache_control` (400).",
+        "**Discovery quality:** namespace tool names, use keyword-rich descriptions, list the available tool categories in the system prompt, or return `tool_reference` blocks from a custom (for example embedding-based) search tool.",
+        "**Skills:** about 100 tokens of metadata per Skill always loaded; the `SKILL.md` body (under 5k tokens) loads when triggered; bundled files load only when read, and script code never enters context, only its output.",
+        "**Just-in-time data:** keep lightweight references (paths, IDs) and let the agent fetch with search/read tools; hybrid setups preload a small briefing (like CLAUDE.md) and fetch the rest.",
+        "**Keep mandatory content always on:** rules that must apply to every response belong in the system prompt, or better, in deterministic code. A Skill loads only when the model judges it relevant."
+      ],
+      "traps": [
+        "Deferring everything, including the search tool.",
+        "Adding tool search to a six-tool agent \"for best practice\".",
+        "Moving an always-relevant rulebook behind retrieval, where the agent may not know to look it up.",
+        "Rebuilding the tool list per turn with a classifier and losing the cache.",
+        "Putting a mandatory compliance rule in an on-demand Skill."
+      ],
+      "docs": [
+        {
+          "title": "Tool search tool",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+        },
+        {
+          "title": "Agent Skills overview",
+          "url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview"
+        },
+        {
+          "title": "Effective context engineering for AI agents",
+          "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+        }
+      ],
+      "drill": "Inventory everything one agent loads before the first user message: tool definitions, system prompt sections, reference text. Estimate tokens for each and how often each is used. Mark each item as keep up front, defer (tool search), move to a Skill, fetch just in time, or enforce in code."
+    }
+  ],
+  "questions": [
+    {
+      "id": "P3-1-001",
+      "subskill": "P3.1",
+      "difficulty": 2,
+      "stem": "A law firm's email-triage agent reads inbound emails from clients and third parties, labels them, and drafts replies for paralegals to review. It is connected to the firm's mail MCP server with all 22 tools enabled, including `send_email`, `forward_email` and `delete_thread`. In a red-team test, an email with hidden instructions got the agent to forward a privileged thread to an outside address. What should the architect do FIRST?",
+      "select": 1,
+      "options": [
+        "Add a system-prompt rule that instructions inside email bodies must never be followed, and repeat that rule after each email is inserted into the context",
+        "Add an output classifier that scans every outgoing message for privileged-document markers before the mail server is allowed to deliver it",
+        "Enable only the tools the triage role needs (read, label, create draft), so sending stays with the paralegal who reviews each draft",
+        "Move the agent to the most capable model tier, which is more resistant to instructions hidden in untrusted content such as email bodies"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A prompt rule is not a security boundary; injected text can still persuade the model, and the forward tool remains available to act on it.",
+        "A classifier is a compensating control that can miss content; the root cause is that an agent reading untrusted input holds tools that can send data out.",
+        "Correct. The triage job never needs send, forward or delete. Removing them in the toolset configuration removes the exfiltration path, and the human who sends the draft is the approval step.",
+        "Stronger models resist injection better but not reliably; the agent would still hold the capability the attack used."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/mcp-connector"
+    },
+    {
+      "id": "P3-1-002",
+      "subskill": "P3.1",
+      "difficulty": 2,
+      "stem": "A retailer's customer-service agent has 31 tools from four internal MCP servers. A 30-day trace review shows that `find_customer` (CRM server) and `lookup_client` (loyalty server) return overlapping data and the agent alternates between them unpredictably, and that six tools were never called. Which TWO changes BEST reduce capability bloat while protecting answer quality? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Consolidate the overlapping customer lookups into one tool with a clear name and description, and retire the other from this agent",
+        "Add `get_customer_by_email`, `get_customer_by_phone` and `get_customer_by_id` so that the agent always has an exact-match lookup available",
+        "Keep all 31 tools but add a paragraph per tool to the system prompt that explains when to prefer each one over the similar ones",
+        "Remove the never-called tools from this agent's configuration, then re-run the evaluation suite to confirm no task depended on them",
+        "Raise the model's effort level so that it reasons for longer about which of the similar-looking tools is the right one to call"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Overlapping tools with similar purposes confuse selection; Anthropic's tool-writing guidance favours fewer, clearly distinct tools.",
+        "More granular near-duplicates add to the overlap problem and the token cost of definitions.",
+        "Prose about 31 tools costs more tokens and leaves the overlap in place; it treats the symptom.",
+        "Correct. Unused tools cost context on every request and add choices; pruning them and re-running evals confirms the change is safe.",
+        "More reasoning may help slightly but leaves duplicate and unused tools in the agent's context on every request."
+      ],
+      "ref": "https://www.anthropic.com/engineering/writing-tools-for-agents"
+    },
+    {
+      "id": "P3-1-003",
+      "subskill": "P3.1",
+      "difficulty": 3,
+      "stem": "A fintech's operations agent runs in the company's own harness with a single `bash` tool on a host where the payments CLI is installed. Compliance now requires that every refund above $500 is approved by a human and recorded with its amount, account and reason in an audit log. Engineers propose detecting refund commands by parsing the bash command strings with regular expressions. What is the BEST design?",
+      "select": 1,
+      "options": [
+        "Keep the single bash tool and add a system-prompt rule that the agent must announce any refund above $500 to the user before running it",
+        "Promote refunds to a dedicated `issue_refund` tool with typed fields that the harness can gate and audit; keep bash for low-risk work",
+        "Keep bash and parse commands with regular expressions as proposed, adding new patterns to the parser whenever the payments CLI's syntax changes",
+        "Remove bash entirely and expose every payments CLI subcommand as its own dedicated tool, so that all actions are typed and auditable"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Announcing is not approval, and nothing enforces the rule; the harness still sees only an opaque command string.",
+        "Correct. A dedicated tool gives the harness typed amount, account and reason values to gate on and log; bash keeps its breadth for actions that need no gate.",
+        "Regex over shell strings is brittle (aliases, scripts, flag order) and easy to bypass, so it cannot be the control compliance relies on.",
+        "This over-corrects: dozens of new tools add selection errors and definition tokens when only one action needs a gate."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview"
+    },
+    {
+      "id": "P3-3-001",
+      "subskill": "P3.3",
+      "difficulty": 2,
+      "stem": "An insurer's claims-intake assistant classifies first-notice-of-loss messages and extracts 12 fields. On a 400-item labelled eval, the current configuration (largest model tier, high effort) scores 96% field accuracy with a p90 time to finish of 11 s. The live intake form requires at least 94% accuracy and p90 under 4 s. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Switch to the smallest model tier at its default settings, since extraction is a simple task and the speed gain is guaranteed to hold",
+        "Keep the current configuration and raise `max_tokens` so that responses never need a retry, which removes the slow tail of the distribution",
+        "Keep the configuration and ask the business to relax the 4 s target, since accuracy matters more than speed for insurance claims",
+        "Sweep lower effort levels and smaller tiers on the same eval, timed in one run, and pick the cheapest one that clears both thresholds"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "It may be fast enough, but nobody has checked that it holds 94% accuracy; the decision needs measurement.",
+        "`max_tokens` is a ceiling, not a speed control; it does not shorten generation.",
+        "The SLA comes from the product requirement; candidates that might meet both bars haven't been tested yet.",
+        "Correct. Measuring each candidate's accuracy and latency on the same eval in one run gives a justified choice: the cheapest configuration that meets both requirements."
+      ],
+      "ref": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/reduce-latency"
+    },
+    {
+      "id": "P3-3-002",
+      "subskill": "P3.3",
+      "difficulty": 2,
+      "stem": "A legal-research product generates 2,500-token memos with the top Opus-tier model. Customers on a premium plan accept the quality but complain that memos take too long to finish. Responses already stream, the prompt prefix is cached, and evals show a smaller tier drops citation accuracy below the contractual bar. Fast mode is available for the current model. Which change BEST cuts time to finish while keeping the same model's quality?",
+      "select": 1,
+      "options": [
+        "Evaluate fast mode on the current model, which raises output speed at a premium price, and price that into the plan",
+        "Route memos to the smaller tier and add a second pass in which the large model reviews and corrects every memo's citations",
+        "Turn off streaming so that the full memo arrives as a single response, which removes the per-token transmission overhead",
+        "Lower `max_tokens` to 1,000 so generation stops sooner, and let users ask for a continuation whenever a memo is cut off"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Most of the wait is output generation; fast mode runs the same model at higher output speed for a higher price, so quality is unchanged and the premium plan can absorb the cost. Confirm the gain on this workload.",
+        "Two passes add a second model call, so the total time may rise, and the smaller tier's citation errors still have to be caught.",
+        "Streaming does not slow generation; turning it off only delays when users see text.",
+        "Truncating memos trades a contractual deliverable for speed and pushes the remaining wait into extra calls."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/fast-mode"
+    },
+    {
+      "id": "P3-3-003",
+      "subskill": "P3.3",
+      "difficulty": 3,
+      "stem": "A logistics company's dispatch agent takes about 40 s per task. Traces show 14 model calls per task. Most calls request two or three independent read-only lookups, but the harness runs them one after another and returns each result in its own user message. The first three lookups (shipment, carrier, weather at origin) are the same on every task. Accuracy on the eval is at target. Which TWO changes are MOST likely to cut task time without lowering accuracy? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Set `disable_parallel_tool_use: true` so each response requests a single lookup and the agent's reasoning stays sequential and easy to trace",
+        "Run the independent lookups from one response concurrently and return all of their results together in a single user message",
+        "Move the agent to the smallest model tier, since the work is mostly lookups and smaller tiers have the shortest time to first token",
+        "Raise `max_tokens` on every call so that the model never stops early and has to make an extra call to finish its plan",
+        "Run the three always-needed lookups before the first model call and include their results in the first user turn"
+      ],
+      "answer": [
+        1,
+        4
+      ],
+      "explanations": [
+        "This forces more sequential calls, adding time to first token for each one.",
+        "Correct. The parallel calls only save time if the harness executes them concurrently; returning all results in one message also keeps Claude making parallel calls.",
+        "A smaller tier may need more turns or lose accuracy; it has to be checked on the eval, unlike the two changes that leave the model unchanged.",
+        "Hitting `max_tokens` is not the problem shown in the traces, and the cap does not speed generation.",
+        "Correct. Prefetching predictable lookups removes calls from every task; check that the larger first turn doesn't hurt accuracy."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use"
+    },
+    {
+      "id": "P3-4-001",
+      "subskill": "P3.4",
+      "difficulty": 1,
+      "stem": "A bank's support assistant handles 50,000 conversations a day. When a customer disputes an answer, the support team gives engineering a timestamp, but engineering cannot match it to a specific Claude request or to the retrieval calls that fed it. Which change BEST fixes this?",
+      "select": 1,
+      "options": [
+        "Write every full prompt and response to the general application log so engineers can search the text for the customer's wording",
+        "Ask customers to attach a screenshot to each dispute so that engineers can find the right conversation by its visible content",
+        "Create a trace ID per conversation, pass it through the retrieval and model calls, and log each response's request ID against it",
+        "Add the customer's name and account number to the system prompt so the model repeats them in every answer for later search"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Full text in a general log raises privacy risk for banking data and still gives no reliable join between retrieval and model calls.",
+        "Screenshots are manual and do not identify the request or retrieval results behind the answer.",
+        "Correct. A propagated trace ID links every step of the conversation, and the API request ID identifies the exact model call, including for provider support.",
+        "This puts personal data into prompts and answers and still links nothing to the retrieval calls."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "P3-4-002",
+      "subskill": "P3.4",
+      "difficulty": 2,
+      "stem": "A hospital network wants OpenTelemetry traces from its clinical-documentation assistant in its observability vendor, to debug slow and failed requests. Prompts contain patient information. The tracing integration can export metadata only (IDs, timing, status, token counts) or full prompt and response content. What should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Export full content for all traffic, since the vendor is already approved for the hospital's operational logs and richer traces shorten debugging",
+        "Export metadata only by default; turn on full content only for a backend whose access and retention are confirmed fit for patient data",
+        "Disable tracing entirely and rely on clinicians reporting slow requests, since any telemetry from a clinical system is a privacy risk",
+        "Export full content but tell the model to replace patient names with initials in its responses, so that the exported traces are de-identified"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Approval for operational logs is not approval for patient data; full content would be stored under the vendor's own access and retention settings.",
+        "Correct. Metadata is enough to debug slow and failed requests. Content export is a separate decision that depends on the backend meeting the hospital's requirements.",
+        "This throws away the debugging capability the team needs when a privacy-safe option exists.",
+        "Prompts would still contain patient data, and asking the model to redact is not a reliable de-identification control."
+      ],
+      "ref": "https://platform.claude.com/docs/en/manage-claude/opentelemetry"
+    },
+    {
+      "id": "P3-4-003",
+      "subskill": "P3.4",
+      "difficulty": 2,
+      "stem": "After a release of a SaaS company's contract-review assistant, cost per request rose about fivefold and time to first token doubled, with no errors and unchanged quality scores. The 30,000-token system prompt and tool definitions were not edited, except that a line with the current date and time was added at the top of the system prompt. Which monitoring signal would have flagged this at deploy time, and what is the root cause?",
+      "select": 1,
+      "options": [
+        "`usage.cache_read_input_tokens` falling to near zero; the timestamp changes the prefix on every request, so the cache never hits",
+        "`stop_reason` shifting to `max_tokens`; the extra line pushes output past its limit, so responses are truncated and then retried",
+        "The HTTP 429 rate rising; the longer prompt exceeds the organisation's input-token rate limit, so the SDK keeps retrying",
+        "Output tokens per request rising; the model now writes the date into every answer, which raises the cost per request"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Caching is a prefix match; a value that changes on each request at the top invalidates everything after it. Tracking cache reads per release catches this immediately.",
+        "One line in the input does not affect output limits, and no truncation was reported.",
+        "No errors were seen, and a single line does not explain a fivefold cost rise.",
+        "A date in each answer adds a handful of tokens, not a fivefold cost increase and slower first tokens."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+      "id": "P3-4-004",
+      "subskill": "P3.4",
+      "difficulty": 2,
+      "stem": "A payments company is defining the default per-call telemetry record for every Claude request across 20 services. Records feed a shared log index that 300 engineers can query. Which THREE fields belong in that default record? (Select THREE.)",
+      "select": 3,
+      "options": [
+        "The API request ID and the calling service's own trace ID for the user request",
+        "The full prompt and response text, so any engineer can replay a whole conversation",
+        "The model ID, input and output tokens, and the cache read and cache write tokens",
+        "The API key used for the call, so that usage can be attributed to the right key",
+        "The customer's name and card number, so incidents can be traced to a customer quickly",
+        "Stop reason, tool names and error flags, time to first token and total latency"
+      ],
+      "answer": [
+        0,
+        2,
+        5
+      ],
+      "explanations": [
+        "Correct. These IDs let engineers join a call to its user request and to provider-side records.",
+        "Full payment conversations in a broadly readable index create a data-exposure risk; capture content only in an access-controlled tier if needed.",
+        "Correct. Model and token fields, including cache fields, explain cost and latency and expose cache regressions.",
+        "Secrets never belong in logs; attribute usage with the key's ID or the workspace instead.",
+        "Card data and names in a shared index violate data minimisation; use a pseudonymous customer reference if one is needed.",
+        "Correct. These show truncation, refusals, tool failures and where time goes."
+      ],
+      "ref": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+      "id": "P3-4-005",
+      "subskill": "P3.4",
+      "difficulty": 2,
+      "stem": "A research product's multi-agent system runs for 10–30 minutes per task. About 8% of tasks end with a thin report. The logs only record the user's question, the final report and total tokens, so the team cannot tell whether a subagent got stuck, a search returned nothing, or the coordinator discarded findings. What should the architect add FIRST?",
+      "select": 1,
+      "options": [
+        "A second coordinator that re-runs every task whose report falls below a length threshold, then keeps the longer of the two reports",
+        "A larger model for every subagent, since thin reports usually mean the subagents could not reason well enough about their search results",
+        "A feedback button on the report so that customers can flag thin reports, followed by a weekly manual review of the flagged tasks",
+        "Step-level tracing of each agent's delegation briefs, tool calls and results, errors and decisions, linked under one task trace"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Re-running doubles the cost and hides the failure instead of explaining it.",
+        "This guesses at a cause the team cannot yet see; it may not be the model at all.",
+        "Feedback flags symptoms later, but reviewers would still lack the step data needed to find the cause.",
+        "Correct. Anthropic credits full production tracing with diagnosing why its research agents failed. Agents are stateful and errors compound, so the step-level path is what reveals the cause."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "P3-4-006",
+      "subskill": "P3.4",
+      "difficulty": 3,
+      "stem": "An education platform's tutoring agent serves minors. The privacy office forbids engineers from reading conversation content in production, but the product team needs to know why session completion fell 12% after a model update. Which monitoring approach BEST satisfies both?",
+      "select": 1,
+      "options": [
+        "Grant two senior engineers break-glass access to read every transcript from the affected week, with each access logged and reviewed",
+        "Wait until enough teacher complaints arrive to reveal the failure pattern, since no conversation content may be inspected directly",
+        "Compare content-free signals by model version (tool-call sequences, turns per session, stop reasons, refusal rates) before and after",
+        "Send full transcripts to an external analytics vendor, which summarises the issues so that the engineers themselves never see raw text"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Bulk reading of minors' conversations conflicts with the privacy rule, even with access logging.",
+        "This leaves the regression unexplained and slow to fix when content-free analysis is possible.",
+        "Correct. Anthropic describes monitoring agent decision patterns and interaction structure without monitoring conversation contents; comparing these by version shows where behaviour changed.",
+        "Sharing minors' transcripts with another processor widens exposure instead of respecting the restriction."
+      ],
+      "ref": "https://www.anthropic.com/engineering/multi-agent-research-system"
+    },
+    {
+      "id": "P3-4-007",
+      "subskill": "P3.4",
+      "difficulty": 3,
+      "stem": "A media company's finance team wants exact monthly Claude spend per API key and per workspace, and wants to spot a leaked key quickly. The platform team proposes summing token counts from the OpenTelemetry traces it already collects, which are sampled at 10% and delivered on a best-effort basis. What should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Raise trace sampling to 100% so the summed token counts become exact, then build the finance report from the traces",
+        "Use the provider's usage and cost reporting for spend by key and workspace, and keep traces for debugging and latency",
+        "Multiply the sampled token totals by ten and add a 5% buffer, since sampling error averages out over a whole month",
+        "Ask each service team to log its own token counts in a shared spreadsheet at month-end for finance to reconcile"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Even unsampled, best-effort delivery can drop spans, and only instrumented callers appear, so a leaked key used elsewhere would be missed.",
+        "Correct. Usage and cost reports count every request by key and workspace, including ones with no spans; traces serve diagnosis.",
+        "Extrapolation cannot give exact spend and cannot reveal a leaked key's traffic.",
+        "Manual self-reporting is error-prone and blind to unauthorised use of a key."
+      ],
+      "ref": "https://platform.claude.com/docs/en/manage-claude/usage-cost-analytics-api"
+    },
+    {
+      "id": "P3-4-008",
+      "subskill": "P3.4",
+      "difficulty": 3,
+      "stem": "A telecom runs 3 million Claude-backed support turns a day. Storing full traces (including tool inputs and outputs) for every turn would cost more than the model calls, yet engineers need complete detail when something goes wrong. Which strategy BEST balances cost and diagnosability?",
+      "select": 1,
+      "options": [
+        "Keep lightweight metrics for every turn, plus full traces for errors, refusals and low-scored turns and a small random sample",
+        "Keep full traces for every turn but delete them after 24 hours, so that storage stays bounded while recent issues can still be debugged",
+        "Record nothing per turn and rebuild any failing conversation on demand by replaying the user's messages against the current model",
+        "Keep full traces for a 1% random sample only, since a large enough random sample captures every failure mode in proportion to its frequency"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Metrics on all traffic support alerting and trends; full detail is kept where it is most likely needed, plus a random sample for unbiased analysis.",
+        "This still pays to write every full trace, and issues found after a day can no longer be investigated.",
+        "Replays are not faithful: tool results, retrieved data and sampling differ, so the original failure may not recur.",
+        "Rare but severe failures are likely to fall outside a 1% sample; errors and flagged turns should always be kept."
+      ],
+      "ref": "https://platform.claude.com/docs/en/manage-claude/opentelemetry"
+    },
+    {
+      "id": "P3-5-001",
+      "subskill": "P3.5",
+      "difficulty": 1,
+      "stem": "A 40-person accounting firm wants an assistant that answers staff questions about its internal policy handbook. The handbook is about 90,000 tokens and changes a few times a year. A contractor has proposed a vector database, a chunking pipeline and an embedding service. What should the architect recommend?",
+      "select": 1,
+      "options": [
+        "Build the proposed pipeline, since retrieval is the standard architecture for any assistant that answers questions over documents",
+        "Put the whole handbook in the prompt with prompt caching, and revisit retrieval only if the corpus outgrows that approach",
+        "Fine-tune a model on the handbook so that the answers come from the model weights and no handbook context is needed",
+        "Split the handbook into ten sections and ask staff to choose the right section before they type their question"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Retrieval adds components to build and maintain and can miss relevant passages; it isn't needed for a corpus this small.",
+        "Correct. Anthropic suggests that a knowledge base under about 200,000 tokens can go entirely in the prompt, with prompt caching keeping repeated use fast and cheap.",
+        "Fine-tuning is costly, hard to update when the handbook changes, and gives no grounding in the actual text.",
+        "This moves retrieval work onto users, who may pick the wrong section, when the whole handbook fits in context."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-002",
+      "subskill": "P3.5",
+      "difficulty": 2,
+      "stem": "An asset manager indexes 10-K filings for an analyst assistant, embedding chunks of about 400 tokens as-is. When analysts ask 'What was Acme's revenue growth in Q2 2025?', they often get chunks from other companies' filings, because many chunks read like 'Revenue grew 3% over the previous quarter' and name neither company nor period. Which change BEST addresses the root cause?",
+      "select": 1,
+      "options": [
+        "Raise the number of retrieved chunks from 5 to 50 so the right company's chunk is more likely to appear among the results",
+        "Double the chunk size to 800 tokens so that more of the surrounding text is captured in each chunk's embedding",
+        "Tell the model in the generation prompt to ignore any retrieved chunk that does not name the company asked about",
+        "Have Claude write a short chunk-specific context from the full filing and prepend it before embedding and BM25 indexing"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "More chunks add noise and tokens; the chunks still lack the company and period, so ranking stays poor.",
+        "Larger chunks may still omit the company name and dilute the embedding, and they don't fix the missing context.",
+        "If the right chunk was never retrieved, discarding the wrong ones cannot produce a correct answer.",
+        "Correct. This is contextual retrieval: 50–100 tokens naming the company, filing and period make each chunk findable. Anthropic measured a 49% drop in top-20 retrieval failures when it was applied to both embeddings and BM25."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-003",
+      "subskill": "P3.5",
+      "difficulty": 2,
+      "stem": "A pharmaceutical company plans to apply contextual retrieval to 30,000 regulatory documents averaging 8,000 tokens, each split into about ten chunks. Finance objects that sending the full document once per chunk to generate context multiplies indexing input cost roughly tenfold. Which design BEST addresses the concern?",
+      "select": 1,
+      "options": [
+        "Write one summary per document and prepend that same summary to all of its chunks, so each document needs only one model call",
+        "Skip contextualisation and rely on a reranker, which recovers any missing chunk context at query time at no indexing cost at all",
+        "Put each document once in a cached prompt prefix and generate every chunk's context against it, so repeats bill as cache reads",
+        "Contextualise only the first chunk of each document, since later chunks usually repeat the context that the opening establishes"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Anthropic found generic document summaries gave very limited gains compared with chunk-specific context.",
+        "A reranker can only reorder chunks that were retrieved; it does not restore context missing from the index, and it adds per-query cost.",
+        "Correct. Anthropic used prompt caching so each document is loaded once and referenced for every chunk, estimating a one-time cost of about $1.02 per million document tokens.",
+        "Later chunks are exactly the ones that lose context; skipping them leaves the original failure in place."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-004",
+      "subskill": "P3.5",
+      "difficulty": 2,
+      "stem": "A public-sector agency's benefits assistant splits policy manuals into fixed 300-token chunks with no overlap. Evaluation shows many wrong answers come from chunks that separate an eligibility rule from its exceptions in the next paragraph, and from tables split across two chunks. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Chunk along the document's structure (sections, rules with their exceptions, whole tables) instead of at fixed token counts",
+        "Raise retrieval from top-5 to top-100 chunks so that both halves of each split rule are usually present in the context",
+        "Embed each full manual as a single vector so that no eligibility rule is ever separated from its listed exceptions",
+        "Add a modest overlap between adjacent chunks, then re-run the retrieval eval to tune chunk size and overlap together",
+        "Tell the model in the system prompt to assume exceptions may exist whenever a retrieved rule looks incomplete"
+      ],
+      "answer": [
+        0,
+        3
+      ],
+      "explanations": [
+        "Correct. Boundaries that follow the document's structure keep rules, exceptions and tables together.",
+        "This floods the prompt with mostly irrelevant chunks and still doesn't guarantee both halves are retrieved.",
+        "One vector per manual makes retrieval far too coarse to find specific rules.",
+        "Correct. Overlap reduces breaks at boundaries; Anthropic notes chunk size, boundaries and overlap all affect retrieval, so tune them on an eval.",
+        "Guessing about missing exceptions makes answers vaguer and less trustworthy; the retrieval defect remains."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-005",
+      "subskill": "P3.5",
+      "difficulty": 2,
+      "stem": "An insurance carrier's underwriting assistant retrieves from 12 years of underwriting guidelines. Guidelines are reissued every year, and old versions stay in the index for audit reasons. Underwriters report answers that quote superseded rules, and many questions concern a specific state. Which indexing change BEST fixes this?",
+      "select": 1,
+      "options": [
+        "Add a system-prompt instruction to prefer the most recent rule whenever the retrieved chunks conflict with one another",
+        "Store state, effective-date and status metadata on each chunk, and filter to in-force versions for that state before ranking",
+        "Delete all superseded guidelines from every system, including the audit archive, so the index holds only current rules",
+        "Re-embed the corpus with a larger embedding model that separates current guidelines from superseded ones more clearly"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "If only superseded chunks are retrieved there is no conflict to resolve, and dates may not appear in chunk text.",
+        "Correct. Version and jurisdiction are known facts, so filtering on stored metadata excludes superseded and out-of-state rules deterministically while the archive stays intact.",
+        "Audit needs the history; the fix is to exclude old versions from live answers, not destroy them.",
+        "Embeddings capture meaning, not validity dates; near-identical yearly versions will still look alike."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-006",
+      "subskill": "P3.5",
+      "difficulty": 3,
+      "stem": "A consulting firm is building an internal assistant over 2 million documents from client engagements. Engagement teams may see only their own clients' material. The prototype retrieves the top 20 chunks across the whole index and tells the model to 'only use documents the user is allowed to see', passing the user's team list in the prompt. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Store each document's access groups on its chunks and filter retrieval by the signed-in user's groups before Claude sees anything",
+        "Keep the prompt rule and add an output classifier that blocks any answer mentioning client names outside the user's own engagements",
+        "Build a separate vector index per user, copying in every document that user can access, and rebuild every index each night",
+        "Move the access rule to the top of the system prompt and repeat it after the retrieved chunks so the model weighs it more"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Authorisation belongs in deterministic retrieval code tied to the authenticated identity; unauthorised content never enters the context.",
+        "Restricted content still reaches the model, and a classifier can miss paraphrased leaks.",
+        "This enforces access but duplicates the corpus per user and leaves permissions up to a day stale; metadata filtering does the same on one index.",
+        "A prompt is not an access control; the restricted chunks are already in the model's context."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-007",
+      "subskill": "P3.5",
+      "difficulty": 1,
+      "stem": "A SaaS company switched its help-centre RAG to a newer embedding model. To save cost, only articles created after the switch were embedded with the new model; existing vectors were kept, and queries are now embedded with the new model. Retrieval for older articles collapsed. What should the team do?",
+      "select": 1,
+      "options": [
+        "Embed each query with both models and average the two vectors, so that it matches old and new articles equally well",
+        "Lower the similarity threshold for older articles so that they are still returned even when their scores are lower",
+        "Re-embed the whole corpus with the new model into a new index, validate it on the retrieval eval, then switch queries",
+        "Add older article titles to the system prompt so that the model can answer questions about them without any retrieval"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Vectors from different models live in different spaces; averaging them produces a vector meaningful in neither.",
+        "Scores between a new-model query and old-model vectors are not meaningful, so a lower threshold returns noise.",
+        "Correct. Queries and documents must be embedded by the same model; re-indexing the corpus and validating before cut-over restores comparability safely.",
+        "Titles alone don't contain the answers, and this sidesteps rather than fixes the broken index."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    },
+    {
+      "id": "P3-5-008",
+      "subskill": "P3.5",
+      "difficulty": 2,
+      "stem": "A law firm is choosing an embedding model for retrieval over contracts and case law. One vendor tops a public general-purpose leaderboard; another offers a legal-domain model. Anthropic does not offer its own embedding model. Which TWO steps BEST support the decision? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Pick the leaderboard leader, since public benchmark rank reliably predicts retrieval performance in any domain",
+        "Build a labelled set of real lawyer queries with known relevant passages and compare recall at the pipeline's top-K",
+        "Include the legal-domain model among the candidates and weigh retrieval quality against latency and cost at volume",
+        "Embed the documents with a Claude model, since one vendor for generation and embeddings keeps the vectors aligned",
+        "Choose the model with the largest embedding dimension, since more dimensions always produce better retrieval quality"
+      ],
+      "answer": [
+        1,
+        2
+      ],
+      "explanations": [
+        "General benchmarks may not reflect legal vocabulary or the firm's query patterns.",
+        "Correct. Measuring recall on the firm's own queries is the evidence the choice should rest on.",
+        "Correct. Anthropic's embeddings guide lists domain specificity, inference performance and customisation as selection factors.",
+        "Anthropic does not offer an embedding model, and generation and retrieval models don't need to share a vendor.",
+        "Dimension is a storage and speed trade-off; it does not guarantee better retrieval."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    },
+    {
+      "id": "P3-5-009",
+      "subskill": "P3.5",
+      "difficulty": 3,
+      "stem": "A manufacturer's maintenance assistant indexes equipment manuals. To give chunks context cheaply, the team prepends the same 150-token summary of each manual to every chunk from that manual. Retrieval improved only slightly. According to Anthropic's contextual retrieval findings, which change is MOST likely to improve retrieval further?",
+      "select": 1,
+      "options": [
+        "Lengthen the shared summary to about 600 tokens so that it covers more of each manual's subsystems and procedures",
+        "Index only the per-manual summaries instead of the chunks, and fetch the whole manual whenever its summary matches",
+        "Remove the summaries and raise the chunk size until each chunk holds an entire chapter of the equipment manual",
+        "Replace the shared summary with a short context generated for each chunk that situates it within the manual"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "A longer generic summary is still the same for every chunk, so it doesn't distinguish one chunk from another.",
+        "Anthropic reports that summary-based indexing performed poorly.",
+        "Chapter-sized chunks dilute embeddings and pass much more irrelevant text to the model.",
+        "Correct. Anthropic found generic document summaries gave very limited gains, while chunk-specific context cut retrieval failures substantially."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-5-010",
+      "subskill": "P3.5",
+      "difficulty": 2,
+      "stem": "A health insurer's member-benefits assistant must show, for each claim in an answer, the exact passage from the retrieved plan documents that supports it. Today the prompt asks Claude to quote its sources, and auditors sometimes find quotes that do not appear verbatim in any document. Which change BEST meets the requirement?",
+      "select": 1,
+      "options": [
+        "Return each answer as JSON with a `quote` field per claim using structured outputs, and keep the existing prompt instruction",
+        "Pass each retrieved chunk as a document block with citations enabled, and show the returned cited text and its location",
+        "Lower the sampling temperature so that quoted passages are reproduced more faithfully from the retrieved documents",
+        "Add a second model call asking Claude to confirm each quote is accurate before the answer is shown to the member"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Structured outputs guarantee the JSON shape, not that the quote text exists in a source; citations also can't be combined with structured outputs.",
+        "Correct. The citations feature extracts `cited_text` from the provided documents, so every citation points to a real passage, and `cited_text` doesn't count toward output tokens.",
+        "Sampling settings don't guarantee verbatim quotes.",
+        "A model checking a model is still probabilistic and adds latency; the citations feature solves this structurally."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/citations"
+    },
+    {
+      "id": "P3-6-001",
+      "subskill": "P3.6",
+      "difficulty": 1,
+      "stem": "An industrial-equipment company's support assistant uses embedding search over service bulletins. Technicians who search for exact fault codes such as 'E-4471' or part numbers often get bulletins about similar-sounding faults instead of the one that names the code. What is the BEST retrieval change?",
+      "select": 1,
+      "options": [
+        "Switch to a larger embedding model, which will represent fault codes and part numbers more precisely",
+        "Ask technicians to describe the symptom in words instead of typing the fault code into the search",
+        "Add a BM25 keyword index next to the embeddings and merge both result lists with rank fusion",
+        "Raise top-K from 10 to 100 so the bulletin that names the code is more likely to appear somewhere"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Embeddings capture meaning and often miss exact identifiers whatever the model size.",
+        "This discards the most precise signal the technician has.",
+        "Correct. BM25 matches exact terms such as codes; Anthropic's contextual retrieval post uses an error code as the example and combines both rankings with rank fusion.",
+        "The right bulletin may still rank poorly, and the extra chunks add noise and cost."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-6-002",
+      "subskill": "P3.6",
+      "difficulty": 2,
+      "stem": "A bank's policy assistant passes the top 10 chunks from hybrid search to Claude. Offline analysis shows the correct chunk is in the top 150 candidates for 97% of questions but in the top 10 for only 78%. The latency budget allows about 300 ms more per query. Which change BEST improves answer quality?",
+      "select": 1,
+      "options": [
+        "Retrieve about 150 candidates, rerank them with a reranking model, and pass the top 20 to Claude",
+        "Pass all 150 candidates to Claude, since a large context lets the model find the right chunk on its own",
+        "Re-chunk the corpus into much smaller pieces so that more distinct chunks fit within the top 10 results",
+        "Move generation to the largest model tier so that it answers better from the 10 chunks it receives"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. Recall is fine but ranking is weak. Anthropic's setup retrieved 150 candidates and passed the reranked top 20; confirm the reranker's added latency fits the 300 ms budget.",
+        "150 chunks per request raise cost and latency and bury the relevant passage in noise.",
+        "Smaller chunks don't fix ranking and can strip context from each chunk.",
+        "When the right chunk isn't in the top 10 for 22% of questions, no generator can answer those correctly."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-6-003",
+      "subskill": "P3.6",
+      "difficulty": 2,
+      "stem": "A retail chain wants its analyst assistant to answer questions such as 'Which five stores had the largest drop in weekly sales versus last year?' The data is in a 40-million-row sales warehouse table. A prototype embeds each row as text and retrieves the 50 most similar rows. Answers are often wrong. What should the architect change?",
+      "select": 1,
+      "options": [
+        "Embed weekly aggregates instead of individual rows so that fewer, richer chunks are retrieved for each question",
+        "Raise top-K to 5,000 rows and use the large context window so the model sees enough data to compute the rankings",
+        "Add a reranker so that the 50 rows passed to the model are the most relevant ones for each analyst question",
+        "Give Claude a read-only query tool over the warehouse, or code execution over an extract, to compute the answer"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Pre-aggregation helps only the questions it anticipated, and similarity search still can't rank or compare stores.",
+        "A sample of rows still can't produce correct totals over 40 million rows, and the cost would be large.",
+        "Better ordering of 50 rows doesn't change the fact that the answer needs aggregation over all rows.",
+        "Correct. Aggregates and rankings over structured data are computations; a narrow read-only query tool or code execution produces exact results."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool"
+    },
+    {
+      "id": "P3-6-004",
+      "subskill": "P3.6",
+      "difficulty": 3,
+      "stem": "A procurement team asks questions such as 'Which suppliers that failed a quality audit in 2025 have contracts renewing in the next 90 days, and what remediation did they commit to?' The answer spans audit reports, a contract register and email threads. A single top-20 retrieval on the whole question returns fragments from only one source. Which approach BEST fits this query pattern?",
+      "select": 1,
+      "options": [
+        "Raise top-K to 200 on the single retrieval call so that fragments from all three sources are likely to be included",
+        "Give an agent search tools over each source so it can run successive targeted queries, each shaped by earlier results",
+        "Merge the three sources into one index with larger chunks so that a single query can reach across all of them",
+        "Precompute an answer for every supplier each night and retrieve the matching precomputed answer at query time"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "The question is multi-hop: the second lookup depends on the first result, which a bigger single retrieval can't do.",
+        "Correct. Just-in-time, agentic retrieval lets the agent find failed suppliers, then check their contracts, then find remediation emails.",
+        "Merging indexes doesn't create the joins the question needs, and larger chunks blur retrieval.",
+        "Precomputing works only for questions anticipated in advance and goes stale."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "P3-6-005",
+      "subskill": "P3.6",
+      "difficulty": 1,
+      "stem": "A telecom's support chatbot retrieves knowledge-base articles using the customer's latest message as the search query. Follow-ups such as 'and what about for the business plan?' or 'does that apply abroad?' retrieve unrelated articles, although first questions work well. What is the BEST fix?",
+      "select": 1,
+      "options": [
+        "Use the entire conversation transcript, concatenated, as the retrieval query on every turn",
+        "Retrieve only on the first turn and reuse those same articles for the rest of the conversation",
+        "Rewrite each follow-up into a standalone query using the conversation, then retrieve with it",
+        "Ask customers to restate their full question in every message so that each query stands alone"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A long transcript dilutes the query with earlier, unrelated topics.",
+        "Follow-ups often need different articles from the first question.",
+        "Correct. A standalone query carries the missing context (which plan, which feature) into retrieval; check it on recorded conversations.",
+        "This pushes the system's problem onto customers and hurts the experience."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-6-006",
+      "subskill": "P3.6",
+      "difficulty": 2,
+      "stem": "A real-estate investment firm wants Claude to analyse one 250-page lease (about 140,000 tokens) at a time and answer questions such as whether any clause, read together with its amendments, restricts subletting. The RAG prototype retrieves eight chunks and misses interactions between distant clauses. Which approach BEST fits?",
+      "select": 1,
+      "options": [
+        "Put the whole lease in the prompt, document first and question last, and cache it for follow-up questions on that lease",
+        "Shrink chunks to 100 tokens so the retriever can fit more of the relevant clauses within its eight retrieved chunks",
+        "Summarise each page into two sentences and send only those summaries, which keeps every request small and cheap",
+        "Raise top-K to 30 chunks and add a reranker so that more clauses about subletting are included in each request"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. The lease fits in the context window, and the task needs reasoning across distant clauses. Long documents at the top with the question at the end improve quality, and caching makes follow-ups cheap.",
+        "Tiny chunks lose context and still can't guarantee every interacting clause is retrieved.",
+        "Summaries drop the exact wording that legal interpretation depends on.",
+        "More chunks help, but clauses that interact without mentioning subletting can still be missed."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "P3-6-007",
+      "subskill": "P3.6",
+      "difficulty": 2,
+      "stem": "A university's research-office assistant passes 20 retrieved grant-policy chunks to Claude. The prompt puts the user's question and instructions first, then pastes the chunks as one block of plain text with no sources. Answers often miss relevant chunks and cannot say which policy they came from. Which TWO changes BEST follow Anthropic's long-context prompting guidance? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Merge the 20 chunks into one condensed summary paragraph before inserting it, so that the prompt is shorter",
+        "Place the retrieved chunks first and put the question and instructions at the end of the prompt",
+        "Strip document titles and dates from the chunks to save tokens for more retrieved policy text",
+        "Wrap each chunk in its own document tags, with source and date metadata in subtags",
+        "Shuffle the chunk order on each request so that the model does not favour the chunks that come first"
+      ],
+      "answer": [
+        1,
+        3
+      ],
+      "explanations": [
+        "A merged summary loses wording and source boundaries, so answers become harder to ground and impossible to attribute.",
+        "Correct. Anthropic's guidance puts long-form data at the top and the query at the end, which can improve response quality by up to 30% in tests.",
+        "Removing metadata stops the model from attributing answers to policies.",
+        "Correct. Per-document tags with source metadata help the model separate and cite sources.",
+        "Random order adds variance without addressing structure or attribution."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+      "id": "P3-6-008",
+      "subskill": "P3.6",
+      "difficulty": 3,
+      "stem": "An energy company's engineering assistant retrieves from 8,000 slide decks and scanned inspection reports. Many answers depend on charts, diagrams and tables that are images inside the files, but the pipeline extracts only the text layer and embeds it. Which change BEST addresses the failure?",
+      "select": 1,
+      "options": [
+        "Increase the chunk overlap so that captions near each image are always included with the surrounding text",
+        "Instruct the model to tell the user to 'see the original chart' whenever a question appears to concern a chart, diagram or table",
+        "Switch to a larger text embedding model, which can infer the content of figures from their captions alone",
+        "Embed pages with a multimodal model or describe visuals at ingestion, and send retrieved page images to Claude"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Captions rarely contain the values in a chart, and scanned pages may have no text layer at all.",
+        "This admits the gap rather than closing it.",
+        "No text model can recover information that was never extracted from the images.",
+        "Correct. Retrieval has to see the visual content (multimodal embeddings or text descriptions), and Claude can read the retrieved page images directly."
+      ],
+      "ref": "https://platform.claude.com/docs/en/build-with-claude/embeddings"
+    },
+    {
+      "id": "P3-6-009",
+      "subskill": "P3.6",
+      "difficulty": 2,
+      "stem": "A government tax-guidance assistant scores 71% on its answer-quality eval. The team disagrees about whether to change the retriever or the generation prompt. Which TWO analyses BEST locate the problem? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Measure retrieval recall: for each eval question, check whether the labelled supporting passage was in the chunks passed to Claude",
+        "Swap in the largest model tier and compare scores, since a jump would prove that retrieval is not the problem",
+        "Count the average tokens per answer, since short answers indicate that retrieval failed to return content",
+        "Rewrite the generation prompt and keep whichever version scores higher, since the prompt is cheaper to change",
+        "For failures where the supporting passage was retrieved, review how the answer used it to find generation errors"
+      ],
+      "answer": [
+        0,
+        4
+      ],
+      "explanations": [
+        "Correct. Recall on labelled questions shows how many failures start with a retrieval miss.",
+        "A score change wouldn't separate the two stages and spends money without diagnosing anything.",
+        "Answer length is a weak proxy unrelated to whether the right passage was retrieved.",
+        "Changing a component before locating the fault may optimise the wrong stage.",
+        "Correct. Failures with the right passage in context point to the generation step (prompt, layout, model)."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-6-010",
+      "subskill": "P3.6",
+      "difficulty": 1,
+      "stem": "A multinational's HR assistant answers policy questions for employees in 30 countries. Policies for different countries are worded almost identically, and retrieval often returns another country's leave policy. Each employee's country is known from their profile. What is the BEST retrieval strategy?",
+      "select": 1,
+      "options": [
+        "Add the employee's country to the query text so that the embedding leans towards that country's policies",
+        "Filter by the employee's country (plus global policies) using chunk metadata, before ranking the results",
+        "Retrieve the top 50 across all countries and ask Claude to discard any chunks from other countries",
+        "Train a separate embedding model for each country so that each country's policies cluster apart"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Near-identical wording means the country term barely shifts the ranking.",
+        "Correct. When the scope is known, a metadata filter excludes other countries deterministically, and similarity ranking then works within the right set.",
+        "The prompt fills with irrelevant chunks, and the right one may not be among the 50.",
+        "Thirty custom models are costly to build and maintain, and a filter solves this directly."
+      ],
+      "ref": "https://www.anthropic.com/engineering/contextual-retrieval"
+    },
+    {
+      "id": "P3-7-001",
+      "subskill": "P3.7",
+      "difficulty": 1,
+      "stem": "An e-commerce platform team wants engineers' Claude Code sessions to read and update tickets in its incident tracker. The tracker ships a well-documented CLI that every engineer already has installed and signed in. A developer proposes building and hosting a custom MCP server that wraps the same operations. What should the tech lead recommend first?",
+      "select": 1,
+      "options": [
+        "Build the MCP server as proposed, since MCP is the only supported way for Claude Code to reach an external system",
+        "Paste the tracker's REST API reference into CLAUDE.md so that Claude can build HTTP calls whenever it needs ticket data",
+        "Let Claude Code use the installed CLI through Bash (with `--help` if needed) and keep MCP for systems without a CLI",
+        "Export every open ticket to a JSON file in the repository each morning so that Claude can read tickets without any tool"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "Claude Code can run CLIs through Bash; a new server adds build, hosting and maintenance work, and its tool definitions take context even when unused.",
+        "Hand-built HTTP calls duplicate what the CLI already does, and the reference loads into every session.",
+        "Correct. Claude Code's guidance is that a system's CLI is usually the easiest way in, with MCP for systems that lack one; the CLI also reuses each engineer's existing sign-in.",
+        "A daily export is stale and read-only, so Claude can't update tickets."
+      ],
+      "ref": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+      "id": "P3-8-001",
+      "subskill": "P3.8",
+      "difficulty": 2,
+      "stem": "An accounting-software vendor's support agent has 35 procedure documents (refund handling, tax-form corrections, data migration and so on), totalling 140,000 tokens, pasted into the system prompt for every request. Most conversations need one procedure or none. Which change BEST reduces context load while keeping the procedures available?",
+      "select": 1,
+      "options": [
+        "Keep all of the procedures in the system prompt and turn on prompt caching so that the 140,000 tokens become cheap to resend",
+        "Package each procedure as a Skill, so only its name and description stay in context and the full text loads when a task matches",
+        "Condense each procedure into a single paragraph and keep those 35 paragraphs in the system prompt instead of the full text",
+        "Split the agent into 35 agents, one per procedure, and send every conversation to all 35 of them in parallel"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "Caching cuts cost and time to first token, but all 140,000 tokens still sit in context and can distract the model on every request.",
+        "Correct. Skills use progressive disclosure: roughly 100 tokens of metadata per Skill are always loaded, and the instructions enter context only when triggered.",
+        "Condensed procedures lose the step-by-step detail agents need to follow them correctly.",
+        "Fan-out to 35 agents multiplies cost and creates an aggregation problem for a task one agent can handle."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview"
+    },
+    {
+      "id": "P3-8-002",
+      "subskill": "P3.8",
+      "difficulty": 1,
+      "stem": "A logistics start-up's dispatch assistant has six small tools (under 1,500 tokens of definitions in total), and almost every request uses all six. An engineer proposes adding the tool search tool and deferring five of them 'to follow best practice for context efficiency'. What should the architect advise?",
+      "select": 1,
+      "options": [
+        "Adopt the change, since deferring tools always cuts tokens and improves tool selection, whatever the size of the tool catalogue",
+        "Adopt it, but defer all six tools and the tool search tool as well, so that the context starts out completely empty",
+        "Replace the six tools with one generic tool that takes an action name, so that only a single definition has to load",
+        "Keep all six loaded; deferral adds search round trips and suits large catalogues, not a few tools used every time"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Tool search pays off for large catalogues; here it would add a search before almost every call for negligible savings.",
+        "Deferring the search tool and every other tool is rejected by the API: at least one tool must stay non-deferred.",
+        "A generic action dispatcher weakens schemas and makes tool use harder to validate and audit.",
+        "Correct. Anthropic's docs say standard tool calling fits better with fewer than 10 tools, or when every tool is used on every request."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+    },
+    {
+      "id": "P3-8-003",
+      "subskill": "P3.8",
+      "difficulty": 3,
+      "stem": "A pharmacovigilance team's case-coding agent applies a 60,000-token coding rulebook to every case; any rule may be relevant to any case, and the rulebook changes quarterly. An architect proposes moving the rulebook behind a retrieval tool so that the agent fetches only the rules it thinks it needs. What is the BEST response?",
+      "select": 1,
+      "options": [
+        "Keep the rulebook in the prompt as a stable, cached prefix; retrieval risks missing rules the agent didn't know to look up",
+        "Adopt the retrieval tool, since progressive discovery is always preferable to loading large reference content into the prompt up front",
+        "Move the rulebook into a Skill so that it loads only when the agent decides that a case needs the coding rules",
+        "Split the rulebook between the system prompt and the user turns so that no single block exceeds 30,000 tokens"
+      ],
+      "answer": [
+        0
+      ],
+      "explanations": [
+        "Correct. When content is needed on every request, is stable and fits comfortably, loading it up front with prompt caching is cheaper per use and avoids discovery misses.",
+        "Progressive discovery suits large, mostly-unused content; here the agent cannot know which rules apply without reading them.",
+        "Every case needs the rulebook, so on-demand loading adds a step and the risk that it is skipped.",
+        "Splitting the text doesn't change how much context is used, and it complicates caching."
+      ],
+      "ref": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+      "id": "P3-8-004",
+      "subskill": "P3.8",
+      "difficulty": 3,
+      "stem": "An enterprise IT assistant has 220 tools from nine MCP servers. To save tokens, the harness runs a classifier before each turn and rebuilds the `tools` array with the 15 tools it predicts are relevant. Token use fell, but prompt-cache reads are near zero, and wrong-tool errors rise whenever the classifier misses a needed tool. Which change BEST addresses both problems?",
+      "select": 1,
+      "options": [
+        "Keep the classifier but have it select 60 tools per turn instead of 15, so that needed tools are missed less often",
+        "Send all 220 tools on every turn with a cache breakpoint after them, accepting the token cost in exchange for a stable cache",
+        "Send the full catalogue with most tools deferred plus the tool search tool, so Claude appends what it needs",
+        "Run the classifier once per conversation instead of every turn, and restart the conversation whenever a needed tool is missing"
+      ],
+      "answer": [
+        2
+      ],
+      "explanations": [
+        "A different tool set each turn still changes the prefix and breaks the cache, and misses remain possible.",
+        "This restores caching but brings back the context bloat and the selection errors seen with hundreds of tools.",
+        "Correct. With tool search, Claude finds tools itself, and discovered definitions are appended rather than swapped, which preserves the cached prefix.",
+        "Restarts lose conversation state and frustrate users; the classifier's misses are still the bottleneck."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+    },
+    {
+      "id": "P3-8-005",
+      "subskill": "P3.8",
+      "difficulty": 3,
+      "stem": "A bank's internal assistant uses the built-in BM25 tool search over 900 deferred tools. Logs show many misses: employees ask to 'freeze a card', but the tool is described as 'set payment instrument status to suspended'. Rewriting all 900 descriptions will take months. Which approach BEST improves discovery soon?",
+      "select": 1,
+      "options": [
+        "Remove tool search and load all 900 tool definitions so the model can read every description directly on each request",
+        "Implement a custom search tool based on embedding similarity that returns `tool_reference` blocks for matching deferred tools",
+        "Switch to the regex variant of tool search, which matches tool descriptions more loosely than BM25 does",
+        "Raise the number of tools returned per search to 200 so that the right tool is usually somewhere in the results"
+      ],
+      "answer": [
+        1
+      ],
+      "explanations": [
+        "900 definitions bring back context bloat and degrade selection well past the 30–50 tool range.",
+        "Correct. Anthropic documents custom tool search: return `tool_reference` blocks from your own tool, for example using embeddings, which match on meaning rather than exact words. Improve descriptions over time as well.",
+        "Regex is lexical too, so it won't connect 'freeze' with 'suspended'.",
+        "Loading 200 tools per search defeats deferral and hurts selection accuracy."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+    },
+    {
+      "id": "P3-8-006",
+      "subskill": "P3.8",
+      "difficulty": 2,
+      "stem": "A SaaS company's agent uses tool search over 300 deferred tools. Traces show that on 90% of requests the agent first searches for and loads the same three core tools (`get_account`, `search_tickets`, `add_note`), adding a round trip. It also sometimes fails to search for billing tools at all, because it does not know they exist. Which TWO changes BEST address this? (Select TWO.)",
+      "select": 2,
+      "options": [
+        "Mark the three core tools as non-deferred so that they are loaded from the start of every request",
+        "Mark the tool search tool itself as deferred so that it takes no context until the agent needs it",
+        "Add a short system-prompt section listing the tool categories available through search, such as billing",
+        "Put a `cache_control` breakpoint on each deferred tool definition so that search results load faster",
+        "Raise the search result limit to 50 so that each search loads every tool that could possibly be relevant"
+      ],
+      "answer": [
+        0,
+        2
+      ],
+      "explanations": [
+        "Correct. Anthropic recommends keeping the 3–5 most frequently used tools non-deferred.",
+        "The search tool must never be deferred; Claude needs it in context to find anything.",
+        "Correct. Describing the available categories tells Claude what it can search for.",
+        "A deferred tool can't carry `cache_control`; the API returns a 400.",
+        "Loading 50 tools per search undoes the context savings and adds selection noise."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool"
+    },
+    {
+      "id": "P3-8-007",
+      "subskill": "P3.8",
+      "difficulty": 2,
+      "stem": "A pharmacy chain's patient-messaging agent must append a specific regulatory disclaimer to every outbound message. To shrink the system prompt, a developer moved the disclaimer rule into a Skill along with 20 situational procedures. Audits now find messages without the disclaimer. What should the architect do?",
+      "select": 1,
+      "options": [
+        "Rewrite the disclaimer Skill's description to say it applies to every message, so that it triggers more often than it does today",
+        "Add the disclaimer as an example inside each of the other 20 Skills so that it appears whenever any Skill happens to load",
+        "Instruct the model in the system prompt to always check the list of Skills for compliance rules before writing any reply",
+        "Leave situational procedures in Skills, but have the sending code append the fixed disclaimer to every message"
+      ],
+      "answer": [
+        3
+      ],
+      "explanations": [
+        "Skills still load only when the model judges them relevant, so a broader description doesn't guarantee the rule is applied.",
+        "Messages that need no Skill would still go out without the disclaimer.",
+        "This adds another probabilistic step to a requirement that must hold every time.",
+        "Correct. A fixed, mandatory text is best enforced deterministically in code; on-demand loading suits situational content, not rules that apply to everything."
+      ],
+      "ref": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview"
+    }
+  ]
+}

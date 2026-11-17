@@ -1,0 +1,456 @@
+{
+ "lessons": [
+  {
+   "subskill": "P2.1",
+   "title": "Select Claude models on trade-offs",
+   "summary": "The exam tests whether you choose a model tier (and effort level) from measured quality, latency and cost per completed task on your own eval, rather than from price lists, benchmarks or 'biggest to be safe'. It also tests lifecycle decisions: pinning, deprecation notices and multi-model designs that only pay off in specific workload shapes.",
+   "keyPoints": [
+    "**Tier heuristics**: Haiku-class for high-volume, latency-sensitive, checkable work (classification, routing, extraction, simple subagents); Sonnet-class for a balanced everyday default; Opus-class for complex reasoning and long-horizon agentic coding; the top frontier tier only when evals at high effort still fall short.",
+    "**Two starting strategies** (Anthropic's model-selection guide): *efficiency-first* (start small, test, upgrade only for proven capability gaps; suits prototypes, tight latency, high-volume simple tasks) or *capability-first* (start with the strongest model, optimise prompts, then lower effort or step down tiers as the workflow matures; suits complex reasoning where accuracy outweighs cost).",
+    "**Effort is often a better lever than switching models**: sweep `output_config.effort` on the current model first. A larger model at lower effort can beat a smaller model at higher effort on cost per solved task. Defaults differ by model, so set effort explicitly and re-sweep after a migration.",
+    "**Decide on cost per completed task**, not per token: (cost per attempt / success rate) + downstream cost of failures (rework, escalations, refunds). The bill is usually decided by the tasks the cheaper model fails.",
+    "**Multi-model designs must beat the single model's whole score-vs-spend curve.** Orchestrator + cheaper workers pays off when work fans out across genuinely independent items, especially more than one context window of it; for one dependent chain that fits in one context, the orchestrator's model alone at lower effort did better in Anthropic's measurements. An executor-escalates-to-advisor design helps only when the executor actually consults the advisor.",
+    "**Choose the model per route or per conversation, not per turn**: caches are model-scoped, so switching models mid-conversation re-reads the whole history uncached.",
+    "**Lifecycle**: models move Active → Legacy → Deprecated → Retired; requests to retired models fail. Anthropic gives at least 60 days' notice before retiring publicly released models, and the Console usage export breaks usage down by API key and model so you can find every caller. Partner platforms (Bedrock, Google-managed Vertex) set their own retirement schedules.",
+    "**Pin production to a specific model ID**, upgrade deliberately: run your eval suite on the replacement, fix breaking request changes, re-baseline token counts, re-tune effort, then roll out gradually (shadow or canary).",
+    "**Check feature and data-handling fit per model and platform before committing**: capabilities, context/output limits and feature availability (and eligibility for arrangements such as zero data retention) vary by model, feature and platform. Read the models overview and feature pages; query the Models API for live capability data."
+   ],
+   "traps": [
+    "Choosing the most capable tier 'to be safe' for simple high-volume routing, or the cheapest tier for deep synthesis without an eval.",
+    "Building a small-model/large-model cascade before measuring the single model at lower effort.",
+    "Per-message model routing inside one conversation: every switch forfeits the prompt cache.",
+    "Ranking models by per-token price or public benchmarks instead of your own eval's cost per solved task.",
+    "Ignoring a deprecation notice until the retirement date, or switching all traffic to the replacement without running evals."
+   ],
+   "docs": [
+    {
+     "title": "Choosing the right model",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/choosing-a-model"
+    },
+    {
+     "title": "Optimizing for cost and intelligence",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+    },
+    {
+     "title": "Model deprecations",
+     "url": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+    },
+    {
+     "title": "Effort",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    },
+    {
+     "title": "Models overview",
+     "url": "https://platform.claude.com/docs/en/about-claude/models/overview"
+    }
+   ],
+   "drill": "Take one production route and 30 labelled real requests. Run them on two tiers at two effort levels each (four configurations). Record pass rate, p50/p95 latency and total cost from `usage`. Compute cost per completed task including an assumed cost per failure, and write a one-paragraph decision record naming the configuration you would ship and the trigger that would make you revisit it."
+  },
+  {
+   "subskill": "P2.2",
+   "title": "Design system prompts, templates and guardrails",
+   "summary": "Expect questions on what belongs in a system prompt versus the user turn or code, how to build reusable templates that separate fixed instructions from variable input, and where prompt-level guardrails stop and deterministic controls must take over. The best answer usually pairs a clear, explained prompt with a code-level control for anything that must never happen.",
+   "keyPoints": [
+    "**System prompt = role, standing rules, context and output contract.** Even one role sentence focuses tone and expertise. Be clear and direct: if a colleague with minimal context would be confused, Claude will be too.",
+    "**Give the why**: a rule with its reason ('the output is read aloud by a TTS engine, so never use ellipses') generalises to cases the rule didn't list. Define observable criteria instead of vague qualifiers ('be careful', 'only important issues').",
+    "**Templates**: keep a fixed, versioned instruction block and inject variable data through clearly named slots (for example `{{customer_record}}`), wrapped in XML tags such as `<instructions>`, `<context>`, `<document>`, `<input>` so instructions and data never blur. Put the stable part first so it can be cached.",
+    "**Untrusted content is data, not instructions**: deliver retrieved or user-supplied text in `tool_result` blocks or tagged user content, never interpolated into `system` (that gives attacker text operator authority). State in the system prompt that such content is data.",
+    "**Prompt wording is not an enforcement boundary.** Refund ceilings, data-access rules and mandatory steps belong in code: tool gating, schema validation, permission checks, hooks, human approval. Prompts improve judgment; code guarantees.",
+    "**Format guarantees** come from structured outputs (`output_config.format`) or strict tool schemas, not from begging for JSON. Prefilling the final assistant turn is rejected on current models; use structured outputs or a direct instruction instead.",
+    "**Calibrate tone**: current models follow instructions closely, so old 'CRITICAL: you MUST ALWAYS' emphasis causes over-triggering. Use normal phrasing and say *when* a behaviour applies. Tell Claude what to do rather than what not to do.",
+    "**Layered guardrails** for risky inputs: a lightweight pre-screen (a small, fast model classifying input), clear system-prompt policy, output validation, and monitoring with escalation to humans.",
+    "**Operator instructions mid-conversation**: on supporting models, append a `role: \"system\"` message to `messages` rather than editing the top-level `system`, which keeps the cached prefix intact.",
+    "**Version and test prompts like code**: store templates in source control, change one thing at a time, and gate releases on an eval set."
+   ],
+   "traps": [
+    "Fixing a policy breach by adding 'NEVER do X' in capitals instead of a code-level control.",
+    "Concatenating retrieved web or email text into the system prompt 'so it gets more attention'.",
+    "Carrying a JSON prefill into a current model and getting a 400.",
+    "Writing a long list of prohibitions with no reasons or examples, then seeing inconsistent edge-case behaviour.",
+    "Editing the top-level system prompt per turn (for example a timestamp), silently breaking caching for every request."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "SYSTEM = [{\n  \"type\": \"text\",\n  \"text\": open(\"prompts/claims_v7.md\").read(),  # fixed, versioned\n  \"cache_control\": {\"type\": \"ephemeral\"},\n}]\nuser = f\"<claim>\\n{claim_json}\\n</claim>\\nAssess this claim.\"\nresp = client.messages.create(model=MODEL, max_tokens=2000,\n    system=SYSTEM, messages=[{\"role\": \"user\", \"content\": user}],\n    output_config={\"format\": CLAIM_SCHEMA})"
+   },
+   "docs": [
+    {
+     "title": "Prompting best practices",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+     "title": "Mitigate jailbreaks and prompt injections",
+     "url": "https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/mitigate-jailbreaks"
+    },
+    {
+     "title": "Structured outputs",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/structured-outputs"
+    }
+   ],
+   "drill": "Take an existing production prompt and split it into: (1) a fixed system block with role, rules and their reasons; (2) tagged variable slots; (3) a list of rules that must never be violated. For each item in (3), name the code control (validation, tool gating, approval step) that will enforce it, then delete any shouting from the prompt and rerun your eval."
+  },
+  {
+   "subskill": "P2.3",
+   "title": "Apply zero-shot, few-shot and chain-of-thought",
+   "summary": "The exam asks which technique fixes a given failure: unclear instructions (zero-shot clarity), inconsistent format or borderline judgments (few-shot), or multi-step reasoning errors (thinking and effort, or explicit reasoning when thinking is off). It also tests when to split work into a prompt chain.",
+   "keyPoints": [
+    "**Zero-shot** is instructions only. Start here with clear goals, audience, constraints and success criteria; most failures of zero-shot prompts are missing context, not missing technique.",
+    "**Few-shot (multishot)** is one of the most reliable ways to steer format, tone and structure. Anthropic suggests **3–5** relevant, **diverse** examples wrapped in `<example>` tags inside `<examples>`, covering edge cases (missing field, 'other' class, no findings).",
+    "Claude copies examples closely: near-identical examples get their length and phrasing copied onto very different inputs. Vary surface form and pair **contrastive** examples near the decision boundary to cut false positives.",
+    "**Reasoning on current models**: adaptive thinking plus the `effort` setting is the main control. Prefer general instructions ('think thoroughly about the trade-offs') over a hand-written step-by-step plan; Claude's reasoning often exceeds what you would prescribe.",
+    "**Worked examples shape thinking**: present each as problem, method, answer, and Claude applies the method in its own thinking.",
+    "**Manual chain-of-thought is the fallback when thinking is off**: ask Claude to reason before answering and put the final answer in `<answer>` tags you can extract. Reasoning must come *before* the verdict, because tokens already emitted condition what follows.",
+    "**Self-check**: appending 'before you finish, verify your answer against [criteria]' catches errors, especially in code and math.",
+    "**Prompt chaining** (separate calls) is still useful when you need to inspect, log or branch on intermediate outputs, or enforce a fixed pipeline; the common pattern is draft → review against criteria → refine.",
+    "**Long inputs**: documents at the top, query and instructions at the end; ask Claude to extract relevant quotes first, then answer from them.",
+    "Prove a technique change with an eval set, multiple trials per case, not by eyeballing one run."
+   ],
+   "traps": [
+    "Adding paragraphs of rules for an ambiguity that two contrasting examples would settle.",
+    "Five examples from the same template: the model copies their structure onto every input.",
+    "Asking for the verdict first and the justification after, then trusting the justification.",
+    "Writing an elaborate prescriptive reasoning script when adaptive thinking at a higher effort would do better.",
+    "Examples whose output format contradicts the stated schema: the model follows the examples."
+   ],
+   "docs": [
+    {
+     "title": "Prompting best practices",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices"
+    },
+    {
+     "title": "Adaptive thinking",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking"
+    },
+    {
+     "title": "Effort",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/effort"
+    }
+   ],
+   "drill": "Pick a classification prompt with a known error cluster. Run it zero-shot on 40 labelled cases. Add three diverse examples including two contrastive boundary cases and rerun. Then try a higher effort level instead of examples. Compare accuracy and cost for all three and note which lever fixed which errors."
+  },
+  {
+   "subskill": "P2.4",
+   "title": "Optimise context windows and token usage",
+   "summary": "Questions present an agent or long conversation that degrades, overruns the window or costs too much, and ask for the root-cause fix: fewer, higher-signal tokens through just-in-time retrieval, trimmed tool output, context editing, compaction, persistent memory or subagent isolation, rather than a bigger window or a bigger model.",
+   "keyPoints": [
+    "**Context is a finite attention budget.** Recall of any one detail degrades as total tokens grow (context rot), well before the hard limit. Aim for the smallest set of high-signal tokens; a larger window is not a fix.",
+    "**Everything shares the window**: tool definitions + system + messages + generated output (including thinking). Measure with `messages.count_tokens` for the target model, and read `usage` (input, cache creation, cache read, output) rather than guessing from characters. Tokenizers can differ between model generations.",
+    "**Trim at the source**: tools should return only the fields the agent needs, support filtering and pagination, and truncate with a hint on how to get more. A raw 40k-token payload is paid for on every later turn.",
+    "**Just-in-time retrieval**: hold lightweight references (paths, IDs, queries) and load content through tools when needed; hybrid designs load a small always-on brief (for example CLAUDE.md) and search for the rest.",
+    "**Context editing** clears stale tool results (and optionally thinking) server-side with a placeholder; **compaction** summarises earlier history into a compaction block when input approaches a trigger. Append the full `response.content` so the compaction block is kept. **Memory** (a memory tool or notes file) persists state across sessions.",
+    "Each clear or compaction changes the prefix and invalidates the cache from that point, so clear in larger chunks rather than small frequent ones.",
+    "**Summaries are lossy**: exact amounts, IDs, dates and commitments disappear first. Keep a structured case-facts block, updated by code from tool results, outside the summarised history.",
+    "**Subagents isolate noisy work**: each explores in its own window and returns a condensed result, keeping the lead agent's context small.",
+    "**Tool definitions cost tokens too**: with large tool catalogues, defer loading and let Claude discover tools via tool search; in Claude Code, `/context` shows what fills the window.",
+    "**Output side**: `max_tokens` caps output only; lowering it to save money truncates answers. Control spend with effort, concise-output instructions and structured outputs."
+   ],
+   "traps": [
+    "'The window is huge, so load everything' — context rot makes stuffing worse even when it fits.",
+    "Confusing context editing (drops old tool results) with compaction (writes a summary) or with cross-session memory.",
+    "Appending only the response text after compaction, losing the compaction block.",
+    "Asking the model to 'ignore irrelevant fields' in a huge tool result instead of filtering in the tool.",
+    "Raising `max_tokens` to fit a bigger document — it limits output, not input."
+   ],
+   "docs": [
+    {
+     "title": "Effective context engineering for AI agents",
+     "url": "https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents"
+    },
+    {
+     "title": "Context windows",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/context-windows"
+    },
+    {
+     "title": "Context editing",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/context-editing"
+    },
+    {
+     "title": "Compaction",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/compaction"
+    },
+    {
+     "title": "Token counting",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/token-counting"
+    }
+   ],
+   "drill": "Log `usage` for every turn of one long agent run and plot input tokens per turn. Identify the top three contributors (a tool payload, repeated documents, tool definitions). Fix the largest at the source (field filtering or pagination), rerun, and compare total tokens, cache hit rate and task success."
+  },
+  {
+   "subskill": "P2.5",
+   "title": "Reuse prompts: caching, modular prompts and Skills",
+   "summary": "The exam tests prompt caching mechanics (prefix order, breakpoints, TTL choice, silent invalidators), modular prompt design that keeps stable content first, and Agent Skills as on-demand, reusable expertise. Answers favour stable prefixes and progressive disclosure over pasting the same long guidance into every request.",
+   "keyPoints": [
+    "**Caching is a byte-exact prefix match** in the order `tools` → `system` → `messages`. Any change at position N invalidates everything after it. Put frozen content first and volatile content (timestamps, IDs, the user question) after the last breakpoint.",
+    "**Up to 4 `cache_control` breakpoints**; place them at stability boundaries (end of tools/system, then the conversation tail). Top-level automatic caching marks the last cacheable block, which only helps if that block repeats.",
+    "**TTL and price**: default 5-minute TTL (refreshed free on each hit) with writes at 1.25x base input; 1-hour TTL with writes at 2x; reads cost a small fraction of base input (0.1x on most models). Choose TTL by the gap between requests; a 5-minute TTL on traffic with longer gaps pays the write every time.",
+    "**Silent failures**: prefixes below the model's minimum cacheable length don't cache and return no error; verify with `usage.cache_read_input_tokens`. Invalidators include timestamps in the system prompt, unsorted JSON, per-request tool sets, image changes, and changes to thinking or effort settings.",
+    "**Scope**: caches are model-scoped and never shared across organisations; on the Claude API they are isolated per workspace. A cache entry becomes readable once the first response starts, so warm it before fan-out.",
+    "**Modular prompts**: compose versioned building blocks (role, policy, examples, schema) in a fixed order so shared modules form a cacheable prefix; keep per-tenant or per-request modules at the end.",
+    "**Agent Skills** package instructions, scripts and resources as a folder with `SKILL.md`. Progressive disclosure: only `name` + `description` sit in context (roughly 100 tokens each); the body loads when triggered; bundled files load only when read; scripts run and only their output enters context.",
+    "**The description drives triggering**: say what the skill does and when to use it. On the API, skills run in the code execution container (listed in `container`), with no network access and no runtime package installs; custom API skills are shared workspace-wide.",
+    "**Skills don't sync across surfaces**: claude.ai, the API and Claude Code (filesystem `.claude/skills/` or `~/.claude/skills/`, or plugins) are managed separately.",
+    "**Governance**: treat a skill like installing software — use only trusted sources and audit scripts and external fetches. Check data-handling eligibility (Agent Skills are not covered by zero data retention)."
+   ],
+   "traps": [
+    "Putting `datetime.now()` or a request ID at the top of a cached system prompt.",
+    "Expecting 40 simultaneous requests to share a cache entry that doesn't exist yet.",
+    "Pasting a long style guide into every prompt instead of packaging it as a skill or a cached prefix.",
+    "Writing a vague skill description ('helpers') and wondering why it never triggers.",
+    "Assuming a skill uploaded in claude.ai is available to the API or Claude Code."
+   ],
+   "code": {
+    "lang": "python",
+    "src": "resp = client.messages.create(\n  model=MODEL, max_tokens=4000,\n  tools=TOOLS,                       # deterministic order\n  system=[{\"type\": \"text\", \"text\": POLICY,\n           \"cache_control\": {\"type\": \"ephemeral\", \"ttl\": \"1h\"}}],\n  messages=history + [{\"role\": \"user\", \"content\": question}],\n)\nprint(resp.usage.cache_read_input_tokens,\n      resp.usage.cache_creation_input_tokens)"
+   },
+   "docs": [
+    {
+     "title": "Prompt caching",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching"
+    },
+    {
+     "title": "Agent Skills overview",
+     "url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview"
+    },
+    {
+     "title": "Skill authoring best practices",
+     "url": "https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices"
+    }
+   ],
+   "drill": "Send the same request three times with a cached system prompt and log the cache usage fields. Then add a timestamp to the system prompt and repeat to watch the hit rate collapse. Move the timestamp after the breakpoint and confirm hits return. Finally, turn one long instruction block you paste often into a skill with a precise description."
+  },
+  {
+   "subskill": "P7.1",
+   "title": "Configure Claude Code for teams",
+   "summary": "Expect questions on putting each configuration in the right scope (managed, project, local, user), what enforces versus what merely guides, and how an organisation rolls out models, permissions, telemetry, MCP servers and skills consistently. The right answer uses managed settings for policy, committed project files for team conventions, and personal files for preferences.",
+   "keyPoints": [
+    "**Settings precedence** (highest first): managed → command line (`--settings`) → project local `.claude/settings.local.json` → shared project `.claude/settings.json` → user `~/.claude/settings.json`. List keys such as `permissions.allow` **merge** across scopes rather than override.",
+    "**Managed settings** (server-managed from the admin console, MDM/OS policy, or a `managed-settings.json` file) carry org policy that users can't override. A managed `model` is only a default; `availableModels` / `deniedModels` are the locks. `allowManagedPermissionRulesOnly` makes managed settings the only source of permission rules (user, project and local allow/ask/deny rules are ignored).",
+    "**Permissions** evaluate deny → ask → allow; a local allow can't beat a project or managed deny. In a committed project file, deny and ask rules apply at once, while allow rules wait until each developer trusts the folder. `bypassPermissions` and `auto` as `defaultMode` don't take effect from project or local files.",
+    "**Guidance vs enforcement**: CLAUDE.md, skills and prompts are guidance. Anything that must always or never happen belongs in hooks (command/http hooks are deterministic), deny rules, the sandbox, or managed settings.",
+    "**Where things live**: team conventions in committed `CLAUDE.md` and `.claude/rules/` (path-scoped); repeatable procedures in `.claude/skills/`; reviewers and specialists in `.claude/agents/`; project MCP servers in `.mcp.json` at the repo root (one-time approval per developer); cross-repo distribution via plugins and a marketplace.",
+    "**Personal preferences** go in `~/.claude/settings.json`, `~/.claude/CLAUDE.md` or `CLAUDE.local.md` — never in shared files, and they never reach CI or teammates.",
+    "**Telemetry for adoption and cost**: enable OpenTelemetry (`CLAUDE_CODE_ENABLE_TELEMETRY=1` plus exporter settings) through managed settings' `env`. Repository settings can't set the exporter variables. Prompt content is redacted unless explicitly enabled.",
+    "**Model and effort defaults** can be set per scope; switching model mid-session re-reads the conversation uncached. Subagents can run a cheaper model (`model: haiku`) for simple jobs.",
+    "**Verify a rollout** with `/status` (active setting sources, including managed), `/permissions`, `/context` and `claude doctor`."
+   ],
+   "traps": [
+    "Putting an org-wide security rule in a project CLAUDE.md ('never read .env') instead of a managed deny rule.",
+    "Expecting a developer's local allow to override a project deny, or a committed allow rule to apply before the folder is trusted.",
+    "Setting a managed `model` and believing developers can't pick other models (that needs `availableModels`).",
+    "Committing personal sandbox paths or API endpoints into `.claude/settings.json`.",
+    "Defining MCP servers under `mcpServers` in `settings.json` or inside `.claude/` instead of `.mcp.json` at the repo root."
+   ],
+   "code": {
+    "lang": "json",
+    "src": "{\n  \"availableModels\": [\"sonnet\", \"opus\"],\n  \"permissions\": {\n    \"deny\": [\"Read(./.env)\", \"Read(./secrets/**)\"]\n  },\n  \"env\": {\n    \"CLAUDE_CODE_ENABLE_TELEMETRY\": \"1\",\n    \"OTEL_METRICS_EXPORTER\": \"otlp\"\n  }\n}"
+   },
+   "docs": [
+    {
+     "title": "Settings",
+     "url": "https://code.claude.com/docs/en/settings"
+    },
+    {
+     "title": "Managed settings",
+     "url": "https://code.claude.com/docs/en/managed-settings"
+    },
+    {
+     "title": "Permissions",
+     "url": "https://code.claude.com/docs/en/permissions"
+    },
+    {
+     "title": "Monitoring usage",
+     "url": "https://code.claude.com/docs/en/monitoring-usage"
+    },
+    {
+     "title": "Memory (CLAUDE.md)",
+     "url": "https://code.claude.com/docs/en/memory"
+    }
+   ],
+   "drill": "Draft a rollout plan for a 50-engineer team: list five settings and say for each whether it belongs in managed, project, local or user scope and why. Then create a test repo with a committed deny rule and a local allow rule for the same command, run `/permissions` and `/status`, and confirm which rule wins."
+  },
+  {
+   "subskill": "P7.2",
+   "title": "Improve developer workflows with AI-assisted tooling",
+   "summary": "Questions describe a team adopting Claude Code (or the API) and ask which workflow change raises quality or throughput: give Claude a check to run, plan before broad changes, review with fresh context, isolate parallel work, and automate in CI with narrow permissions and budgets. Distractors trust 'done' without evidence or let the generator review itself.",
+   "keyPoints": [
+    "**Give Claude a check to run**: tests, typecheck, linter or a fixture diff, with the exact command in CLAUDE.md. To *enforce* it, use a `Stop` hook that exits 2 so Claude keeps working until the check passes; ask for evidence (command + output), not 'all tests pass'.",
+    "**Explore → plan → implement**: plan mode (`Shift+Tab` or `--permission-mode plan`) blocks edits until you approve, which is worth it for cross-cutting or unfamiliar changes and wasteful for a one-line fix.",
+    "**Spec first for fuzzy work**: have Claude interview you and write `SPEC.md`, then build in a fresh session from the spec, and review against it.",
+    "**Independent review**: a reviewer that never saw the generating conversation (a fresh subagent, `/code-review`, or a separate CI session) catches what the author's reasoning hides. Give a reviewer subagent read-only tools (`Read, Grep, Glob`) so the limit is enforced, and scope it ('report correctness gaps, skip style').",
+    "**Parallel work without collisions**: separate git worktrees per session (`claude --worktree <name>`), so concurrent edits land on separate branches.",
+    "**Context hygiene**: `/clear` between unrelated tasks; delegate broad exploration to subagents; after two failed corrections, clear and write a better prompt rather than a third correction.",
+    "**Automation**: `claude -p` in CI or scripts with `--output-format json` (or `--json-schema`), narrow `--allowedTools`, `dontAsk` permission mode, and caps (`--max-turns`, `--max-budget-usd`, job timeouts). Never `bypassPermissions` outside an isolated container.",
+    "**Cost-aware habits**: subagents add tokens; use a cheaper model for simple subagent jobs and lower effort for quick iterative steps; check `/usage` to see which skills or subagents consume the most.",
+    "**Measure the workflow change** with team metrics (PR cycle time, review findings, rework, cost per merged PR from telemetry), not anecdotes."
+   ],
+   "traps": [
+    "Letting the session that wrote the code review its own diff.",
+    "Running two Claude sessions on the same checkout so their edits collide.",
+    "Using plan mode for every trivial fix, or skipping it for a multi-module migration.",
+    "Letting Claude edit the tests it must satisfy instead of locking them (deny rule) and iterating on the implementation.",
+    "Adding 'IMPORTANT' to CLAUDE.md for a rule that has to hold every time instead of a hook."
+   ],
+   "docs": [
+    {
+     "title": "Best practices for Claude Code",
+     "url": "https://code.claude.com/docs/en/best-practices"
+    },
+    {
+     "title": "Common workflows",
+     "url": "https://code.claude.com/docs/en/common-workflows"
+    },
+    {
+     "title": "Non-interactive mode",
+     "url": "https://code.claude.com/docs/en/headless"
+    },
+    {
+     "title": "Hooks guide",
+     "url": "https://code.claude.com/docs/en/hooks-guide"
+    },
+    {
+     "title": "Subagents",
+     "url": "https://code.claude.com/docs/en/sub-agents"
+    }
+   ],
+   "drill": "In a sample repo, add a `Stop` hook that runs the typecheck and exits 2 on failure, plus a read-only `reviewer` subagent in `.claude/agents/`. Ask Claude for a change that breaks a type, watch the hook send it back, then have the reviewer compare the diff to a short spec. Note what each control caught."
+  },
+  {
+   "subskill": "P7.3",
+   "title": "Support debugging and operational issue resolution",
+   "summary": "The exam gives a symptom — an ignored instruction, a hook that never fires, an MCP server with no tools, a spike of API errors, rising cost — and asks for the first diagnostic step or the root cause. Good answers inspect what actually loaded or what the API actually returned before changing prompts or models.",
+   "keyPoints": [
+    "**Claude Code: inspect what loaded.** `/context` (what fills the window: memory files, skills, MCP tools), `/status` (active settings sources, including managed), `/permissions` (resolved rules), `/hooks`, `/mcp`, `/memory`, `/skills`; `claude doctor` prints settings and installation diagnostics without a session; `/doctor` proposes fixes.",
+    "**Isolate the cause**: `claude --safe-mode` turns off your customisations (CLAUDE.md, skills, plugins, hooks, MCP); a clean `CLAUDE_CONFIG_DIR` with `--setting-sources user` excludes your own config. If the problem persists, look at managed settings or environment variables.",
+    "**If an instruction loaded but is ignored**, it's the wording or a conflict (vague, contradicted, buried in a long file), not loading; if it must hold every time, move it to a hook or deny rule.",
+    "**Common config faults**: hook `matcher` is case-sensitive and a string (`\"Edit|Write\"`), hooks live under `hooks` in settings files; project MCP config is `.mcp.json` at the repo root and needs one-time approval; relative paths in MCP `command`/`args` resolve from the launch directory; subdirectory CLAUDE.md loads only when Claude touches that directory. `claude --debug` shows hook and MCP evaluation.",
+    "**API triage order**: HTTP status/type → `stop_reason` → `usage` vs `max_tokens` → the exact request (roles, tool_use/tool_result pairing) → only then prompt or model choice.",
+    "**Status codes**: 400 malformed or unsupported parameter (fix, don't retry); 401/403 credential or permission; 404 wrong or retired model ID; 413 payload too large; 429 your rate limit (honour `retry-after`); 500 transient; 529 service overloaded. Retry 429/5xx/529 with exponential backoff and jitter; the SDKs already retry these by default.",
+    "**Integration-bug signatures**: truncated tool JSON with `stop_reason: \"max_tokens\"`; a 400 about unanswered `tool_use` IDs after parallel calls; repeated identical tool calls when a handler returns an empty string instead of `is_error: true`.",
+    "**Log the request ID** of failing calls for support escalation, and use OpenTelemetry metrics (cost, tokens by type including cache reads, sessions) to spot regressions such as a cache-hit collapse after a prompt change."
+   ],
+   "traps": [
+    "Switching to a bigger model to fix truncated JSON when `stop_reason` is `max_tokens`.",
+    "Treating 529 overload as your rate limit, or rotating API keys to escape 429s.",
+    "Wrapping a blanket retry loop around an SDK that already retries, multiplying attempts and retrying permanent 4xx errors.",
+    "Adding more emphasis to CLAUDE.md before checking with `/context` that the file loaded at all.",
+    "Pasting a multi-megabyte log into the session instead of grepping it or delegating analysis to a subagent."
+   ],
+   "docs": [
+    {
+     "title": "Debug your configuration",
+     "url": "https://code.claude.com/docs/en/debug-your-config"
+    },
+    {
+     "title": "API errors",
+     "url": "https://platform.claude.com/docs/en/api/errors"
+    },
+    {
+     "title": "Handling stop reasons",
+     "url": "https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons"
+    },
+    {
+     "title": "Monitoring usage (OpenTelemetry)",
+     "url": "https://code.claude.com/docs/en/monitoring-usage"
+    }
+   ],
+   "drill": "Break three things on purpose in a test repo: a lowercase hook matcher, an MCP server with a relative script path, and a CLAUDE.md placed in a subdirectory. For each, find the fault using only `/hooks`, `/mcp`, `/context` and `claude doctor`, and write down which command revealed it."
+  }
+ ],
+ "questions": [
+  {
+   "id": "P2-1-001",
+   "subskill": "P2.1",
+   "difficulty": 1,
+   "stem": "An insurance carrier receives an email from Anthropic saying the model ID used by its claims-summary, broker-chat and fraud-triage services is deprecated, with a retirement date about two months away. Each service team owns its own API keys. What is the BEST plan?",
+   "select": 1,
+   "options": [
+    "Keep the current model until close to the retirement date, then change the model ID in all three services together in a single coordinated release",
+    "Find every caller via the usage export by API key and model, run each service's evals on the recommended replacement early, and migrate service by service",
+    "Move all three services to the most capable tier now, since a stronger model should absorb any behaviour differences without further prompt work",
+    "Ask Anthropic for an extension for the deprecated model and revisit the migration next year"
+   ],
+   "answer": [
+    1
+   ],
+   "explanations": [
+    "Requests to retired models fail, and switching every service at the deadline leaves no time to find behaviour changes, so any regression lands in production all at once.",
+    "Correct. Anthropic's deprecation guidance is to find usage (the Console usage export breaks it down by API key and model), test replacements well before retirement, and migrate as soon as possible. Rolling out one service at a time limits the blast radius.",
+    "A bigger tier is not a migration plan. It changes cost and latency without evidence, and it still needs evals because prompts tuned for the old model can behave differently.",
+    "Nothing promises an extension. Planning around one leaves all three services exposed to failing requests on the retirement date."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/model-deprecations"
+  },
+  {
+   "id": "P2-1-002",
+   "subskill": "P2.1",
+   "difficulty": 3,
+   "stem": "A legal-tech SaaS runs contract-clause extraction on an Opus-class model at high effort. Finance wants a 35% cost cut. An engineer proposes a cascade: a Haiku-class model handles each contract first and escalates to a Sonnet-class model, then to the Opus-class model, when its self-reported confidence is low. There is a labelled eval of 400 real contracts. What should the architect do FIRST?",
+   "select": 1,
+   "options": [
+    "Build the cascade behind a feature flag, route 10% of production traffic through it, and compare its monthly cost with the current setup",
+    "Move all traffic to the Sonnet-class model, since mid-tier models usually handle extraction well",
+    "Sweep effort on the current model against the eval, measure cost per correct contract, and require any cascade to beat that whole curve",
+    "Lower `max_tokens` on the current model so each response costs less"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "This tests a complex design in production before the simplest lever has been measured, and it relies on self-reported confidence, which is not calibrated against the eval criteria.",
+    "This is a guess based on general tier traits. Without measuring on the 400-contract eval, the team can't tell whether accuracy holds or whether the failures cost more than the savings.",
+    "Correct. Anthropic's guidance is that tuning effort is often a better lever than switching models, and that a multi-model setup must beat the single model's whole score-versus-spend curve. Recording cost per correct contract keeps failures in the comparison.",
+    "`max_tokens` is a hard output cap. Lowering it truncates extractions instead of making the model work more efficiently, which trades cost for failures."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+  },
+  {
+   "id": "P2-1-003",
+   "subskill": "P2.1",
+   "difficulty": 2,
+   "stem": "A public-sector agency is choosing between one Opus-class agent at reduced effort and an Opus-class orchestrator that hands work to cheaper Sonnet-class or Haiku-class workers. Which TWO workload characteristics MOST favour the orchestrator-with-cheaper-workers design? (Select TWO.)",
+   "select": 2,
+   "options": [
+    "The work fans out across many independent documents whose total size is larger than one context window",
+    "Each step depends on the conclusions of the previous step in a single reasoning chain",
+    "Most items are routine, but a long tail of costly cases drives the total spend",
+    "The whole task fits comfortably in one context window and finishes in a few turns",
+    "Every worker would need the orchestrator's full conversation history to do its part"
+   ],
+   "answer": [
+    0,
+    2
+   ],
+   "explanations": [
+    "Correct. Independent pieces that together exceed one context window are where delegation came out ahead in Anthropic's measurements. Each worker handles one piece in its own context.",
+    "A dependent chain can't be split cleanly. Anthropic found the orchestrator's model alone at lower effort did better for this shape of work.",
+    "Correct. Routine work with a long cost tail is the other situation where delegating to lower-cost models paid off, as long as accuracy is checked and not only cost.",
+    "If the work fits in one context without a long cost tail, a single model at lower effort is simpler and was measured to do better.",
+    "If workers need the full history, delegation repeats the expensive context in every call and the coordination cost cancels out the cheaper rates."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+  },
+  {
+   "id": "P2-1-004",
+   "subskill": "P2.1",
+   "difficulty": 3,
+   "stem": "A retail bank's data team pairs a Sonnet-class executor that runs a reconciliation agent with an Opus-class advisor that the executor may consult on hard decisions. After two weeks, the eval score is within run-to-run noise of the executor alone, and cost per task is up about 15%. Traces show the executor consulted the advisor on 3 of 600 tasks. What is the MOST appropriate conclusion?",
+   "select": 1,
+   "options": [
+    "The advisor model is too weak for these decisions, so the team should move the advisor up to the top frontier tier and rerun the evaluation",
+    "The executor should be forced to consult the advisor on every turn so that the pairing gets a fair test",
+    "An advisor that is rarely consulted adds overhead without help; benchmark against single-model baselines at different effort levels",
+    "The eval set is too small to separate the two setups, so the team should ship the pairing to production and let live data decide"
+   ],
+   "answer": [
+    2
+   ],
+   "explanations": [
+    "The advisor was almost never called, so its strength isn't the bottleneck. A pricier advisor would raise cost without changing the score.",
+    "Consulting on every turn would turn the setup into the expensive model doing most of the work, plus the cost of the executor. It also measures something other than the design the team is evaluating.",
+    "Correct. Anthropic's guidance is that an advisor only helps when the executor consults it. When it rarely does, the pairing scores within noise of the executor alone. Any pairing should be judged against the executor alone and the larger model at lower effort, keeping whichever leads on cost per solved task.",
+    "Shipping a setup that costs more with no measured gain swaps evidence for hope. The trace data already explains why the score didn't move."
+   ],
+   "ref": "https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence"
+  }
+ ]
+}

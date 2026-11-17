@@ -1,0 +1,12 @@
+{"reviewed": 29, "findings": [
+ {"id": "P4-3-002", "file": "content/pro/new/p4.json", "class": "bad_fact",
+  "problem": "Stem arithmetic didn't check out. An unpaired independent-question SE for 71% vs 75% on n=400 is sqrt(.71*.29/400 + .75*.25/400) = 0.031, so z = 1.27 and the gain is not significant, contradicting the stem. Only a paired SE (e.g. 20 gains / 4 losses gives SE about 1.2 pts, z about 3.3) makes the naive claim of significance plausible.",
+  "evidence_url": "https://www.anthropic.com/research/statistical-approach-to-model-evals",
+  "evidence": "Paired differences remove question-difficulty variance; clustered SEs 'can be over three times as large as naive standard errors'; cluster on the unit of randomization.",
+  "fix": "Stem now says 'a paired standard error that treats all 400 questions as independent'. Key unchanged (C)."},
+ {"id": "P4-3-003", "file": "content/pro/new/p4.json", "class": "bad_fact",
+  "problem": "The explanation for option A implied graders should not reason at length ('Graders work best with specific, empirical outputs'). The docs explicitly recommend letting the grader reason before scoring because it improves evaluation performance.",
+  "evidence_url": "https://platform.claude.com/docs/en/test-and-evaluate/develop-tests",
+  "evidence": "Encourage reasoning: use a grader model with thinking on so it reasons before producing an evaluation score; this increases evaluation performance.",
+  "fix": "Rewrote explanation A: reasoning can improve grading accuracy but doesn't remove generation sampling variance with one run per item on 200 items. Key unchanged (C)."}
+]}
